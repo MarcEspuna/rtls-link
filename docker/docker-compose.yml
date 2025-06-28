@@ -7,7 +7,7 @@ services:
     privileged: true  # Required for USB device access
     volumes:
       # Mount the current repository to /workspace in the container
-      - .:/workspace
+      - ../:/workspace
       # Mount USB devices directory for device access
       - /dev:/dev
       # Optionally mount udev rules if needed
