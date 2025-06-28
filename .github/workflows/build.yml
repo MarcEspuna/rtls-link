@@ -1,0 +1,146 @@
+name: Build and Test ESP32 Applications
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:  # Run on any PR to any branch
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: ghcr.io/marcespuna/rtls-link-platformio:v1.0.0
+
+jobs:
+  build-test-docker:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [esp32_application, esp32s3_application]
+      fail-fast: false
+    
+    container:
+      image: ghcr.io/marcespuna/rtls-link-platformio:v1.0.0
+      credentials:
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Cache PlatformIO Core and Packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          /root/.platformio
+          .pio/libdeps
+          .pio/build/${{ matrix.environment }}/.pioenvs
+        key: ${{ runner.os }}-docker-pio-${{ matrix.environment }}-${{ hashFiles('**/platformio.ini', 'lib/**') }}
+        restore-keys: |
+          ${{ runner.os }}-docker-pio-${{ matrix.environment }}-
+          ${{ runner.os }}-docker-pio-
+    
+    - name: Set PlatformIO Environment
+      run: |
+        export PLATFORMIO_HOME="/root/.platformio"
+        export PLATFORMIO_CORE_DIR="/root/.platformio"
+        echo "PLATFORMIO_HOME=/root/.platformio" >> $GITHUB_ENV
+        echo "PLATFORMIO_CORE_DIR=/root/.platformio" >> $GITHUB_ENV
+    
+    - name: PlatformIO System Info
+      run: pio system info
+    
+    - name: Pre-install Platform and Framework
+      run: |
+        # Pre-install ESP32 platform to avoid download during build
+        pio platform install espressif32
+        pio platform show espressif32
+    
+    - name: Install Project Dependencies
+      run: |
+        echo "Installing dependencies for ${{ matrix.environment }}"
+        pio pkg install --environment ${{ matrix.environment }}
+    
+    - name: Check Libraries
+      run: |
+        pio lib list --environment ${{ matrix.environment }}
+    
+    - name: Build ${{ matrix.environment }}
+      run: |
+        echo "🔨 Building environment: ${{ matrix.environment }}"
+        time pio run --environment ${{ matrix.environment }}
+    
+    - name: Verify Build Output
+      run: |
+        BUILD_DIR=".pio/build/${{ matrix.environment }}"
+        echo "📁 Build directory contents:"
+        ls -la "$BUILD_DIR/"
+        
+        if [ -f "$BUILD_DIR/firmware.bin" ]; then
+          echo "✅ Firmware binary created successfully"
+          echo "📦 Firmware size:"
+          ls -lh "$BUILD_DIR/firmware.bin"
+          
+          # Show memory usage
+          if [ -f "$BUILD_DIR/firmware.elf" ]; then
+            echo "🧠 Memory usage:"
+            pio run --environment ${{ matrix.environment }} --target size
+          fi
+        else
+          echo "❌ Firmware binary not found!"
+          exit 1
+        fi
+    
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: firmware-${{ matrix.environment }}-${{ github.run_number }}
+        path: |
+          .pio/build/${{ matrix.environment }}/firmware.bin
+          .pio/build/${{ matrix.environment }}/firmware.elf
+          .pio/build/${{ matrix.environment }}/bootloader.bin
+          .pio/build/${{ matrix.environment }}/partitions.bin
+        retention-days: 7
+    
+    - name: Generate Build Report
+      if: success()
+      run: |
+        BUILD_DIR=".pio/build/${{ matrix.environment }}"
+        
+        echo "## 📊 Build Report for \`${{ matrix.environment }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f "$BUILD_DIR/firmware.bin" ]; then
+          FIRMWARE_SIZE=$(stat -f%z "$BUILD_DIR/firmware.bin" 2>/dev/null || stat -c%s "$BUILD_DIR/firmware.bin")
+          echo "- **Firmware Size:** ${FIRMWARE_SIZE} bytes" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Memory Usage" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        pio run --environment ${{ matrix.environment }} --target size >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # Job summary
+  build-summary:
+    runs-on: ubuntu-latest
+    needs: build-test-docker
+    if: always()
+    steps:
+    - name: Build Summary
+      run: |
+        echo "## 🎯 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.build-test-docker.result }}" == "success" ]; then
+          echo "✅ **All ESP32 environments built successfully!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both \`esp32_application\` and \`esp32s3_application\` environments compiled without errors." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Some builds failed**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Please check the individual job logs for details." >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi 

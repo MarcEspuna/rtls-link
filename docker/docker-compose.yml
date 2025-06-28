@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   platformio-dev:
-    image: platformio-env:latest
+    image: ghcr.io/marcespuna/rtls-link-platformio:v1.0.0
     container_name: platformio-development
     privileged: true  # Required for USB device access
     volumes:
