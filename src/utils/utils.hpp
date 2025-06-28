@@ -6,7 +6,7 @@
 
 #include <Arduino.h>
 
-#include "application/param.hpp"
+#include "param.hpp"
 
 #include <etl/queue_lockable.h>
 
