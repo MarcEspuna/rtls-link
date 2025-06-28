@@ -64,7 +64,11 @@ jobs:
     
     - name: Check Libraries
       run: |
-        pio lib list --environment ${{ matrix.environment }}
+        echo "📚 Installed libraries:"
+        pio lib list
+        echo ""
+        echo "📁 Library dependencies for ${{ matrix.environment }}:"
+        ls -la .pio/libdeps/${{ matrix.environment }}/ || echo "No libdeps directory yet"
     
     - name: Build ${{ matrix.environment }}
       run: |
