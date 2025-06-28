@@ -4,3 +4,6 @@
 [submodule "lib/c_library_v2"]
 	path = lib/c_library_v2
 	url = https://github.com/MarcEspuna/c_library_v2.git
+[submodule "lib/libdw1000"]
+	path = lib/libdw1000
+	url = https://github.com/Singu99/libdw1000.git
