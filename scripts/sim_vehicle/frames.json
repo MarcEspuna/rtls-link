@@ -1,0 +1,37 @@
+[
+    {
+        "frame_type": "AddAnchor",
+        "anchor_id": 0,
+        "x_m": 0.0,
+        "y_m": 0.0,
+        "z_m": 0.0
+    },
+    {
+        "frame_type": "AddAnchor",
+        "anchor_id": 1,
+        "x_m": 10.0,
+        "y_m": 0.0,
+        "z_m": 0.0
+    },
+    {
+        "frame_type": "AddAnchor",
+        "anchor_id": 2,
+        "x_m": 0.0,
+        "y_m": 15.0,
+        "z_m": 0.0
+    },
+    {
+        "frame_type": "AddAnchor",
+        "anchor_id": 3,
+        "x_m": 10.0,
+        "y_m": 15.0,
+        "z_m": 0.0
+    },
+    {
+        "frame_type": "Sample",
+        "x_m": 5.1,
+        "y_m": 3.7,
+        "z_m": 0.0,
+        "error_mm": 200
+    }
+]

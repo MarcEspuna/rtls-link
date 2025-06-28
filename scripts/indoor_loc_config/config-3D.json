@@ -1,0 +1,9 @@
+{
+    "mode": "3D",
+    "north_min": -5,
+    "north_max": 5,
+    "east_min": -7.5,
+    "east_max": 7.5,
+    "down_min": 0,
+    "down_max": 3
+}

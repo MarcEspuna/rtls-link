@@ -1,0 +1,7 @@
+{
+  "name": "tdoa_algorithm",
+  "version": "0.1",
+  "description": "A library that offers tdoa functionality to UWB devices",
+  "frameworks": "*",
+  "platforms": "*"
+}

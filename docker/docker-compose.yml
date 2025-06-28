@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  platformio-dev:
+    image: platformio-env:latest
+    container_name: platformio-development
+    privileged: true  # Required for USB device access
+    volumes:
+      # Mount the current repository to /workspace in the container
+      - .:/workspace
+      # Mount USB devices directory for device access
+      - /dev:/dev
+      # Optionally mount udev rules if needed
+      - /run/udev:/run/udev:ro
+    working_dir: /workspace
+    # Keep container running for interactive development
+    stdin_open: true
+    tty: true
+    # Alternative to privileged mode - specify exact devices if you know them
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    #   - /dev/ttyACM0:/dev/ttyACM0
+    environment:
+      # Set PlatformIO environment variables if needed
+      - PLATFORMIO_CORE_DIR=/workspace/.pio
+    networks:
+      - platformio-network
+    # Restart policy
+    restart: unless-stopped
+
+networks:
+  platformio-network:
+    driver: bridge 

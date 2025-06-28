@@ -1,0 +1,7 @@
+{
+  "name": "Trilateration",
+  "version": "0.1",
+  "description": "A library that offers trilat functionality",
+  "frameworks": "*",
+  "platforms": "*"
+}

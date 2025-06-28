@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArduUpdater</title>
+    <style> 
+        body {
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #030303; /* Updated background color */
+            color: #fff;
+        }
+
+        header {
+            color: #fff;
+            padding: 20px;
+            margin: 0 80px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1, h2 {
+            margin: 0;
+            font-weight: 400;
+        }
+
+        h1 {
+            font-weight: 700;
+            color: #1ca152; /* Updated header color */
+        }
+
+        .reboot-button {
+            padding: 10px 20px;
+            background-color: #1ca152; /* Updated button color */
+            color: #fff;
+            font-size: 16px; 
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .reboot-button:hover {
+            background-color: #008529; /* Updated button hover color */
+        }  
+
+        .search-container {
+            text-align: center;
+            margin-right: 20px;
+            margin-top: 50px;
+        }
+
+        input[type="text"] {
+            padding: 10px;
+            border: 1px solid #666;
+            border-radius: 5px 0 0 5px;
+            width: 70%;
+            font-size: 16px;
+            background-color: #333;
+            color: #fff;
+        }
+
+        input:focus {
+            border: 1px solid #000000; /* Updated input border color */
+        }
+
+        .search-button {
+            padding: 10px 20px;
+            background-color: #1ca152; /* Updated search button color */
+            color: hsl(0, 0%, 100%);
+            border: none;
+            border-radius: 0 5px 5px 0;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+
+        .search-button:hover {
+            background-color: #008529; /* Updated search button hover color */
+        }
+
+        #table-container {
+            margin: 20px auto;
+            max-width: 90%;
+            overflow: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            border-radius: 5px;
+            overflow: hidden;
+            box-shadow: 0 0 20px #1ca152; /* Updated table box-shadow color */
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border: 1px solid #1ca152; /* Updated table border color */
+        }
+
+        th {
+            background-color: #008529; /* Updated table header background color */
+            color: #fff;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 14px;
+            width: calc(100% / 3);
+        }
+
+        tbody tr:nth-child(even) {
+            background-color: #01220b; /* Updated table even row background color */
+        }
+
+        .popup-content {
+            display: none; /* Hide the container by default */
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #0d0e0d; /* Updated background color */
+            padding: 20px;
+            width: 300px; /* Adjust the width as needed */
+            border-radius: 10px; /* Increased border radius for a smoother look */
+            box-shadow: 0 0 25px #1ca152; /* Added shadow effect */
+            z-index: 9999;
+            text-align: center; /* Center the text content */
+        }
+
+        .popup-content h2 {
+            margin-top: 0;
+            font-size: 24px; /* Increased font size for better readability */
+            color: #fff;
+            margin-bottom: 20px; /* Added margin bottom for spacing */
+        }
+
+        .popup-content button {
+            background-color: #1ca152;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+
+        .popup-content button:hover {
+            background-color: #008529;
+        }
+
+        @media screen and (max-width: 450px) {
+            header {
+                margin: 0 20px;
+            }
+
+            .search-container {
+                margin: 10px;
+            }
+
+            .search-button {
+                padding: 10px;
+            }
+
+            .popup-content {
+                width: 75%;
+            }
+
+
+        }
+
+    </style>
+</head>
+<body>
+    <header>
+        <div class="content">
+            <h1>ArduUpdater</h1>
+            <p>Marc and Mar</p>
+        </div>
+        <button class="reboot-button" onclick="reboot()">Reboot</button>
+    </header>    
+    <div class="popup-content" id="popupContainer">
+        <h2 id="msg">Correct!</h2>
+        <button onclick="closePopup()">Close</button>
+    </div>
+    <div class="search-container">
+        <input type="text" id="searchInput" placeholder="Search...">
+        <button type="button" class="search-button" id="searchButton">Search</button>
+    </div>
+
+    <div id="table-container">
+        <table id="myTable">
+            <thead>
+                <th>Name</th>
+                <th>Group</th>
+                <th>Value</th>
+            </thead>
+            <tbody id="table-body"></tbody>
+        </table>
+    </div>
+
+    <script>  
+        var tableHeadersRow = document.getElementById("table-headers");
+        var tableBody = document.getElementById("table-body");
+        var dataSet = [];
+
+        // Use the hostname the page was loaded from for the WebSocket connection
+        var gateway = "ws://" + window.location.hostname + "/ws";
+        var websocket;
+        window.addEventListener('load', onLoad);
+
+        function initWebSocket() {
+            //data = "group1.name1: value1\n" + "group1.name2: value2\n" + "group2.name1: value3\n" + "group2.name2: value4\n";
+            //processAllData(data);
+            console.log('Trying to open a WebSocket connection...');
+            websocket = new WebSocket(gateway);
+            websocket.onopen    = onOpen;
+            websocket.onclose   = onClose;
+            websocket.onmessage = onMessage;
+        }
+
+        function onOpen(event) {
+            console.log('Connection opened');
+            // Request all parameters
+            websocket.send("readall");
+        }
+
+        function onClose(event) {
+            console.log('Connection closed');
+            setTimeout(initWebSocket, 2000);
+        }
+
+        function onMessage(event) {
+            /* rebre info */
+            console.log(event.data);
+            if(event.data == "Param written"){ //Param written confirmation
+                document.getElementById("popupContainer").style.display = "block";
+                document.getElementById("msg").textContent = "Correct!";
+            }
+            else { //readall                  
+                processAllData(event.data);
+            }  
+        
+        }
+
+        function onLoad(event) {
+            initWebSocket();
+        }
+        
+        function processAllData(data) {
+            var tableBody = document.getElementById("table-body");
+            var lines = data.split("\n"); 
+            lines.pop(); // Remove the last element (empty string)      
+
+            lines.forEach(function(line) {
+                var row = document.createElement("tr");
+                var parts = line.split(": ");
+
+                // Extract group, name, and value
+                var groupAndName = parts[0].split(".");
+                var group = groupAndName[0];
+                var name = groupAndName[1];       
+
+                var cell = document.createElement("td")
+                var input = document.createElement("input");
+                input.type = "text";
+                input.value = parts[1];
+                input.dataset.name = name;
+                input.dataset.group = group;
+                input.addEventListener("keypress", handleInputKeyPress);
+                cell.appendChild(input)
+
+                // Create an object to represent the data
+                var dataItem = {
+                    name: name,
+                    group: group,
+                    value: parts[1]
+                };
+
+                // Add the data item to the dataSet array
+                dataSet.push(dataItem);
+
+
+                // Populate the row with group, name, and value
+                row.innerHTML = "<td>" + name + "</td><td>" + group + "</td>";
+                row.appendChild(cell);
+
+
+                tableBody.appendChild(row);
+            });
+        }
+
+        
+
+        // Event handler for input key press (Enter)
+        function handleInputKeyPress(event) {
+            if (event.key === "Enter") {
+                var group = event.target.dataset.group;
+                var name = event.target.dataset.name;
+                var newValue = event.target.value;
+                console.log(group)
+                console.log(name)
+                websocket.send("write -group "+ group +" -name "+ name +" -data " +  newValue);
+            }
+        }
+
+        function closePopup() {
+            // Hide the popup container
+            document.getElementById("popupContainer").style.display = "none";
+        }
+        
+        function reboot() {
+            websocket.send("reboot");
+        }
+        
+        document.getElementById("searchButton").addEventListener("click", function() {
+            console.log("searchButton clicked");
+            var searchInput = document.getElementById("searchInput").value;
+
+            if(searchInput === "") {
+                filteredData = dataSet;
+            } else {
+                var filteredData = dataSet.filter(function(item) {
+                    return item.name.toLowerCase() === searchInput.toLowerCase();
+                });
+            }
+
+            // Clear the table body
+            tableBody.innerHTML = "";
+
+            // Populate the table with filtered data
+            filteredData.forEach(function(item) {
+                var row = document.createElement("tr");
+                var cell1 = document.createElement("td");
+                cell1.textContent = item.name;
+                var cell2 = document.createElement("td");
+                cell2.textContent = item.group;
+                var cell3 = document.createElement("td");
+                var input = document.createElement("input");
+                input.type = "text";
+                input.value = item.value;
+                input.dataset.name = item.name;
+                input.dataset.group = item.group;
+                input.addEventListener("keypress", handleInputKeyPress);
+                cell3.appendChild(input);
+                row.appendChild(cell1);
+                row.appendChild(cell2);
+                row.appendChild(cell3);
+                tableBody.appendChild(row);
+            });
+        });   
+    </script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+#pragma once
+
+#include <freertos/FreeRTOS.h>
+
+#include <etl/span.h>
+
+#include "uwb_ops.hpp"
+
+extern "C" {
+    #include "libdw1000.h"
+}
+
+#include "uwb_backend.hpp"
+#include "uwb_params.hpp"
+
+#include "utils/dispatcher.hpp"
+
+#define MAX_ANCHORS 6
+
+class UWBTagTDoA : public UWBBackend {
+public:
+    UWBTagTDoA(UWBFront& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors);
+
+    template <libDw1000::IsrFlags TFlags>
+    void OnEvent();             // Called outside ISR context
+
+    void Update() override;
+
+    virtual uint32_t GetNumberOfConnectedDevices() override;
+
+    void InterruptHandler();
+private:
+    // Libdw1000 device
+    dwDevice_t m_Device;
+    dwOps_t m_Ops = {
+        .spiRead = libDw1000::SpiRead,
+        .spiWrite = libDw1000::SpiWrite,
+        .spiSetSpeed = libDw1000::SpiSetSpeed,
+        .delayms = libDw1000::DelayMs,
+        .reset = libDw1000::Reset,
+    };
+
+    // User data for libdw1000    
+    libDw1000::DwData m_DwData = {
+        .rst_pin = bsp::kBoardConfig.uwb.pins.reset_pin,
+        .cs_pin = bsp::kBoardConfig.uwb.pins.spi_cs_pin,
+        .interrupt_flags = 0,
+    };
+
+    struct TDoASample {
+        float distance_diff;
+        uint8_t anchor_a_id;
+        uint8_t anchor_b_id;
+    };
+};
+
+
+using TagTDoADispatcher = Dispatcher<libDw1000::IsrFlags, UWBTagTDoA, 
+        DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_DONE, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::RX_DONE>>,
+        DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::TX_DONE, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::TX_DONE>>,
+        DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_TIMEOUT, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::RX_TIMEOUT>>,
+        DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_FAILED, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::RX_FAILED>>>;

@@ -1,0 +1,6 @@
+[submodule "lib/Eigen"]
+	path = lib/Eigen
+	url = https://github.com/stanford-ssi/Eigen.git
+[submodule "lib/c_library_v2"]
+	path = lib/c_library_v2
+	url = https://github.com/MarcEspuna/c_library_v2.git

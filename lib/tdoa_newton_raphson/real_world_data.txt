@@ -1,0 +1,30 @@
+
+CASE 1: 3 ANCHORS
+
+ID	Dist to tag
+0	1.3
+1	1.1
+3	2.1
+
+(a <-> b) 	Dist diferencial : Calculated as b - a
+
+ 0 <-> 1	Mesured = -0.2, Sensor =  -0.27
+ 1 <-> 3	Mesured = +1.0, Sensor =  1.14
+ 3 <-> 0	Mesured = -0.8, Sensor = -0.81
+
+CASE 2: 4 ANCHORS
+
+ID	Dist to tag
+0	1.3
+1	1.1
+3	2.1
+2	3.0
+
+
+(a <-> b) 	Dist diferencial : Calculated as b - a
+
+ 1 <-> 2	Mesured = 1.90, Sensor =  1.99
+ 2 <-> 3	Mesured = -0.9, Sensor = -0.90
+ 3 <-> 0	Mesured = -0.8, Sensor = -0.85
+ 0 <-> 1	Mesured = -0.2, Sensor = -0.23
+ 0 <-> 2	Mesured = 1.7, Sensor = 1.82

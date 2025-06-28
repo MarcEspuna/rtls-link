@@ -1,0 +1,16 @@
+uwb.devId1: 0
+uwb.x1: -5.0
+uwb.y1: -7.5
+uwb.z1: 0.0
+uwb.devId2: 1
+uwb.x2: 5.0
+uwb.y2: -7.5
+uwb.z2: 0.0
+uwb.devId3: 2
+uwb.x3: -5.0
+uwb.y3: 7.5
+uwb.z3: 0.0
+uwb.devId4: 3
+uwb.x4: 5.0
+uwb.y4: 7.5
+uwb.z4: 0.0

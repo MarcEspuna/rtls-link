@@ -1,0 +1,7 @@
+{
+  "name": "tdoa_estimator",
+  "version": "0.1",
+  "description": "Simple tdoa position estimator",
+  "frameworks": "*",
+  "platforms": "*"
+}
