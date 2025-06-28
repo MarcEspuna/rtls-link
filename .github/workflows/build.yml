@@ -100,18 +100,6 @@ jobs:
           exit 1
         fi
     
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
-      if: success()
-      with:
-        name: firmware-${{ matrix.environment }}-${{ github.run_number }}
-        path: |
-          .pio/build/${{ matrix.environment }}/firmware.bin
-          .pio/build/${{ matrix.environment }}/firmware.elf
-          .pio/build/${{ matrix.environment }}/bootloader.bin
-          .pio/build/${{ matrix.environment }}/partitions.bin
-        retention-days: 7
-    
     - name: Generate Build Report
       if: success()
       run: |
