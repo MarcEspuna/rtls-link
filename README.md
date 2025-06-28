@@ -1,5 +1,5 @@
 # rtls-link
-Real-time positioning system based on UWB technology
+Firmware for ESP32 and ESP32S3 boards, providing real-time 2D positioning using the TDoA algorithm and MAVLink packet forwarding over Wi-Fi.
 
 [![Build and Test ESP32 Applications](https://github.com/marcespuna/rtls-link/actions/workflows/build-test-docker.yml/badge.svg)](https://github.com/marcespuna/rtls-link/actions/workflows/build.yml)
 
