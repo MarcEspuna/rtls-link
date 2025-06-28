@@ -8,6 +8,7 @@ on:
 
 env:
   DOCKER_IMAGE: ghcr.io/marcespuna/rtls-link-platformio:v1.0.0
+  PIO_CACHE: ${{ github.workspace }}/.platformio
 
 jobs:
   build:
@@ -33,20 +34,23 @@ jobs:
       uses: actions/cache@v4
       with:
         path: |
-          /root/.platformio
+          ${{ env.PIO_CACHE }}
           .pio/libdeps
           .pio/build/${{ matrix.environment }}/.pioenvs
-        key: ${{ runner.os }}-docker-pio-${{ matrix.environment }}-${{ hashFiles('**/platformio.ini') }}
+        key: ${{ runner.os }}-pio-${{ matrix.environment }}-${{ hashFiles('platformio.ini') }}
         restore-keys: |
-          ${{ runner.os }}-docker-pio-${{ matrix.environment }}-
-          ${{ runner.os }}-docker-pio-
+          ${{ runner.os }}-pio-${{ matrix.environment }}-
+          ${{ runner.os }}-pio-
     
     - name: Set PlatformIO Environment
       run: |
-        export PLATFORMIO_HOME="/root/.platformio"
-        export PLATFORMIO_CORE_DIR="/root/.platformio"
-        echo "PLATFORMIO_HOME=/root/.platformio" >> $GITHUB_ENV
-        echo "PLATFORMIO_CORE_DIR=/root/.platformio" >> $GITHUB_ENV
+        # All PlatformIO state goes into $PIO_CACHE, which is a directory
+        # inside the repository workspace and therefore survives the end
+        # of the container.
+        export PLATFORMIO_HOME="$PIO_CACHE"
+        export PLATFORMIO_CORE_DIR="$PIO_CACHE"
+        echo "PLATFORMIO_HOME=$PIO_CACHE" >> $GITHUB_ENV
+        echo "PLATFORMIO_CORE_DIR=$PIO_CACHE" >> $GITHUB_ENV
     
     - name: PlatformIO System Info
       run: pio system info
