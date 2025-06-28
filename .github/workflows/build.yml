@@ -36,7 +36,7 @@ jobs:
           /root/.platformio
           .pio/libdeps
           .pio/build/${{ matrix.environment }}/.pioenvs
-        key: ${{ runner.os }}-docker-pio-${{ matrix.environment }}-${{ hashFiles('**/platformio.ini', 'lib/**') }}
+        key: ${{ runner.os }}-docker-pio-${{ matrix.environment }}-${{ hashFiles('**/platformio.ini') }}
         restore-keys: |
           ${{ runner.os }}-docker-pio-${{ matrix.environment }}-
           ${{ runner.os }}-docker-pio-
@@ -113,13 +113,19 @@ jobs:
       run: |
         BUILD_DIR=".pio/build/${{ matrix.environment }}"
         
+        echo "📊 Build Report for ${{ matrix.environment }}"
         echo "## 📊 Build Report for \`${{ matrix.environment }}\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ -f "$BUILD_DIR/firmware.bin" ]; then
-          FIRMWARE_SIZE=$(stat -f%z "$BUILD_DIR/firmware.bin" 2>/dev/null || stat -c%s "$BUILD_DIR/firmware.bin")
+          FIRMWARE_SIZE=$(stat -c%s "$BUILD_DIR/firmware.bin" 2>/dev/null)
+          echo "📦 Firmware Size: ${FIRMWARE_SIZE} bytes"
           echo "- **Firmware Size:** ${FIRMWARE_SIZE} bytes" >> $GITHUB_STEP_SUMMARY
         fi
+        
+        echo ""
+        echo "🧠 Memory Usage:"
+        pio run --environment ${{ matrix.environment }} --target size
         
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Memory Usage" >> $GITHUB_STEP_SUMMARY
