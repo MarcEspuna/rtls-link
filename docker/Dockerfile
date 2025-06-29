@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libffi-dev \
     udev \
+    doxygen \
+    graphviz \
     && rm -rf /var/lib/apt/lists/*
 
 # Create symlink for python (PlatformIO expects 'python' command)
