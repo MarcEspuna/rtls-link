@@ -32,10 +32,10 @@ jobs:
         path: |
           ${{ env.PIO_CACHE }}
           .pio/libdeps
-          .pio/build/native_test
-        key: ${{ runner.os }}-pio-native-test-${{ hashFiles('platformio.ini') }}
+          .pio/build/native
+        key: ${{ runner.os }}-pio-native-${{ hashFiles('platformio.ini') }}
         restore-keys: |
-          ${{ runner.os }}-pio-native-test-
+          ${{ runner.os }}-pio-native-
           ${{ runner.os }}-pio-
     
     - name: Set PlatformIO Environment
@@ -49,7 +49,7 @@ jobs:
       run: pio system info
     
     - name: Install Project Dependencies
-      run: pio pkg install --environment native_test
+      run: pio pkg install --environment native
       
     - name: Run Unit Tests
-      run: pio test -e native_test --test-filter test_tdoa_newton_raphson
+      run: pio test -e native --test-filter test_tdoa_newton_raphson
