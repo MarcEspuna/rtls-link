@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: ghcr.io/marcespuna/rtls-link-platformio:v1.0.0
       credentials:
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GITHUB_TOKEN }}
