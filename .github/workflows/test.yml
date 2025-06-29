@@ -1,0 +1,55 @@
+name: Run Unit Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: ghcr.io/marcespuna/rtls-link-platformio:v1.0.0
+  PIO_CACHE: ${{ github.workspace }}/.platformio
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    container:
+      image: ${{ env.DOCKER_IMAGE }}
+      credentials:
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Cache PlatformIO Core and Packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.PIO_CACHE }}
+          .pio/libdeps
+          .pio/build/native_test
+        key: ${{ runner.os }}-pio-native-test-${{ hashFiles('platformio.ini') }}
+        restore-keys: |
+          ${{ runner.os }}-pio-native-test-
+          ${{ runner.os }}-pio-
+    
+    - name: Set PlatformIO Environment
+      run: |
+        export PLATFORMIO_HOME="$PIO_CACHE"
+        export PLATFORMIO_CORE_DIR="$PIO_CACHE"
+        echo "PLATFORMIO_HOME=$PIO_CACHE" >> $GITHUB_ENV
+        echo "PLATFORMIO_CORE_DIR=$PIO_CACHE" >> $GITHUB_ENV
+    
+    - name: PlatformIO System Info
+      run: pio system info
+    
+    - name: Install Project Dependencies
+      run: pio pkg install --environment native_test
+      
+    - name: Run Unit Tests
+      run: pio test -e native_test --test-filter test_tdoa_newton_raphson
