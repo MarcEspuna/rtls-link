@@ -25,6 +25,13 @@ This project uses PlatformIO for build management with multiple environments:
 - `pio run -e esp32_application -t upload` - Upload to ESP32
 - `pio run -e esp32s3_application -t upload` - Upload to ESP32S3
 
+### Compilation Testing Requirements
+**CRITICAL**: Before pushing any changes to remote branches, ALWAYS verify compilation:
+- `pio run -e esp32_application` - Must compile successfully
+- `pio run -e esp32s3_application` - Must compile successfully
+- Both targets must build without errors before any git push operation
+- This prevents broken builds from being introduced to the codebase
+
 ## Development Environment
 
 ### Docker Setup
