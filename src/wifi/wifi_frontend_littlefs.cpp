@@ -25,7 +25,7 @@ void WifiLittleFSFrontend::Init() {
     m_TcpLoggingServer = new WifiTcpServer(m_Params.dbgPort);
     
     // Set the delegate after initialization
-    wifi_connection_task.callback = etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::StationConnectionThread>();
+    wifi_connection_task.taskFunction = etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::StationConnectionThread>();
     
     // Schedule the connection task
     Scheduler::scheduler.CreateStaticTask(wifi_connection_task);
