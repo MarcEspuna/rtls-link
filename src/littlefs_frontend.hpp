@@ -158,8 +158,8 @@ public:
                 
                 // Check if this line belongs to our group
                 etl::string<64> groupPrefix;
-        groupPrefix.assign(m_GroupName.data());
-        groupPrefix += ".";
+                groupPrefix.assign(m_GroupName.data());
+                groupPrefix += ".";
                 if (!line.startsWith(groupPrefix.c_str())) {
                     // Keep lines from other groups
                     if (fileContent.size() + line.length() < fileContent.capacity()) {

@@ -26,6 +26,22 @@ static void loadConfigCallback(cmd* c);
 static void saveConfigCallback(cmd* c);
 static void backupConfigCallback(cmd* c);
 
+static String escapeJsonString(const String& str) {
+    String escaped;
+    for (int i = 0; i < str.length(); i++) {
+        char c = str[i];
+        switch (c) {
+            case '\"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped += c; break;
+        }
+    }
+    return escaped;
+}
+
 void CommandHandler::Init()
 {
     commandQueueMutex = xSemaphoreCreateMutex();
@@ -252,16 +268,16 @@ static void loadConfigCallback(cmd* c)
     
     switch (result) {
         case ErrorParam::OK:
-            commandResult = "Configuration loaded successfully from /params.json";
+            commandResult = "Configuration loaded successfully from /params.txt";
             break;
         case ErrorParam::FILE_NOT_FOUND:
-            commandResult = "Warning: /params.json not found, using default parameters";
+            commandResult = "Warning: /params.txt not found, using default parameters";
             break;
         case ErrorParam::FILE_SYSTEM_ERROR:
             commandResult = "Error: Failed to initialize LittleFS";
             break;
         case ErrorParam::INVALID_DATA:
-            commandResult = "Error: Invalid JSON format in /params.json";
+            commandResult = "Error: Invalid parameter format in /params.txt";
             break;
         default:
             commandResult = "Error: Failed to load configuration";
@@ -275,7 +291,7 @@ static void saveConfigCallback(cmd* c)
     
     switch (result) {
         case ErrorParam::OK:
-            commandResult = "Configuration saved successfully to /params.json";
+            commandResult = "Configuration saved successfully to /params.txt";
             break;
         case ErrorParam::FILE_SYSTEM_ERROR:
             commandResult = "Error: Failed to write to LittleFS";
@@ -323,7 +339,7 @@ static void backupConfigCallback(cmd* c)
                 commandResult += "    \"" + String(param.name) + "\": ";
                 
                 if (type == ParamType::STRING) {
-                    commandResult += "\"" + String(value) + "\"";
+                    commandResult += "\"" + escapeJsonString(String(value)) + "\"";
                 } else {
                     commandResult += String(value);
                 }

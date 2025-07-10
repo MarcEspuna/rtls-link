@@ -287,7 +287,9 @@
                 }
             }
             else if(event.data.startsWith("Current configuration:")) { //backup-config response
-                var blob = new Blob([event.data.substring(22)], { type: 'application/json' });
+                var configStart = event.data.indexOf("{");
+                var configData = configStart !== -1 ? event.data.substring(configStart).trim() : event.data;
+                var blob = new Blob([configData], { type: 'application/json' });
                 var url = window.URL.createObjectURL(blob);
                 var a = document.createElement('a');
                 a.style.display = 'none';
@@ -436,7 +438,11 @@
                     for (var param in config[group]) {
                         if (config[group].hasOwnProperty(param)) {
                             var value = config[group][param];
-                            var command = `write --group ${group} --name ${param} --data ${value}`;
+                            // Escape special characters to prevent command injection
+                            var escapedValue = String(value).replace(/["\s]/g, function(match) {
+                                return match === '"' ? '\\"' : match;
+                            });
+                            var command = `write --group ${group} --name ${param} --data "${escapedValue}"`;
                             commands.push(command);
                         }
                     }

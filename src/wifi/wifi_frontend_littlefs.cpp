@@ -12,7 +12,7 @@ static StaticTaskHolder<etl::delegate<void()>, 2048> wifi_connection_task = {
     "WifiConnTask", // Task name
     1,              // Frequency: 1Hz
     1,              // Priority
-    etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::StationConnectionThread>(),
+    etl::delegate<void()>(),  // Will be set in Init()
     {},
     {}
 };
@@ -23,6 +23,9 @@ void WifiLittleFSFrontend::Init() {
     printf("WifiLittleFSFrontend::Init()\n");
     
     m_TcpLoggingServer = new WifiTcpServer(m_Params.dbgPort);
+    
+    // Set the delegate after initialization
+    wifi_connection_task.callback = etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::StationConnectionThread>();
     
     // Schedule the connection task
     Scheduler::scheduler.CreateStaticTask(wifi_connection_task);
