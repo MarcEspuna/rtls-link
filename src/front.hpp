@@ -21,6 +21,8 @@ public:
     virtual const etl::string_view GetParamGroup() const = 0;
     virtual ErrorParam SetParam(const char* name, const void* data, uint32_t len) = 0;
     virtual ErrorParam GetParam(const char* name, char* value, uint32_t& len, ParamType& type) = 0;
+    virtual ErrorParam LoadParams() = 0;
+    virtual ErrorParam SaveParams() = 0;
 };
 
 
@@ -34,6 +36,9 @@ namespace Front {
 
     ErrorParam WriteGlobalParam(const char* group, const char* name, const void* data, uint32_t len);
     ErrorParam ReadGlobalParam(const char* group, const char* name, char* value, uint32_t& len, ParamType& type);
+    
+    ErrorParam LoadAllParams();
+    ErrorParam SaveAllParams();
 }
 
 /**
@@ -110,6 +115,13 @@ public:
         return ErrorParam::NAME_NOT_FOUND;
     }
 
+    virtual ErrorParam LoadParams() override {
+        return ErrorParam::OK;
+    }
+
+    virtual ErrorParam SaveParams() override {
+        return ErrorParam::OK;
+    }
 
 protected:
     void InitEeprom() {

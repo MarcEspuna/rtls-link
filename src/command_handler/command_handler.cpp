@@ -22,6 +22,9 @@ static void writeCallback(cmd* c);
 static void errorCallback(cmd_error* c);
 static void startCallback(cmd* c);
 static void calibrateCallback(cmd* c);
+static void loadConfigCallback(cmd* c);
+static void saveConfigCallback(cmd* c);
+static void backupConfigCallback(cmd* c);
 
 void CommandHandler::Init()
 {
@@ -54,6 +57,11 @@ void CommandHandler::Init()
     Command startCmd = simpleCLI.addCommand("start", startCallback);
 
     Command calibrateCmd = simpleCLI.addCommand("calibrate", calibrateCallback);
+    
+    // LittleFS parameter management commands
+    Command loadConfigCmd = simpleCLI.addCommand("load-config", loadConfigCallback);
+    Command saveConfigCmd = simpleCLI.addCommand("save-config", saveConfigCallback);
+    Command backupConfigCmd = simpleCLI.addCommand("backup-config", backupConfigCallback);
     
     simpleCLI.setOnError(errorCallback);
 }
@@ -236,4 +244,94 @@ static void errorCallback(cmd_error* c)
     {
         commandResult += "Did you mean: " + cmdError.getCommand().toString() + "?";
     }
+}
+
+static void loadConfigCallback(cmd* c)
+{
+    ErrorParam result = Front::LoadAllParams();
+    
+    switch (result) {
+        case ErrorParam::OK:
+            commandResult = "Configuration loaded successfully from /params.json";
+            break;
+        case ErrorParam::FILE_NOT_FOUND:
+            commandResult = "Warning: /params.json not found, using default parameters";
+            break;
+        case ErrorParam::FILE_SYSTEM_ERROR:
+            commandResult = "Error: Failed to initialize LittleFS";
+            break;
+        case ErrorParam::INVALID_DATA:
+            commandResult = "Error: Invalid JSON format in /params.json";
+            break;
+        default:
+            commandResult = "Error: Failed to load configuration";
+            break;
+    }
+}
+
+static void saveConfigCallback(cmd* c)
+{
+    ErrorParam result = Front::SaveAllParams();
+    
+    switch (result) {
+        case ErrorParam::OK:
+            commandResult = "Configuration saved successfully to /params.json";
+            break;
+        case ErrorParam::FILE_SYSTEM_ERROR:
+            commandResult = "Error: Failed to write to LittleFS";
+            break;
+        default:
+            commandResult = "Error: Failed to save configuration";
+            break;
+    }
+}
+
+static void backupConfigCallback(cmd* c)
+{
+    commandResult = "Current configuration:\n";
+    commandResult += "{\n";
+    
+    etl::vector<IFrontend*, Front::MAX_FRONTENDS>& frontends = Front::Get();
+    bool first_group = true;
+    
+    for (size_t i = 0; i < frontends.size(); i++) {
+        IFrontend* frontend = frontends[i];
+        
+        if (!first_group) {
+            commandResult += ",\n";
+        }
+        first_group = false;
+        
+        commandResult += "  \"" + String(frontend->GetParamGroup().data()) + "\": {\n";
+        
+        etl::span<const ParamDef> params = frontend->GetParamLayout();
+        bool first_param = true;
+        
+        for (size_t j = 0; j < params.size(); j++) {
+            const ParamDef& param = params[j];
+            
+            if (!first_param) {
+                commandResult += ",\n";
+            }
+            first_param = false;
+            
+            char value[256];
+            uint32_t len = sizeof(value);
+            ParamType type;
+            
+            if (frontend->GetParam(param.name, value, len, type) == ErrorParam::OK) {
+                commandResult += "    \"" + String(param.name) + "\": ";
+                
+                if (type == ParamType::STRING) {
+                    commandResult += "\"" + String(value) + "\"";
+                } else {
+                    commandResult += String(value);
+                }
+            }
+        }
+        
+        commandResult += "\n  }";
+    }
+    
+    commandResult += "\n}";
 }

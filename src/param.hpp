@@ -27,7 +27,9 @@ enum class ErrorParam {
     FAILED_TO_WRITE,
     FAILED_TO_READ,
     PARAM_TOO_LONG,
-    INVALID_DATA
+    INVALID_DATA,
+    FILE_SYSTEM_ERROR,
+    FILE_NOT_FOUND
 };
 
 struct ParamDef {
