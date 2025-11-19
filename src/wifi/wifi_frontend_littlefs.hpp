@@ -32,6 +32,7 @@ private:
     void SetupStation();
     void SetupWebServer();
     void UpdateMode(WifiMode mode);
+    void ClearBackends();
 
     static constexpr uint32_t maxClients = 10;
 

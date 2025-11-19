@@ -30,4 +30,11 @@ private:
     uint8_t incomingSerialPacket[max_packet_size];
     const IPAddress GSCIp;
 
+    // Auto-discovery and buffering
+    IPAddress m_TargetIp;
+    uint32_t m_LastSendTime = 0;
+    uint16_t m_BufferIndex = 0;
+    static constexpr uint16_t kBufferThreshold = 256; // Send if buffer exceeds this
+    static constexpr uint32_t kTimeThresholdMs = 10;  // Send if older than this
+
 };

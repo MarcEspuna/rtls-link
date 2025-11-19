@@ -70,6 +70,8 @@ void WifiLittleFSFrontend::SetupStation() {
 }
 
 void WifiLittleFSFrontend::SetupWebServer() {
+    ClearBackends();
+
     if (m_Params.enableWebServer) {
         printf("Setting up web server\n");
         WifiWebSocket* webSocketServer = new WifiWebSocket("web.html", "/ws", 80);
@@ -135,6 +137,15 @@ void WifiLittleFSFrontend::UpdateLastTWRSample(float x, float y, float z, uint32
     if (m_TcpLoggingServer) {
         m_TcpLoggingServer->AddForSending(buffer);
     }
+}
+
+
+
+void WifiLittleFSFrontend::ClearBackends() {
+    for (auto* backend : m_Backends) {
+        delete backend;
+    }
+    m_Backends.clear();
 }
 
 namespace Front {
