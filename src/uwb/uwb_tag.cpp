@@ -72,7 +72,7 @@ SimpleKalmanFilter range_filters[4] = {
 static Trilat::ITrilat& GetTrilat();
 static void CreateTrilat(const Eigen::MatrixX3d& anchors);
 
-UWBTag::UWBTag(UWBFront& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
+UWBTag::UWBTag(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
     : UWBBackend(front, uwb_config)
 {
   /**

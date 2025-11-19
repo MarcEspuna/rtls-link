@@ -40,7 +40,7 @@ static StaticTaskHolder<etl::delegate<void()>, 16384> pos_estimator_task = {
 };
 
 
-UWBTagTDoA::UWBTagTDoA(UWBFront& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
+UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
     : UWBBackend(front, uwb_config)
 {
     // NOTE: Look into short data fast accuracy...

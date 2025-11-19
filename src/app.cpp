@@ -14,6 +14,7 @@
 #include "mavlink/local_position_sensor.hpp"
 #include "bcn_konex/beacon_protocool.hpp"
 #include "mavlink/uart_comm.hpp"
+#include "uwb/uwb_frontend_littlefs.hpp"
 
 #define BEACON_PROTOCOL_ENABLED 0
 #define MAVLINK_PROTOCOL_ENABLED 1
@@ -126,7 +127,7 @@ void App::StatusLedTask()
   static uint32_t i = 0;
 
   // It will blink to the number of connected anchors
-  if (Front::uwbFront.GetConnectedDevices() > i) {
+  if (Front::uwbLittleFSFront.GetConnectedDevices() > i) {
     digitalWrite(bsp::kBoardConfig.led_pin, HIGH);
     vTaskDelay(pdMS_TO_TICKS(100));  // Use FreeRTOS delay instead of Arduino delay()
     digitalWrite(bsp::kBoardConfig.led_pin, LOW);

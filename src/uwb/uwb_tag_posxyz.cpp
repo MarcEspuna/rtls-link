@@ -94,7 +94,7 @@ static SimpleKalmanFilter kFilterY(e_mea_y, e_est_y, q_y);
 
 
 
-UWBTagPosXYZ::UWBTagPosXYZ(UWBFront& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
+UWBTagPosXYZ::UWBTagPosXYZ(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
     : UWBBackend(front, uwb_config)
 {
   /**

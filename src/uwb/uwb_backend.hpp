@@ -8,11 +8,11 @@
 #include "uwb_params.hpp"
 #include "uwb_config.hpp"
 
-class UWBFront;
+#include "uwb_frontend_interface.hpp"
 
 class UWBBackend {
 public:
-    UWBBackend(UWBFront& front, const bsp::UWBConfig& spi_config);
+    UWBBackend(IUWBFrontend& front, const bsp::UWBConfig& spi_config);
     virtual ~UWBBackend() = default;
 
     virtual void Update() = 0;
@@ -26,5 +26,5 @@ public:
     void UpdateMode(UWBMode mode);
 
 protected:
-    UWBFront& m_Front;
+    IUWBFrontend& m_Front;
 };

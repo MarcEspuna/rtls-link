@@ -5,8 +5,8 @@
 #include "app.hpp"
 #include "scheduler.hpp"
 
-#include "uwb/uwb_frontend.hpp"
-#include "wifi/wifi_frontend.hpp"
+#include "uwb/uwb_frontend_littlefs.hpp"
+#include "wifi/wifi_frontend_littlefs.hpp"
 #include "bcn_konex/beacon_protocool.hpp"
 
 #include "console/console.hpp"
@@ -23,7 +23,7 @@ App app;
 
 /**
  * Definition of static tasks
-*/
+ */
 static StaticTaskHolder<etl::delegate<void()>, 8192> application_task = {
   "MainAppTask",
   10,                          
@@ -38,7 +38,7 @@ static StaticTaskHolder<etl::delegate<void()>, 8192> wifi_task = {
   "WifiTask",
   50,                // 50Hz         
   1,                 // Priority
-  etl::delegate<void()>::create<WifiFront, Front::wifiFront, &WifiFront::Update>(),
+  etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::Update>(),
   {},
   {}
 };
@@ -132,5 +132,5 @@ void setup() {
 // For now the main thread will run the uwb ranging frontend.
 void loop() {
     // ISUES: Looks like this task triggers a wdt reset if we execute it from a periodic thread.
-    Front::uwbFront.Update();
+    Front::uwbLittleFSFront.Update();
 }

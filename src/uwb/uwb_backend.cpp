@@ -4,10 +4,10 @@
 
 #include "bsp/board.hpp"
 
-#include "uwb_frontend.hpp"
+#include "uwb_frontend_interface.hpp"
 #include "uwb_backend.hpp"
 
-UWBBackend::UWBBackend(UWBFront& front, const bsp::UWBConfig& uwb_config)
+UWBBackend::UWBBackend(IUWBFrontend& front, const bsp::UWBConfig& uwb_config)
     : m_Front(front)
 {
     // Wait for 100ms to make sure serial has transmitted all the data previously written.

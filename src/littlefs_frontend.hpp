@@ -77,9 +77,13 @@ public:
     }
 
     virtual ErrorParam LoadParams() override {
-        if (!LittleFS.begin()) {
-            printf("Failed to initialize LittleFS\n");
-            return ErrorParam::FILE_SYSTEM_ERROR;
+        static bool initialized = false;
+        if (!initialized) {
+            if (!LittleFS.begin(true)) {
+                printf("Failed to initialize LittleFS\n");
+                return ErrorParam::FILE_SYSTEM_ERROR;
+            }
+            initialized = true;
         }
 
         File file = LittleFS.open("/params.txt", "r");
@@ -143,9 +147,13 @@ public:
     }
 
     virtual ErrorParam SaveParams() override {
-        if (!LittleFS.begin()) {
-            printf("Failed to initialize LittleFS\n");
-            return ErrorParam::FILE_SYSTEM_ERROR;
+        static bool initialized = false;
+        if (!initialized) {
+            if (!LittleFS.begin()) {
+                printf("Failed to initialize LittleFS\n");
+                return ErrorParam::FILE_SYSTEM_ERROR;
+            }
+            initialized = true;
         }
 
         // Read existing file content

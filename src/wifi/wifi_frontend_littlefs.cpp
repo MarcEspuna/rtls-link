@@ -22,6 +22,8 @@ void WifiLittleFSFrontend::Init() {
     
     printf("WifiLittleFSFrontend::Init()\n");
     
+    UpdateMode(m_Params.mode);
+
     m_TcpLoggingServer = new WifiTcpServer(m_Params.dbgPort);
     
     // Set the delegate after initialization
@@ -29,8 +31,6 @@ void WifiLittleFSFrontend::Init() {
     
     // Schedule the connection task
     Scheduler::scheduler.CreateStaticTask(wifi_connection_task);
-    
-    UpdateMode(m_Params.mode);
 }
 
 void WifiLittleFSFrontend::Update() {

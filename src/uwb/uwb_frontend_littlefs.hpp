@@ -2,13 +2,28 @@
 
 #include "uwb_params.hpp"
 #include "../littlefs_frontend.hpp"
+#include "uwb_backend.hpp"
 
-class UWBLittleFSFrontend : public LittleFSFrontend<UWBParams> {
+#include "uwb_frontend_interface.hpp"
+
+class UWBLittleFSFrontend : public LittleFSFrontend<UWBParams>, public IUWBFrontend {
 public:
     UWBLittleFSFrontend() : LittleFSFrontend<UWBParams>("uwb") {}
 
     virtual void Init() override;
     virtual void Update() override;
+
+    void UpdateAntennaDelay(uint16_t delay) override {
+        // Write parameter to eeprom
+        // TODO: Implement parameter writing for LittleFS if needed, or just update in memory
+        m_Params.ADelay = delay;
+        SaveParams();
+    }
+
+    void UpdateMode(UWBMode mode) override {
+        m_Params.mode = mode;
+        SaveParams();
+    }
 
     virtual etl::span<const ParamDef> GetParamLayout() const override {
         return etl::span<const ParamDef>(s_ParamDefs, sizeof(s_ParamDefs)/sizeof(ParamDef));
@@ -21,6 +36,16 @@ public:
     UWBParams& GetParams() {
         return m_Params;
     }
+
+    uint32_t GetConnectedDevices();
+
+    bool StartTag();
+    void PerformAnchorCalibration();
+
+protected:
+    etl::vector<UWBAnchorParam, UWBParams::maxAnchorCount> GetAnchors();
+
+    UWBBackend* m_Backend = nullptr;
 
 public:
     static constexpr ParamDef s_ParamDefs[] = {

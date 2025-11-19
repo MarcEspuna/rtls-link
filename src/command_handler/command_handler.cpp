@@ -9,7 +9,7 @@
 #include "front.hpp"
 #include "scheduler.hpp"
 
-#include "uwb/uwb_frontend.hpp"
+#include "uwb/uwb_frontend_littlefs.hpp"
 
 static constexpr int COMMAND_QUEUE_SIZE = 4;
 static SimpleCLI simpleCLI(COMMAND_QUEUE_SIZE, COMMAND_QUEUE_SIZE);
@@ -234,7 +234,7 @@ static void readAllCallback(cmd* c)
 
 static void startCallback(cmd* c)
 {
-    if (Front::uwbFront.StartTag())
+    if (Front::uwbLittleFSFront.StartTag())
     {
         commandResult = "UWB Tag started";
     }
@@ -246,7 +246,7 @@ static void startCallback(cmd* c)
 
 static void calibrateCallback(cmd* c)
 {
-    Front::uwbFront.PerformAnchorCalibration();
+    Front::uwbLittleFSFront.PerformAnchorCalibration();
 }
 
 static void errorCallback(cmd_error* c)
