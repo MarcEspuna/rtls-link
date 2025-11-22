@@ -45,11 +45,14 @@ void WifiUartBridge::Update()
         }
 
         // Read data from Serial into buffer
-        while (m_Serial.available()) {
-            if (m_BufferIndex < max_packet_size) {
-                incomingSerialPacket[m_BufferIndex++] = m_Serial.read();
-            } else {
-                break;
+        // Read data from Serial into buffer
+        int available = m_Serial.available();
+        if (available > 0) {
+            int spaceLeft = max_packet_size - m_BufferIndex;
+            int toRead = min(available, spaceLeft);
+            if (toRead > 0) {
+                int bytesRead = m_Serial.readBytes(incomingSerialPacket + m_BufferIndex, toRead);
+                m_BufferIndex += bytesRead;
             }
         }
 

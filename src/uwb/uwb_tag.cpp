@@ -18,7 +18,7 @@
 
 #include "app.hpp"
 
-#include "wifi/wifi_frontend.hpp"
+#include "wifi/wifi_frontend_littlefs.hpp"
 
 static constexpr uint32_t ANCHOR_DISTANCE_EXPIRED = 300;   //measurements older than this are ignore (milliseconds)
 
@@ -198,7 +198,7 @@ static void newRange()
     // Calculate refresh rates of each distance plus final 3D position
     uint32_t refresh_rate_hz = Utils::GetRefreshRate(last_sample_timestamp);
 
-    Front::wifiFront.UpdateLastTWRSample(current_tag_position(0), current_tag_position(1), current_tag_position(2), refresh_rate_hz);
+    Front::wifiLittleFSFront.UpdateLastTWRSample(current_tag_position(0), current_tag_position(1), current_tag_position(2), refresh_rate_hz);
     
     Serial.print("P= ");  //result
     Serial.print(current_tag_position(0));

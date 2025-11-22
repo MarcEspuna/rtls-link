@@ -46,7 +46,7 @@ public:
                         return ErrorParam::PARAM_TOO_LONG;
                     }
                 }
-                return ErrorParam::OK;
+                return SaveParams();
             }
         }
         return ErrorParam::NAME_NOT_FOUND;
@@ -131,7 +131,8 @@ public:
                         strncpy(reinterpret_cast<char*>(&m_Params) + param.address, value.c_str(), param.len - 1);
                         reinterpret_cast<char*>(&m_Params)[param.address + param.len - 1] = '\0';
                     } else {
-                        char dataTransformed[param.len];
+                        uint16_t neededLen = max(param.len, static_cast<uint16_t>(4));
+                        char dataTransformed[neededLen];
                         if (Utils::TransformStrToData(param.type, value.c_str(), dataTransformed) == Utils::ErrorTransform::OK) {
                             memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
                         }
@@ -156,29 +157,36 @@ public:
             initialized = true;
         }
 
-        // Read existing file content
-        etl::string<2048> fileContent;
+        // Open original file for reading and temp file for writing
         File file = LittleFS.open("/params.txt", "r");
+        File tempFile = LittleFS.open("/params.tmp", "w");
+
+        if (!tempFile) {
+            printf("Failed to open temp file for writing\n");
+            if (file) file.close();
+            return ErrorParam::FILE_SYSTEM_ERROR;
+        }
+
+        etl::string<64> groupPrefix;
+        groupPrefix.assign(m_GroupName.data());
+        groupPrefix += ".";
+
+        // Copy lines from other groups to temp file
         if (file) {
             while (file.available()) {
                 String line = file.readStringUntil('\n');
-                line += "\n";
+                line.trim();
                 
-                // Check if this line belongs to our group
-                etl::string<64> groupPrefix;
-                groupPrefix.assign(m_GroupName.data());
-                groupPrefix += ".";
+                if (line.length() == 0) continue;
+
                 if (!line.startsWith(groupPrefix.c_str())) {
-                    // Keep lines from other groups
-                    if (fileContent.size() + line.length() < fileContent.capacity()) {
-                        fileContent += line.c_str();
-                    }
+                    tempFile.println(line);
                 }
             }
             file.close();
         }
 
-        // Add our group's parameters
+        // Write our group's parameters
         for (const ParamDef& param : GetParamLayout()) {
             etl::string<128> paramLine;
             paramLine.assign(m_GroupName.data());
@@ -188,7 +196,12 @@ public:
             
             if (param.type == ParamType::STRING) {
                 const char* str_param = reinterpret_cast<const char*>(&m_Params) + param.address;
-                paramLine += str_param;
+                // Ensure we don't read past the buffer if it's not null-terminated within len
+                size_t actualLen = 0;
+                while (actualLen < param.len && str_param[actualLen] != '\0') {
+                    actualLen++;
+                }
+                paramLine.append(str_param, actualLen);
             } else {
                 char dataTransformed[32] = {};
                 memcpy(dataTransformed, reinterpret_cast<char*>(&m_Params) + param.address, param.len);
@@ -197,22 +210,18 @@ public:
                 Utils::TransformDataToStr(param.type, dataTransformed, str_val);
                 paramLine += str_val;
             }
-            paramLine += "\n";
             
-            if (fileContent.size() + paramLine.size() < fileContent.capacity()) {
-                fileContent += paramLine.c_str();
-            }
+            tempFile.println(paramLine.c_str());
         }
 
-        // Write the updated content back
-        file = LittleFS.open("/params.txt", "w");
-        if (!file) {
-            printf("Failed to open params.txt for writing\n");
+        tempFile.close();
+
+        // Replace original file with temp file
+        LittleFS.remove("/params.txt");
+        if (!LittleFS.rename("/params.tmp", "/params.txt")) {
+            printf("Failed to rename temp file to params.txt\n");
             return ErrorParam::FILE_SYSTEM_ERROR;
         }
-
-        file.print(fileContent.c_str());
-        file.close();
 
         printf("Saved parameters for group %s\n", m_GroupName.data());
         return ErrorParam::OK;

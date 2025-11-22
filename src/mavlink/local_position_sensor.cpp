@@ -136,8 +136,8 @@ void LocalPositionSensor::process_received_bytes(const uint8_t* buffer, size_t l
         // Try to parse the byte
         if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status)) {
             // Packet successfully received and parsed: msg contains the message
-            printf("Received MAVLink message with ID: %d from SysID: %d CompID: %d\n", 
-                   msg.msgid, msg.sysid, msg.compid);
+            // printf("Received MAVLink message with ID: %d from SysID: %d CompID: %d\n", 
+            //        msg.msgid, msg.sysid, msg.compid);
 
             // Handle specific messages, e.g., heartbeat from ArduPilot
             switch (msg.msgid) {

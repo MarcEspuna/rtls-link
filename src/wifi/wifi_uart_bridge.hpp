@@ -20,7 +20,7 @@ public:
     void Update() override;
 
 private:
-    static constexpr uint32_t max_packet_size = 1024;
+    static constexpr uint32_t max_packet_size = 4096;
 private:
     HardwareSerial& m_Serial;
     IPAddress gsc_ip;
@@ -34,7 +34,7 @@ private:
     IPAddress m_TargetIp;
     uint32_t m_LastSendTime = 0;
     uint16_t m_BufferIndex = 0;
-    static constexpr uint16_t kBufferThreshold = 256; // Send if buffer exceeds this
-    static constexpr uint32_t kTimeThresholdMs = 10;  // Send if older than this
+    static constexpr uint16_t kBufferThreshold = 1024; // Send if buffer exceeds this
+    static constexpr uint32_t kTimeThresholdMs = 5;  // Send if older than this
 
 };

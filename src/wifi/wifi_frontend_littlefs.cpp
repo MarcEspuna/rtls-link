@@ -8,7 +8,7 @@
 #include <etl/vector.h>
 
 // I will define a static FreeRTOS task holder for station connection checks
-static StaticTaskHolder<etl::delegate<void()>, 2048> wifi_connection_task = {
+static StaticTaskHolder<etl::delegate<void()>, 4096> wifi_connection_task = {
     "WifiConnTask", // Task name
     1,              // Frequency: 1Hz
     1,              // Priority
