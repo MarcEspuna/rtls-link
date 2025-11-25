@@ -1,9 +1,9 @@
-wifi.mode: 0
+wifi.mode: 1
 wifi.ssidAP: UWB_RTLS
 wifi.pswdAP: 12345678
-wifi.ssidST: MyNetwork
-wifi.pswdST: password123
-wifi.gcsIp: 192.168.4.100
+wifi.ssidST: TP-Link_6AF2
+wifi.pswdST: 15914392
+wifi.gcsIp: 192.168.0.105
 wifi.dbgPort: 8080
 wifi.udpPort: 14550
 wifi.enableWebServer: 1
@@ -22,11 +22,11 @@ uwb.y2: 0.0
 uwb.z2: 0.0
 uwb.devId3: 3
 uwb.x3: 5.0
-uwb.y3: 5.0
+uwb.y3: 7.5
 uwb.z3: 0.0
 uwb.devId4: 4
 uwb.x4: 0.0
-uwb.y4: 5.0
+uwb.y4: 7.5
 uwb.z4: 0.0
 uwb.devId5: 5
 uwb.x5: 0.0
@@ -38,3 +38,8 @@ uwb.y6: 5.0
 uwb.z6: 2.0
 uwb.ADelay: 16580
 uwb.calDistance: 1.0
+uwb.originLat: 41.5032932355418
+uwb.originLon: 2.16679606586695
+uwb.originAlt: 72.14
+uwb.mavlinkTargetSystemId: 2
+uwb.rotationDegrees: 40.0

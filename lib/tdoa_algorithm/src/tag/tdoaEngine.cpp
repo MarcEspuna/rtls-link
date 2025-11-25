@@ -237,7 +237,8 @@ static bool findSuitableAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext
     }
   }
   if (!result) {
-    printf("Removed mesurement!\n");
+    // printf("Removed mesurement!\n");
+    // TODO: Think of a way to not clutter the log
   }
   return result;
 }
