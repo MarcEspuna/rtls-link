@@ -152,6 +152,29 @@
             background-color: #008529;
         }
 
+        .upload-container {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .upload-button, .download-button {
+            padding: 10px 20px;
+            background-color: #1ca152;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+
+        .upload-button:hover, .download-button:hover {
+            background-color: #008529;
+        }
+
         @media screen and (max-width: 450px) {
             header {
                 margin: 0 20px;
@@ -189,6 +212,22 @@
     <div class="search-container">
         <input type="text" id="searchInput" placeholder="Search...">
         <button type="button" class="search-button" id="searchButton">Search</button>
+    </div>
+
+    <div class="upload-container">
+        <input type="file" id="fileInput" accept=".json,.txt" style="display:none;">
+        <button class="upload-button" onclick="document.getElementById('fileInput').click()">
+            Upload Config
+        </button>
+        <button class="download-button" onclick="downloadConfig()">
+            Download Config
+        </button>
+        <button class="upload-button" onclick="loadConfig()">
+            Load Config
+        </button>
+        <button class="upload-button" onclick="saveConfig()">
+            Save Config
+        </button>
     </div>
 
     <div id="table-container">
@@ -239,6 +278,27 @@
             if(event.data == "Param written"){ //Param written confirmation
                 document.getElementById("popupContainer").style.display = "block";
                 document.getElementById("msg").textContent = "Correct!";
+            }
+            else if(event.data.startsWith("Configuration")) { //Config operation confirmation
+                document.getElementById("popupContainer").style.display = "block";
+                document.getElementById("msg").textContent = event.data;
+                if(event.data.includes("loaded")) {
+                    websocket.send("readall"); // Refresh parameters after load
+                }
+            }
+            else if(event.data.startsWith("Current configuration:")) { //backup-config response
+                var configStart = event.data.indexOf("{");
+                var configData = configStart !== -1 ? event.data.substring(configStart).trim() : event.data;
+                var blob = new Blob([configData], { type: 'application/json' });
+                var url = window.URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = 'params.json';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
             }
             else { //readall                  
                 processAllData(event.data);
@@ -352,6 +412,69 @@
                 tableBody.appendChild(row);
             });
         });   
+
+        // File upload handling
+        document.getElementById('fileInput').addEventListener('change', function(event) {
+            var file = event.target.files[0];
+            if (file) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        var config = JSON.parse(e.target.result);
+                        uploadConfiguration(config);
+                    } catch (error) {
+                        alert('Error parsing JSON file: ' + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        function uploadConfiguration(config) {
+            var commands = [];
+            
+            for (var group in config) {
+                if (config.hasOwnProperty(group)) {
+                    for (var param in config[group]) {
+                        if (config[group].hasOwnProperty(param)) {
+                            var value = config[group][param];
+                            // Escape special characters to prevent command injection
+                            var escapedValue = String(value).replace(/["\s]/g, function(match) {
+                                return match === '"' ? '\\"' : match;
+                            });
+                            var command = `write --group ${group} --name ${param} --data "${escapedValue}"`;
+                            commands.push(command);
+                        }
+                    }
+                }
+            }
+            
+            var index = 0;
+            function sendNextCommand() {
+                if (index < commands.length) {
+                    websocket.send(commands[index]);
+                    index++;
+                    setTimeout(sendNextCommand, 100); // Wait 100ms between commands
+                } else {
+                    alert('Configuration uploaded successfully!');
+                    websocket.send("readall"); // Refresh the parameter table
+                }
+            }
+            
+            sendNextCommand();
+        }
+
+        function downloadConfig() {
+            websocket.send("backup-config");
+        }
+
+        function loadConfig() {
+            websocket.send("load-config");
+        }
+
+        function saveConfig() {
+            websocket.send("save-config");
+        }
     </script>
 </body>
 </html>

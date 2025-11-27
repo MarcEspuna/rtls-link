@@ -136,8 +136,8 @@ void LocalPositionSensor::process_received_bytes(const uint8_t* buffer, size_t l
         // Try to parse the byte
         if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status)) {
             // Packet successfully received and parsed: msg contains the message
-            printf("Received MAVLink message with ID: %d from SysID: %d CompID: %d\n", 
-                   msg.msgid, msg.sysid, msg.compid);
+            // printf("Received MAVLink message with ID: %d from SysID: %d CompID: %d\n", 
+            //        msg.msgid, msg.sysid, msg.compid);
 
             // Handle specific messages, e.g., heartbeat from ArduPilot
             switch (msg.msgid) {
@@ -146,11 +146,11 @@ void LocalPositionSensor::process_received_bytes(const uint8_t* buffer, size_t l
                     mavlink_msg_heartbeat_decode(&msg, &heartbeat);
                     
                     // Print detailed heartbeat info
-                    printf("  Heartbeat received from system %d, component %d\n", 
-                           (int)msg.sysid, (int)msg.compid);
-                    printf("  Type: %d, Autopilot: %d, System Status: %d\n", 
-                           (int)heartbeat.type, (int)heartbeat.autopilot, 
-                           (int)heartbeat.system_status);
+                    // printf("  Heartbeat received from system %d, component %d\n", 
+                    //        (int)msg.sysid, (int)msg.compid);
+                    // printf("  Type: %d, Autopilot: %d, System Status: %d\n", 
+                    //        (int)heartbeat.type, (int)heartbeat.autopilot, 
+                    //        (int)heartbeat.system_status);
                     
                     // Instead of using dynamic_cast, use the callback if set
                     if (heartbeat_callback_) {

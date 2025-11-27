@@ -4,7 +4,7 @@
 
 class UWBCalibration : public UWBBackend {
 public:
-    UWBCalibration(UWBFront& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, float calibrationDistance);
+    UWBCalibration(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, float calibrationDistance);
 
     void Update() override;
 

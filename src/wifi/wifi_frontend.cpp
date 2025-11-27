@@ -39,7 +39,7 @@ static StaticTaskHolder<etl::delegate<void()>, 2048> wifi_connection_task = {
 
 
 namespace Front {
-    WifiFront wifiFront;
+    // WifiFront wifiFront;
 }
 
 WifiFront::WifiFront()

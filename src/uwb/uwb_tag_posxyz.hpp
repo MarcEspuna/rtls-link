@@ -45,7 +45,7 @@ union vehicle_position_msg {
 
 class UWBTagPosXYZ : public UWBBackend {
 public:
-    UWBTagPosXYZ(UWBFront& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors);
+    UWBTagPosXYZ(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors);
 
     void Update() override;
  

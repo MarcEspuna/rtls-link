@@ -17,7 +17,7 @@
 
 
 namespace Front {
-    UWBFront uwbFront;
+    // UWBFront uwbFront;
 }
 
 UWBFront::UWBFront()

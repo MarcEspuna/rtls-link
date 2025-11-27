@@ -8,7 +8,9 @@
 #include "uwb_backend.hpp"
 
 
-class UWBFront : public Frontend<UWBParams> {
+#include "uwb_frontend_interface.hpp"
+
+class UWBFront : public Frontend<UWBParams>, public IUWBFrontend {
 public:
     friend class UWBBackend;
 
@@ -27,8 +29,8 @@ public:
     void PerformAnchorCalibration();
 
 private:
-    void UpdateAntennaDelay(uint16_t delay);
-    void UpdateMode(UWBMode mode);
+    void UpdateAntennaDelay(uint16_t delay) override;
+    void UpdateMode(UWBMode mode) override;
 
     etl::vector<UWBAnchorParam, UWBParams::maxAnchorCount> GetAnchors();
     

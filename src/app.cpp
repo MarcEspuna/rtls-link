@@ -14,6 +14,7 @@
 #include "mavlink/local_position_sensor.hpp"
 #include "bcn_konex/beacon_protocool.hpp"
 #include "mavlink/uart_comm.hpp"
+#include "uwb/uwb_frontend_littlefs.hpp"
 
 #define BEACON_PROTOCOL_ENABLED 0
 #define MAVLINK_PROTOCOL_ENABLED 1
@@ -37,7 +38,7 @@ void App::Init()
   Serial1.begin(921600, SERIAL_8N1, bsp::kBoardConfig.uwb_data_uart.rx_pin, bsp::kBoardConfig.uwb_data_uart.tx_pin);
 
   local_position_sensor_.set_heartbeat_callback([this](uint8_t system_id, uint8_t component_id) {
-    printf("Heartbeat received from system %d, component %d\n", system_id, component_id);
+    // printf("Heartbeat received from system %d, component %d\n", system_id, component_id);
     last_heartbeat_received_timestamp_ms_ = millis();
     // Future implementation:
     // If all of a sudden we stop receiving heartbeats maybe we should retry to send the origin position
@@ -82,13 +83,17 @@ void App::Update()
     if (time_since_unhealthy > kSendOriginPositionAfterMs 
         && !is_origin_position_sent_ 
         && time_since_rcv_heartbeat < kHeartbeatRcvTimeoutMs) {
-      uint8_t target_system_id = 3; // ID of the autopilot (usually 1) FIX THIS!!!!
-      printf("Sending origin position\n");
-      local_position_sensor_.send_set_gps_global_origin(kOriginLatitude, kOriginLongitude, kOriginAltitude, target_system_id, micros());
+      uint8_t target_system_id = Front::uwbLittleFSFront.GetParams().mavlinkTargetSystemId;
+      printf("Sending origin position to system %d\n", target_system_id);
+      local_position_sensor_.send_set_gps_global_origin(
+          Front::uwbLittleFSFront.GetParams().originLat, 
+          Front::uwbLittleFSFront.GetParams().originLon, 
+          Front::uwbLittleFSFront.GetParams().originAlt, 
+          target_system_id, micros());
       
       // Keep sending origin positions to test.
       time_since_unhealthy = now_ms;
-      // is_origin_position_sent_ = true;
+      is_origin_position_sent_ = true;
     }
   }
 
@@ -126,7 +131,7 @@ void App::StatusLedTask()
   static uint32_t i = 0;
 
   // It will blink to the number of connected anchors
-  if (Front::uwbFront.GetConnectedDevices() > i) {
+  if (Front::uwbLittleFSFront.GetConnectedDevices() > i) {
     digitalWrite(bsp::kBoardConfig.led_pin, HIGH);
     vTaskDelay(pdMS_TO_TICKS(100));  // Use FreeRTOS delay instead of Arduino delay()
     digitalWrite(bsp::kBoardConfig.led_pin, LOW);
@@ -158,12 +163,13 @@ Vector3f App::correct_for_orient_yaw(float x, float y, float z) {
   Vector3f result = {x, y, z};
   
   // Exit immediately if no correction needed (optimization)
-  if (kRotationDegrees == 0.0f) {
+  float rotationDegrees = Front::uwbLittleFSFront.GetParams().rotationDegrees;
+  if (rotationDegrees == 0.0f) {
     return result;
   }
 
   // Calculate rotation constants
-  float orient_yaw_rad = kRotationDegrees * M_PI / 180.0f; // Convert degrees to radians
+  float orient_yaw_rad = rotationDegrees * M_PI / 180.0f; // Convert degrees to radians
   float orient_cos_yaw = cosf(orient_yaw_rad);
   float orient_sin_yaw = sinf(orient_yaw_rad);
 
@@ -185,9 +191,12 @@ void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
   // Apply coordinate system rotation to correct for beacon system orientation
   Vector3f rotated_vector = correct_for_orient_yaw(x_m, y_m, z_m);
   
-  // Send the rotated coordinates
-  app.local_position_sensor_.send_vision_position_estimate(rotated_vector.x, rotated_vector.y, rotated_vector.z, 0, 0, 0);
-  app.last_sample_timestamp_ms_ = millis();
+  // Check if we have received a heartbeat recently
+  if (millis() - app.last_heartbeat_received_timestamp_ms_ < kHeartbeatRcvTimeoutMs) {
+    // Send the rotated coordinates
+    app.local_position_sensor_.send_vision_position_estimate(rotated_vector.x, rotated_vector.y, rotated_vector.z, 0, 0, 0);
+    app.last_sample_timestamp_ms_ = millis();
+  }
   #endif
 }
 

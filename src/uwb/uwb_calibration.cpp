@@ -17,7 +17,7 @@ static void inactiveDevice(DW1000Device *device);
 
 static UWBBackend* s_Backend;       // Needed since DW1000Ranging library is completely static and has C-style callbacks
 
-UWBCalibration::UWBCalibration(UWBFront& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, float calibrationDistance)
+UWBCalibration::UWBCalibration(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, float calibrationDistance)
     : UWBBackend(front, uwb_config)
 {
     s_Backend = this;

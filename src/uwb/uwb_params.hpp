@@ -59,6 +59,11 @@ struct UWBParams {
     float z6;
     uint16_t ADelay;            // Antenna delay    
     float calDistance;          // Calibration distance settings
+    double originLat;           // Origin Latitude
+    double originLon;           // Origin Longitude
+    float originAlt;            // Origin Altitude
+    uint8_t mavlinkTargetSystemId; // MAVLink Target System ID
+    float rotationDegrees;      // Rotation degrees to NED frame
 
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 6;

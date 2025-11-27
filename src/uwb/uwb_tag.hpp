@@ -11,7 +11,7 @@
 
 class UWBTag : public UWBBackend {
 public:
-    UWBTag(UWBFront& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors);
+    UWBTag(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors);
 
     void Update() override;
 

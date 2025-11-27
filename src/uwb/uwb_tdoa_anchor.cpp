@@ -17,7 +17,7 @@ static void rxFailedCallback(dwDevice_t *dev);
 
 static volatile bool isr_flag = false;
 
-UWBAnchorTDoA::UWBAnchorTDoA(UWBFront& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay)
+UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay)
     : UWBBackend(front, uwb_config)
 {
     // NOTE: Look into short data fast accuracy...

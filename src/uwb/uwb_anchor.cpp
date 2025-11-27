@@ -9,7 +9,7 @@ static void newRange();
 static void newDevice(DW1000Device *device);
 static void inactiveDevice(DW1000Device *device);
 
-UWBAnchor::UWBAnchor(UWBFront& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay)
+UWBAnchor::UWBAnchor(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay)
     : UWBBackend(front, uwb_config)
 {
     // @note: Take special attention to task refresh rate and priority to not trigger the wdt!
