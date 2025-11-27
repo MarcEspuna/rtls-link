@@ -53,7 +53,6 @@ protected:
     
     // Calculate initial guess
     tdoa_estimator::DynVector calculateInitialGuess(const tdoa_estimator::PosMatrix& anchors) {
-        // Manual calculation of min/max coordinates to avoid colwise().redux() issues
         if (anchors.rows() == 0) {
             return tdoa_estimator::DynVector::Zero(3);
         }
@@ -62,7 +61,7 @@ protected:
         tdoa_estimator::DynVector maxCoords = anchors.row(0).transpose();
 
         for (int i = 1; i < anchors.rows(); ++i) {
-            for (int j = 0; j < 3; ++j) { // Assuming 3D
+            for (int j = 0; j < 3; ++j) { 
                 if (anchors(i, j) < minCoords(j)) {
                     minCoords(j) = anchors(i, j);
                 }
@@ -90,8 +89,10 @@ protected:
     }
 };
 
-TEST_F(TDOANewtonRaphsonTest, PerfectConditions) {
-    std::cout << "\nTesting under perfect conditions..." << std::endl;
+// --- 3D Tests ---
+
+TEST_F(TDOANewtonRaphsonTest, PerfectConditions3D) {
+    std::cout << "\nTesting 3D estimation under perfect conditions..." << std::endl;
     
     // True position
     tdoa_estimator::DynVector truePosition(3);
@@ -115,8 +116,9 @@ TEST_F(TDOANewtonRaphsonTest, PerfectConditions) {
     
     tdoa_estimator::DynVector initialGuess = calculateInitialGuess(anchors);
     
-    tdoa_estimator::DynVector estimatedPosition = tdoa_estimator::newtonRaphson(
+    auto result = tdoa_estimator::newtonRaphson(
         anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuess, 10);
+    tdoa_estimator::DynVector estimatedPosition = result.position;
     
     double error = (estimatedPosition - truePosition).norm();
     
@@ -124,11 +126,11 @@ TEST_F(TDOANewtonRaphsonTest, PerfectConditions) {
     std::cout << "Estimated position: " << estimatedPosition.transpose() << std::endl;
     std::cout << "Position error: " << error << " units" << std::endl;
     
-    EXPECT_NEAR((estimatedPosition - truePosition).norm(), 0.0, 0.001);
+    EXPECT_NEAR(error, 0.0, 0.001);
 }
 
-TEST_F(TDOANewtonRaphsonTest, WithNoise) {
-    std::cout << "\nTesting with noisy measurements..." << std::endl;
+TEST_F(TDOANewtonRaphsonTest, WithNoise3D) {
+    std::cout << "\nTesting 3D estimation with noisy measurements..." << std::endl;
     
     tdoa_estimator::DynVector truePosition(3);
     truePosition << 2.0, -3.0, 4.2;
@@ -153,8 +155,9 @@ TEST_F(TDOANewtonRaphsonTest, WithNoise) {
         tdoa_estimator::DynVector noisyTdoas = addNoiseToTDOAs(tdoas, noiseStd);
         tdoa_estimator::DynVector initialGuess = tdoa_estimator::DynVector::Zero(3);
         
-        tdoa_estimator::DynVector estimatedPosition = tdoa_estimator::newtonRaphson(
+        auto result = tdoa_estimator::newtonRaphson(
             anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuess, 10);
+        tdoa_estimator::DynVector estimatedPosition = result.position;
         
         double error = (estimatedPosition - truePosition).norm();
         
@@ -167,8 +170,8 @@ TEST_F(TDOANewtonRaphsonTest, WithNoise) {
     }
 }
 
-TEST_F(TDOANewtonRaphsonTest, DifferentAnchorConfigurations) {
-    std::cout << "\nTesting different anchor configurations..." << std::endl;
+TEST_F(TDOANewtonRaphsonTest, DifferentAnchorConfigurations3D) {
+    std::cout << "\nTesting 3D estimation different anchor configurations..." << std::endl;
     
     tdoa_estimator::DynVector truePosition(3);
     truePosition << 2.0, 3.0, 1.0;
@@ -190,8 +193,9 @@ TEST_F(TDOANewtonRaphsonTest, DifferentAnchorConfigurations) {
         
         tdoa_estimator::DynVector initialGuess = calculateInitialGuess(anchors);
         
-        tdoa_estimator::DynVector estimatedPosition = tdoa_estimator::newtonRaphson(
+        auto result = tdoa_estimator::newtonRaphson(
             anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuess, 10);
+        tdoa_estimator::DynVector estimatedPosition = result.position;
         
         double error = (estimatedPosition - truePosition).norm();
         
@@ -203,9 +207,9 @@ TEST_F(TDOANewtonRaphsonTest, DifferentAnchorConfigurations) {
     }
 }
 
-TEST_F(TDOANewtonRaphsonTest, RealAnchorLayout) {
+TEST_F(TDOANewtonRaphsonTest, RealAnchorLayout3D) {
     
-    std::cout << "\nTesting real anchor layout..." << std::endl;
+    std::cout << "\nTesting real anchor layout 3D..." << std::endl;
     
     tdoa_estimator::PosMatrix anchors(5, 3);
 
@@ -228,8 +232,9 @@ TEST_F(TDOANewtonRaphsonTest, RealAnchorLayout) {
     
     tdoa_estimator::DynVector initialGuess = calculateInitialGuess(anchors);
     
-    tdoa_estimator::DynVector estimatedPosition = tdoa_estimator::newtonRaphson(
+    auto result = tdoa_estimator::newtonRaphson(
         anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuess, 10);
+    tdoa_estimator::DynVector estimatedPosition = result.position;
     
     double error = (estimatedPosition - truePosition).norm();
     
@@ -237,7 +242,7 @@ TEST_F(TDOANewtonRaphsonTest, RealAnchorLayout) {
     std::cout << "Estimated position: " << estimatedPosition.transpose() << std::endl;
     std::cout << "Position error: " << error << " units" << std::endl;
     
-    EXPECT_NEAR((estimatedPosition - truePosition).norm(), 0.0, 0.001);
+    EXPECT_NEAR(error, 0.0, 0.001);
 }
 
 /**
@@ -250,9 +255,9 @@ TEST_F(TDOANewtonRaphsonTest, RealAnchorLayout) {
  *      -0.0140753;
  */
 
-TEST_F(TDOANewtonRaphsonTest, RealDateTest) {
+TEST_F(TDOANewtonRaphsonTest, RealDateTest3D) {
     
-    std::cout << "\nTesting with real measurements..." << std::endl;
+    std::cout << "\nTesting with real measurements 3D..." << std::endl;
     
     tdoa_estimator::PosMatrix anchors(5, 3);
 
@@ -291,11 +296,14 @@ TEST_F(TDOANewtonRaphsonTest, RealDateTest) {
 
     initial_guess << 2.0, 1.2, 1.5;
 
-    tdoa_estimator::DynVector estimatedPosition = tdoa_estimator::newtonRaphson(
+    auto result = tdoa_estimator::newtonRaphson(
         left, right, tdoas, initial_guess, 10);
+    tdoa_estimator::DynVector estimatedPosition = result.position;
         
     std::cout << "Estimated position: " << estimatedPosition.transpose() << std::endl;
 }
+
+// --- 2D Tests ---
 
 TEST_F(TDOANewtonRaphsonTest, PerfectConditions2D) {
     std::cout << "\nTesting 2D estimation under perfect conditions..." << std::endl;
@@ -336,8 +344,9 @@ TEST_F(TDOANewtonRaphsonTest, PerfectConditions2D) {
     double fixedZ = truePosition3D(2);
     
     // Run the 2D Newton-Raphson
-    tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
+    auto resultXY = tdoa_estimator::newtonRaphson2D(
         anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuessXY, fixedZ, 10);
+    tdoa_estimator::PosVector2D estimatedPositionXY = resultXY.position;
     
     double errorXY = (estimatedPositionXY - truePosition2D).norm();
     
@@ -389,8 +398,9 @@ TEST_F(TDOANewtonRaphsonTest, WithNoise2D) {
     double fixedZ = truePosition3D(2); 
     
     // Run the 2D Newton-Raphson
-    tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
+    auto resultXY = tdoa_estimator::newtonRaphson2D(
         anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuessXY, fixedZ, 10);
+    tdoa_estimator::PosVector2D estimatedPositionXY = resultXY.position;
     
     double errorXY = (estimatedPositionXY - truePosition2D).norm();
     
@@ -404,269 +414,6 @@ TEST_F(TDOANewtonRaphsonTest, WithNoise2D) {
     EXPECT_LT(errorXY, noiseStd * 5); // Allow slightly more margin for 2D projection
 }
 
-TEST_F(TDOANewtonRaphsonTest, CoplanarAnchorsDifferentZ_2D) {
-    std::cout << "\nTesting 2D estimation with coplanar anchors and different tag Z..." << std::endl;
-    
-    // True position (3D)
-    tdoa_estimator::DynVector truePosition3D(3);
-    truePosition3D << 1.5, 2.5, 1.5; // Tag at Z=1.5
-    tdoa_estimator::PosVector2D truePosition2D = truePosition3D.head<2>();
-    
-    // Anchor positions (3D) - All at Z=0
-    tdoa_estimator::PosMatrix anchors(5, 3);
-    anchors << -5.0, -5.0, 0.0,
-               5.0, -5.0, 0.0,
-               -5.0, 5.0, 0.0,
-               5.0, 5.0, 0.0,
-               0.0, 0.0, 0.0; // Center anchor also at Z=0
-    
-    // Measurement pairs
-    std::vector<std::pair<int, int>> measurementAnchorIds = {
-        {0, 1}, {1, 2}, {2, 3}, {3, 4}, {4, 0}
-    };
-    
-    // Noise level (10cm standard deviation)
-    double noiseStd = 0.1;
-
-    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] = 
-        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition3D);
-    
-    tdoa_estimator::DynVector noisyTdoas = addNoiseToTDOAs(tdoas, noiseStd);
-    
-    // Initial guess (2D)
-    auto anchorsXY = anchors.leftCols<2>(); 
-    auto minCoordsXY = anchorsXY.colwise().minCoeff();
-    auto maxCoordsXY = anchorsXY.colwise().maxCoeff();
-    tdoa_estimator::PosVector2D initialGuessXY = (minCoordsXY + maxCoordsXY).transpose() / 2.0;
-    
-    // Fixed Z for the 2D algorithm - Use the true Z of the tag (1.5)
-    double fixedZ = truePosition3D(2); 
-    
-    // Run the 2D Newton-Raphson
-    tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
-        anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuessXY, fixedZ, 10);
-    
-    double errorXY = (estimatedPositionXY - truePosition2D).norm();
-    
-    std::cout << "\nNoise level (std): " << noiseStd << std::endl;
-    std::cout << "Anchors Z: 0.0, True Tag Z: " << truePosition3D(2) << std::endl;
-    std::cout << "True position (XY): " << truePosition2D.transpose() << std::endl;
-    std::cout << "Estimated position (XY): " << estimatedPositionXY.transpose() << std::endl;
-    std::cout << "Fixed Z used for estimation: " << fixedZ << std::endl;
-    std::cout << "Position error (XY): " << errorXY << " units" << std::endl;
-    
-    // Expect the 2D error to still be reasonably low
-    EXPECT_LT(errorXY, noiseStd * 6); // Maybe slightly more margin due to geometry
-}
-
-// --- 4 Anchor Tests --- 
-
-TEST_F(TDOANewtonRaphsonTest, PerfectConditions4Anchors2D) {
-    std::cout << "\nTesting 2D estimation (4 Anchors) under perfect conditions..." << std::endl;
-    
-    tdoa_estimator::DynVector truePosition3D(3); truePosition3D << 2.0, 1.0, 2.5; 
-    tdoa_estimator::PosVector2D truePosition2D = truePosition3D.head<2>();
-    
-    // 4 Anchor positions (Square, non-coplanar)
-    tdoa_estimator::PosMatrix anchors(4, 3);
-    anchors << -5.0, -5.0, 0.0,
-               5.0, -5.0, 1.0, // Different Z
-               5.0,  5.0, 0.0,
-              -5.0,  5.0, 1.0; // Different Z
-    
-    std::vector<std::pair<int, int>> measurementAnchorIds = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
-    
-    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] = 
-        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition3D);
-    
-    auto anchorsXY = anchors.leftCols<2>(); 
-    auto minCoordsXY = anchorsXY.colwise().minCoeff();
-    auto maxCoordsXY = anchorsXY.colwise().maxCoeff();
-    tdoa_estimator::PosVector2D initialGuessXY = (minCoordsXY + maxCoordsXY).transpose() / 2.0;
-    
-    double fixedZ = truePosition3D(2);
-    
-    tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
-        anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuessXY, fixedZ, 10);
-    
-    double errorXY = (estimatedPositionXY - truePosition2D).norm();
-    
-    std::cout << "True position (XY): " << truePosition2D.transpose() << std::endl;
-    std::cout << "Estimated position (XY): " << estimatedPositionXY.transpose() << std::endl;
-    std::cout << "Position error (XY): " << errorXY << " units" << std::endl;
-    EXPECT_NEAR(errorXY, 0.0, 0.001);
-}
-
-TEST_F(TDOANewtonRaphsonTest, WithNoise4Anchors2D) {
-    std::cout << "\nTesting 2D estimation (4 Anchors) with noisy measurements..." << std::endl;
-    
-    tdoa_estimator::DynVector truePosition3D(3); truePosition3D << 2.0, -3.0, 4.2;
-    tdoa_estimator::PosVector2D truePosition2D = truePosition3D.head<2>();
-    
-    // 4 Anchor positions (Square, non-coplanar)
-    tdoa_estimator::PosMatrix anchors(4, 3);
-    anchors << -5.0, -5.0, 2.0,
-               5.0, -5.0, 0.0,
-               5.0,  5.0, 2.0, 
-              -5.0,  5.0, 0.0;
-    
-    std::vector<std::pair<int, int>> measurementAnchorIds = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
-    double noiseStd = 0.1;
-
-    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] = 
-        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition3D);
-    
-    tdoa_estimator::DynVector noisyTdoas = addNoiseToTDOAs(tdoas, noiseStd);
-    
-    auto anchorsXY = anchors.leftCols<2>(); 
-    auto minCoordsXY = anchorsXY.colwise().minCoeff();
-    auto maxCoordsXY = anchorsXY.colwise().maxCoeff();
-    tdoa_estimator::PosVector2D initialGuessXY = (minCoordsXY + maxCoordsXY).transpose() / 2.0;
-    
-    double fixedZ = truePosition3D(2); 
-    
-    tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
-        anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuessXY, fixedZ, 10);
-    
-    double errorXY = (estimatedPositionXY - truePosition2D).norm();
-    
-    std::cout << "\nNoise level (std): " << noiseStd << std::endl;
-    std::cout << "True position (XY): " << truePosition2D.transpose() << std::endl;
-    std::cout << "Estimated position (XY): " << estimatedPositionXY.transpose() << std::endl;
-    std::cout << "Position error (XY): " << errorXY << " units" << std::endl;
-    EXPECT_LT(errorXY, noiseStd * 6); // Expect slightly higher error possible
-}
-
-TEST_F(TDOANewtonRaphsonTest, CoplanarAnchorsDifferentZ4Anchors2D) {
-    std::cout << "\nTesting 2D estimation (4 Anchors) with coplanar anchors and different tag Z..." << std::endl;
-    
-    tdoa_estimator::DynVector truePosition3D(3); truePosition3D << 1.5, 2.5, 1.5; // Tag at Z=1.5
-    tdoa_estimator::PosVector2D truePosition2D = truePosition3D.head<2>();
-    
-    // 4 Anchor positions (Square, All at Z=0)
-    tdoa_estimator::PosMatrix anchors(4, 3);
-    anchors << -5.0, -5.0, 0.0,
-               5.0, -5.0, 0.0,
-               5.0,  5.0, 0.0,
-              -5.0,  5.0, 0.0;
-    
-    std::vector<std::pair<int, int>> measurementAnchorIds = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
-    double noiseStd = 0.1;
-
-    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] = 
-        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition3D);
-    
-    tdoa_estimator::DynVector noisyTdoas = addNoiseToTDOAs(tdoas, noiseStd);
-    
-    auto anchorsXY = anchors.leftCols<2>(); 
-    auto minCoordsXY = anchorsXY.colwise().minCoeff();
-    auto maxCoordsXY = anchorsXY.colwise().maxCoeff();
-    tdoa_estimator::PosVector2D initialGuessXY = (minCoordsXY + maxCoordsXY).transpose() / 2.0;
-    
-    double fixedZ = truePosition3D(2); 
-    
-    tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
-        anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuessXY, fixedZ, 10);
-    
-    double errorXY = (estimatedPositionXY - truePosition2D).norm();
-    
-    std::cout << "\nNoise level (std): " << noiseStd << std::endl;
-    std::cout << "Anchors Z: 0.0, True Tag Z: " << truePosition3D(2) << std::endl;
-    std::cout << "True position (XY): " << truePosition2D.transpose() << std::endl;
-    std::cout << "Estimated position (XY): " << estimatedPositionXY.transpose() << std::endl;
-    std::cout << "Position error (XY): " << errorXY << " units" << std::endl;
-    EXPECT_LT(errorXY, noiseStd * 7); // Allow potentially more error with 4 coplanar anchors
-}
-
-TEST_F(TDOANewtonRaphsonTest, WithNoiseLevels4AnchorsRectangular2D) {
-    std::cout << "\nTesting 2D estimation (4 Anchors, Rectangular) with varying noise levels..." << std::endl;
-    
-    tdoa_estimator::DynVector truePosition3D(3); truePosition3D << 2.0, -1.0, 3.0;
-    tdoa_estimator::PosVector2D truePosition2D = truePosition3D.head<2>();
-    
-    // 4 Anchor positions (10x5 Rectangle, non-coplanar)
-    tdoa_estimator::PosMatrix anchors(4, 3);
-    anchors << -5.0, -2.5, 2.0,
-               5.0, -2.5, 0.0,
-               5.0,  2.5, 2.0,
-              -5.0,  2.5, 0.0;
-    
-    std::vector<std::pair<int, int>> measurementAnchorIds = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
-    std::vector<double> noiseLevels = {0.01, 0.05, 0.1, 0.25, 0.5};
-
-    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] = 
-        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition3D);
-
-    std::cout << "Anchor Layout: Rectangular (10x5)" << std::endl;
-    std::cout << "True position (XY): " << truePosition2D.transpose() << std::endl;
-    
-    for(double noiseStd : noiseLevels) {
-        tdoa_estimator::DynVector noisyTdoas = addNoiseToTDOAs(tdoas, noiseStd);
-        
-        auto anchorsXY = anchors.leftCols<2>(); 
-        auto minCoordsXY = anchorsXY.colwise().minCoeff();
-        auto maxCoordsXY = anchorsXY.colwise().maxCoeff();
-        tdoa_estimator::PosVector2D initialGuessXY = (minCoordsXY + maxCoordsXY).transpose() / 2.0;
-        
-        double fixedZ = truePosition3D(2); 
-        
-        tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
-            anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuessXY, fixedZ, 10);
-        
-        double errorXY = (estimatedPositionXY - truePosition2D).norm();
-        
-        std::cout << "\n  Noise level (std): " << noiseStd << std::endl;
-        std::cout << "  Estimated position (XY): " << estimatedPositionXY.transpose() << std::endl;
-        std::cout << "  Position error (XY): " << errorXY << " units" << std::endl;
-        // Expect error to increase with noise, allow more margin for higher noise
-        EXPECT_LT(errorXY, noiseStd * 10); 
-    }
-}
-
-TEST_F(TDOANewtonRaphsonTest, OutsideBounds4AnchorsRectangular2D) {
-    std::cout << "\nTesting 2D estimation (4 Anchors, Rectangular) with tag outside bounds..." << std::endl;
-    
-    // True position (3D) - Outside the X range [-5, 5]
-    tdoa_estimator::DynVector truePosition3D(3); truePosition3D << 6.0, 1.0, 3.0; 
-    tdoa_estimator::PosVector2D truePosition2D = truePosition3D.head<2>();
-    
-    // 4 Anchor positions (10x5 Rectangle, non-coplanar)
-    tdoa_estimator::PosMatrix anchors(4, 3);
-    anchors << -5.0, -2.5, 2.0,
-               5.0, -2.5, 0.0,
-               5.0,  2.5, 2.0,
-              -5.0,  2.5, 0.0;
-    
-    std::vector<std::pair<int, int>> measurementAnchorIds = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
-    double noiseStd = 0.1; // Keep 10cm noise
-
-    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] = 
-        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition3D);
-    
-    tdoa_estimator::DynVector noisyTdoas = addNoiseToTDOAs(tdoas, noiseStd);
-    
-    auto anchorsXY = anchors.leftCols<2>(); 
-    auto minCoordsXY = anchorsXY.colwise().minCoeff();
-    auto maxCoordsXY = anchorsXY.colwise().maxCoeff();
-    // Use center as initial guess, even though tag is outside
-    tdoa_estimator::PosVector2D initialGuessXY = (minCoordsXY + maxCoordsXY).transpose() / 2.0;
-    
-    double fixedZ = truePosition3D(2); 
-    
-    tdoa_estimator::PosVector2D estimatedPositionXY = tdoa_estimator::newtonRaphson2D(
-        anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuessXY, fixedZ, 10);
-    
-    double errorXY = (estimatedPositionXY - truePosition2D).norm();
-    
-    std::cout << "\nNoise level (std): " << noiseStd << std::endl;
-    std::cout << "Anchor Layout: Rectangular (10x5)" << std::endl;
-    std::cout << "True position (XY): " << truePosition2D.transpose() << " (Outside bounds)" << std::endl;
-    std::cout << "Estimated position (XY): " << estimatedPositionXY.transpose() << std::endl;
-    std::cout << "Position error (XY): " << errorXY << " units" << std::endl;
-    // Expect potentially larger error when outside bounds
-    EXPECT_LT(errorXY, noiseStd * 15); 
-}
-
 #ifndef ARDUINO
 
 int main(int argc, char **argv)
@@ -674,28 +421,22 @@ int main(int argc, char **argv)
     ::testing::InitGoogleTest(&argc, argv);
 	if (RUN_ALL_TESTS())
 	;
-	// Always return zero-code and allow PlatformIO to parse results
 	return 0;
 }
 
 #else // ARDUINO
 
-#include <Arduino.h> // Required for setup() and loop()
+#include <Arduino.h> 
 
 void setup() {
-  // Initialize Google Test (using dummy arguments for Arduino)
-  // Serial.begin(115200); // Optional: Initialize Serial for output
   int argc = 1;
-  char *argv[] = { (char *)"dummy" }; // Cast to char* as argv elements are char*
+  char *argv[] = { (char *)"dummy" }; 
   ::testing::InitGoogleTest(&argc, argv);
-
-  // Run tests
   RUN_ALL_TESTS();
 }
 
 void loop() {
-  // Empty loop for Arduino - tests run once in setup
-  delay(100); // Small delay to prevent busy-waiting if loop runs
+  delay(100); 
 }
 
 #endif // ARDUINO

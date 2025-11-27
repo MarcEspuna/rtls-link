@@ -190,7 +190,7 @@ void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
   #if MAVLINK_PROTOCOL_ENABLED
   // Apply coordinate system rotation to correct for beacon system orientation
   Vector3f rotated_vector = correct_for_orient_yaw(x_m, y_m, z_m);
-  
+
   // Check if we have received a heartbeat recently
   if (millis() - app.last_heartbeat_received_timestamp_ms_ < kHeartbeatRcvTimeoutMs) {
     // Send the rotated coordinates

@@ -1,5 +1,6 @@
 #include <Eigen.h>
 
+#include <algorithm>
 #include <iostream>
 
 #include "tdoa_newton_raphson.hpp"
@@ -22,11 +23,11 @@ static void estimatorCallback(tdoaMeasurement_t* tdoa);
 Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
 static void estimatorProcess();
 
-static etl::vector<tdoa_estimator::TDoAMeasurement, 10> measurements;
+static etl::vector<tdoa_estimator::TDoAMeasurement, 64> measurements;
 static SemaphoreHandle_t measurements_mtx = xSemaphoreCreateMutex();
 static etl::array<UWBAnchorParam, 8> anchor_positions;
 
-static constexpr uint32_t kNumberMeasurements = 20;     // Preferably to be multiple of the number of anchors
+static constexpr uint32_t kNumberMeasurements = 64;     // Preferably to be multiple of the number of anchors
 
 static bool isr_flag = false;
 
@@ -124,7 +125,7 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
         }, 
     RISING);
 
-    measurements.reserve(10);
+    measurements.reserve(64);
 
     // Any on event needed? 
     uwbTdoa2TagAlgorithm.onEvent(&m_Device, uwbEvent_t::eventTimeout);
@@ -209,14 +210,13 @@ static void estimatorCallback(tdoaMeasurement_t* tdoa)
             });
 
         if (it != measurements.end()) {
-            // Update running average
-            const float alpha = 0.5f;  // Exponential moving average weight (legacy 0.3)
+            // Use raw measurement - ArduPilot's EKF handles filtering
             float distanceDiff = tdoa->distanceDiff;
             if (tdoa->anchorIdA == it->anchor_b) {  // If it's a reverse measurement, change sign
                 distanceDiff = -distanceDiff;
             }
 
-            it->tdoa = alpha * distanceDiff + (1 - alpha) * it->tdoa;
+            it->tdoa = distanceDiff;
             it->timestamp = millis();
         } else {
             measurements.push_back({tdoa->anchorIdA, tdoa->anchorIdB, tdoa->distanceDiff, millis()});
@@ -308,6 +308,8 @@ static void estimatorProcess() {
             // --- Run Estimator --- 
             uint64_t estimation_start_time = millis();
             tdoa_estimator::DynVector current_estimate_3d = last_position; // Use last state as starting point
+            bool is_valid_estimate = false;
+            double solution_rmse = 0.0;
 
             if (USE_2D_ESTIMATOR) {
                 // Prepare inputs for 2D estimator
@@ -316,7 +318,7 @@ static void estimatorProcess() {
                 double fixed_z_for_estimation = current_estimate_3d(2);
 
                 // Run 2D Newton-Raphson
-                tdoa_estimator::PosVector2D new_position_2d = tdoa_estimator::newtonRaphson2D(
+                tdoa_estimator::SolverResult2D result = tdoa_estimator::newtonRaphson2D(
                     anchors_left,
                     anchors_right,
                     tdoas,
@@ -325,21 +327,25 @@ static void estimatorProcess() {
                     NUM_ITERATIONS
                 );
 
-                // Update only X and Y components of the 3D state vector
-                current_estimate_3d.head<2>() = new_position_2d;
-                // Z component remains unchanged from the previous state in 2D mode
+                if (result.valid) {
+                    // Update only X and Y components of the 3D state vector
+                    current_estimate_3d.head<2>() = result.position;
+                    // Z component remains unchanged from the previous state in 2D mode
+                    is_valid_estimate = true;
+                    solution_rmse = result.rmse;
+                }
 
                 uint64_t estimation_end_time = millis();
                 int duration = estimation_end_time - estimation_start_time;
-                // Serial.printf("Estimated position (2D): [%.2f, %.2f], Fixed Z: %.2f, it took %d ms\n\r",
-                //              current_estimate_3d(0), current_estimate_3d(1), fixed_z_for_estimation, duration);
+                // Serial.printf("Estimated position (2D): [%.2f, %.2f], RMSE: %.3f, it took %d ms\n\r",
+                //              current_estimate_3d(0), current_estimate_3d(1), result.rmse, duration);
 
             } else { // Use 3D Estimator
                 // Use the full 3D vector as the initial guess
                 tdoa_estimator::DynVector initial_guess_3d = current_estimate_3d;
 
                 // Run 3D Newton-Raphson
-                tdoa_estimator::DynVector new_position_3d = tdoa_estimator::newtonRaphson(
+                tdoa_estimator::SolverResult result = tdoa_estimator::newtonRaphson(
                     anchors_left,
                     anchors_right,
                     tdoas,
@@ -347,23 +353,26 @@ static void estimatorProcess() {
                     NUM_ITERATIONS
                 );
 
-                // Update the full 3D state vector
-                current_estimate_3d = new_position_3d;
+                if (result.valid) {
+                    // Update the full 3D state vector
+                    current_estimate_3d = result.position;
+                    is_valid_estimate = true;
+                    solution_rmse = result.rmse;
+                }
 
                 uint64_t estimation_end_time = millis();
                 int duration = estimation_end_time - estimation_start_time;
-                // Serial.printf("Estimated position (3D): [%.2f, %.2f, %.2f], it took %d ms\n",
-                //              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), duration);
+                // Serial.printf("Estimated position (3D): [%.2f, %.2f, %.2f], RMSE: %.3f, it took %d ms\n",
+                //              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), result.rmse, duration);
             }
 
             // --- Send Data to Application --- 
-            if (!current_estimate_3d.hasNaN()) { // Only send if the estimate is valid
-                App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), 20); 
-            }
-
-            // Update the persistent state for the next iteration
-            // TODO: Add more robust sanity checks before updating (e.g., check for large jumps)
-            if (!current_estimate_3d.hasNaN()) { // Basic sanity check
+            if (is_valid_estimate && !current_estimate_3d.hasNaN()) { // Only send if the estimate is valid
+                // Convert RMSE to centimeters, clamped to reasonable range [5cm, 200cm]
+                uint16_t error_cm = static_cast<uint16_t>(std::clamp(solution_rmse * 100.0, 5.0, 200.0));
+                App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), error_cm); 
+                
+                // Update the persistent state for the next iteration (Warm Start)
                 last_position = current_estimate_3d;
             }
 
