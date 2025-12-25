@@ -175,6 +175,156 @@
             background-color: #008529;
         }
 
+        /* Header controls container */
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* LED toggle button */
+        .led-button {
+            padding: 10px 20px;
+            background-color: #333;
+            color: #fff;
+            border: 2px solid #666;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+        }
+
+        .led-button.active {
+            background-color: #1ca152;
+            border-color: #1ca152;
+            box-shadow: 0 0 15px #1ca152;
+        }
+
+        .led-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .led-icon {
+            font-size: 18px;
+        }
+
+        /* Config section */
+        .config-section {
+            margin: 20px auto;
+            max-width: 90%;
+            padding: 20px;
+            background-color: #0d1a0d;
+            border-radius: 10px;
+            border: 1px solid #1ca152;
+        }
+
+        .config-section h2 {
+            color: #1ca152;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        .config-save-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .config-save-row input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+            border-radius: 5px;
+        }
+
+        .config-cards {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .config-card {
+            background-color: #0a0f0a;
+            border: 1px solid #1ca152;
+            border-radius: 8px;
+            padding: 15px;
+            min-width: 180px;
+            max-width: 250px;
+            position: relative;
+            transition: all 0.3s;
+        }
+
+        .config-card:hover {
+            box-shadow: 0 0 10px rgba(28, 161, 82, 0.3);
+        }
+
+        .config-card.active {
+            border: 2px solid #1ca152;
+            box-shadow: 0 0 15px #1ca152;
+        }
+
+        .config-card .config-name {
+            font-weight: bold;
+            font-size: 16px;
+            color: #1ca152;
+            margin-bottom: 10px;
+            word-break: break-word;
+        }
+
+        .config-card .config-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .config-card .load-btn, .config-card .delete-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background-color 0.3s;
+        }
+
+        .config-card .load-btn {
+            background-color: #1ca152;
+            color: white;
+        }
+
+        .config-card .load-btn:hover {
+            background-color: #008529;
+        }
+
+        .config-card .delete-btn {
+            background-color: #8b0000;
+            color: white;
+        }
+
+        .config-card .delete-btn:hover {
+            background-color: #a00000;
+        }
+
+        .active-indicator {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background-color: #1ca152;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        .no-configs {
+            color: #888;
+            font-style: italic;
+        }
+
         @media screen and (max-width: 450px) {
             header {
                 margin: 0 20px;
@@ -203,7 +353,13 @@
             <h1>ArduUpdater</h1>
             <p>Marc and Mar</p>
         </div>
-        <button class="reboot-button" onclick="reboot()">Reboot</button>
+        <div class="header-controls">
+            <button id="led2ToggleBtn" class="led-button" onclick="toggleLed2()" disabled title="LED 2 not configured">
+                <span class="led-icon">&#x1F4A1;</span>
+                LED 2
+            </button>
+            <button class="reboot-button" onclick="reboot()">Reboot</button>
+        </div>
     </header>    
     <div class="popup-content" id="popupContainer">
         <h2 id="msg">Correct!</h2>
@@ -228,6 +384,17 @@
         <button class="upload-button" onclick="saveConfig()">
             Save Config
         </button>
+    </div>
+
+    <div class="config-section">
+        <h2>Saved Configurations</h2>
+        <div class="config-save-row">
+            <input type="text" id="newConfigName" placeholder="Enter configuration name...">
+            <button class="upload-button" onclick="saveCurrentConfig()">Save As New Config</button>
+        </div>
+        <div id="config-cards-container" class="config-cards">
+            <p class="no-configs">No saved configurations yet.</p>
+        </div>
     </div>
 
     <div id="table-container">
@@ -265,6 +432,10 @@
             console.log('Connection opened');
             // Request all parameters
             websocket.send("readall");
+            // Initialize LED 2 state
+            initLed2();
+            // Load saved configurations
+            loadConfigList();
         }
 
         function onClose(event) {
@@ -273,22 +444,73 @@
         }
 
         function onMessage(event) {
-            /* rebre info */
             console.log(event.data);
-            if(event.data == "Param written"){ //Param written confirmation
+            var data = event.data;
+
+            // Try to parse as JSON first
+            if (data.startsWith("{")) {
+                try {
+                    var json = JSON.parse(data);
+
+                    // LED 2 state response
+                    if (json.hasOwnProperty("configured")) {
+                        handleLed2StateResponse(json);
+                        return;
+                    }
+
+                    // LED 2 toggle response
+                    if (json.hasOwnProperty("led2State")) {
+                        handleToggleLed2Response(json);
+                        return;
+                    }
+
+                    // Config list response
+                    if (json.hasOwnProperty("activeConfig") && json.hasOwnProperty("configs")) {
+                        handleConfigListResponse(json);
+                        return;
+                    }
+
+                    // Generic success/error response (config operations)
+                    if (json.hasOwnProperty("success")) {
+                        if (json.success) {
+                            document.getElementById("popupContainer").style.display = "block";
+                            document.getElementById("msg").textContent = json.message || "Operation successful";
+                            // Refresh config list after successful operations
+                            loadConfigList();
+                            if (json.message && json.message.includes("loaded")) {
+                                // Clear and refresh parameter table
+                                dataSet = [];
+                                document.getElementById("table-body").innerHTML = "";
+                                websocket.send("readall");
+                            }
+                        } else {
+                            document.getElementById("popupContainer").style.display = "block";
+                            document.getElementById("msg").textContent = "Error: " + (json.error || "Unknown error");
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    // Not valid JSON, continue with other checks
+                }
+            }
+
+            // Param written confirmation
+            if (data == "Param written") {
                 document.getElementById("popupContainer").style.display = "block";
                 document.getElementById("msg").textContent = "Correct!";
             }
-            else if(event.data.startsWith("Configuration")) { //Config operation confirmation
+            // Config operation confirmation (legacy)
+            else if (data.startsWith("Configuration")) {
                 document.getElementById("popupContainer").style.display = "block";
-                document.getElementById("msg").textContent = event.data;
-                if(event.data.includes("loaded")) {
-                    websocket.send("readall"); // Refresh parameters after load
+                document.getElementById("msg").textContent = data;
+                if (data.includes("loaded")) {
+                    websocket.send("readall");
                 }
             }
-            else if(event.data.startsWith("Current configuration:")) { //backup-config response
-                var configStart = event.data.indexOf("{");
-                var configData = configStart !== -1 ? event.data.substring(configStart).trim() : event.data;
+            // Backup-config response
+            else if (data.startsWith("Current configuration:")) {
+                var configStart = data.indexOf("{");
+                var configData = configStart !== -1 ? data.substring(configStart).trim() : data;
                 var blob = new Blob([configData], { type: 'application/json' });
                 var url = window.URL.createObjectURL(blob);
                 var a = document.createElement('a');
@@ -300,10 +522,10 @@
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
             }
-            else { //readall                  
-                processAllData(event.data);
-            }  
-        
+            // readall response
+            else {
+                processAllData(data);
+            }
         }
 
         function onLoad(event) {
@@ -474,6 +696,131 @@
 
         function saveConfig() {
             websocket.send("save-config");
+        }
+
+        // ========== LED 2 Control Functions ==========
+        var led2Configured = false;
+        var led2State = false;
+
+        function initLed2() {
+            websocket.send("get-led2-state");
+        }
+
+        function handleLed2StateResponse(response) {
+            led2Configured = response.configured;
+            var btn = document.getElementById("led2ToggleBtn");
+
+            if (!led2Configured) {
+                btn.disabled = true;
+                btn.title = "LED 2 pin not configured";
+                btn.classList.remove("active");
+                return;
+            }
+
+            btn.disabled = false;
+            btn.title = "Toggle LED 2";
+            led2State = response.state;
+            updateLed2Button();
+        }
+
+        function toggleLed2() {
+            if (!led2Configured) return;
+            websocket.send("toggle-led2");
+        }
+
+        function handleToggleLed2Response(response) {
+            if (response.success) {
+                led2State = response.led2State;
+                updateLed2Button();
+            }
+        }
+
+        function updateLed2Button() {
+            var btn = document.getElementById("led2ToggleBtn");
+            if (led2State) {
+                btn.classList.add("active");
+            } else {
+                btn.classList.remove("active");
+            }
+        }
+
+        // ========== Multi-Config Management Functions ==========
+        var activeConfigName = "";
+
+        function loadConfigList() {
+            websocket.send("list-configs");
+        }
+
+        function handleConfigListResponse(response) {
+            console.log("handleConfigListResponse:", response);
+            activeConfigName = response.activeConfig || "";
+            var configs = response.configs || [];
+            console.log("Configs to render:", configs);
+            renderConfigCards(configs);
+        }
+
+        function renderConfigCards(configs) {
+            var container = document.getElementById("config-cards-container");
+            container.innerHTML = "";
+
+            if (configs.length === 0) {
+                container.innerHTML = '<p class="no-configs">No saved configurations yet.</p>';
+                return;
+            }
+
+            configs.forEach(function(config) {
+                var card = document.createElement("div");
+                card.className = "config-card" + (config.name === activeConfigName ? " active" : "");
+
+                var html = "";
+                if (config.name === activeConfigName) {
+                    html += '<span class="active-indicator">ACTIVE</span>';
+                }
+                html += '<div class="config-name">' + escapeHtml(config.name) + '</div>';
+                html += '<div class="config-actions">';
+                html += '<button class="load-btn" onclick="loadNamedConfig(\'' + escapeHtml(config.name) + '\')">Load</button>';
+                html += '<button class="delete-btn" onclick="deleteConfig(\'' + escapeHtml(config.name) + '\')">Delete</button>';
+                html += '</div>';
+
+                card.innerHTML = html;
+                container.appendChild(card);
+            });
+        }
+
+        function escapeHtml(text) {
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function saveCurrentConfig() {
+            var name = document.getElementById("newConfigName").value.trim();
+            if (!name) {
+                alert("Please enter a configuration name");
+                return;
+            }
+            if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+                alert("Config name can only contain letters, numbers, underscores, and hyphens");
+                return;
+            }
+            if (name.length > 32) {
+                alert("Config name must be 32 characters or less");
+                return;
+            }
+            websocket.send("save-config-as -name " + name);
+            document.getElementById("newConfigName").value = "";
+        }
+
+        function loadNamedConfig(name) {
+            if (confirm("Load configuration '" + name + "'? This will replace current settings.")) {
+                websocket.send("load-config-named -name " + name);
+            }
+        }
+
+        function deleteConfig(name) {
+            if (confirm("Delete configuration '" + name + "'? This cannot be undone.")) {
+                websocket.send("delete-config -name " + name);
+            }
         }
     </script>
 </body>

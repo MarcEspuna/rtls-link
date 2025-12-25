@@ -165,3 +165,5 @@ protected:
 // ************ Frontend instances ************
 #include "wifi/wifi_frontend.hpp"
 #include "uwb/uwb_frontend.hpp"
+// Note: app_frontend_littlefs.hpp is not included here to avoid circular dependency
+// Include it directly where needed (e.g., command_handler.cpp)

@@ -29,5 +29,6 @@ namespace bsp {
             .tx_pin = 22,
         },
         .led_pin = -1,
+        .led2_pin = -1,  // LED 2 not available on this board
     };
 } // namespace bsp
