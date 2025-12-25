@@ -10,7 +10,6 @@
 
 #include "uwb/uwb_anchor.hpp"
 #include "uwb/uwb_tag.hpp"
-#include "uwb/uwb_tag_posxyz.hpp"
 #include "uwb/uwb_calibration.hpp"
 #include "uwb/uwb_tdoa_tag.hpp"
 #include "uwb/uwb_tdoa_anchor.hpp"
