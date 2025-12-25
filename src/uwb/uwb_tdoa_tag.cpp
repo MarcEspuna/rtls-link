@@ -13,6 +13,7 @@
 
 #include "scheduler.hpp"
 #include "app.hpp"
+#include "bsp/board.hpp"
 
 static void txCallback(dwDevice_t *dev);
 static void rxCallback(dwDevice_t *dev);
@@ -30,6 +31,23 @@ static etl::array<UWBAnchorParam, 8> anchor_positions;
 static constexpr uint32_t kNumberMeasurements = 64;     // Preferably to be multiple of the number of anchors
 
 static bool isr_flag = false;
+
+#if TDOA_STATS_LOGGING == ENABLE
+static uint32_t stats_samples_sent = 0;
+static uint32_t stats_samples_rejected = 0;
+static uint32_t stats_reject_rmse = 0;          // Rejected due to RMSE > threshold
+static uint32_t stats_reject_nan = 0;           // Rejected due to NaN in estimate
+static uint32_t stats_reject_insufficient = 0;  // Rejected due to < MIN_MEASUREMENTS
+static uint32_t stats_stale_removed = 0;        // Number of stale measurements removed
+static uint32_t stats_min_meas_count = UINT32_MAX;  // Min measurements seen this period
+static uint32_t stats_max_meas_count = 0;       // Max measurements seen this period
+static uint64_t stats_last_log_time_ms = 0;
+static constexpr uint64_t STATS_LOG_INTERVAL_MS = 1000;
+#endif
+
+// Position logging with timed interval
+static uint64_t position_last_log_time_ms = 0;
+static constexpr uint64_t POSITION_LOG_INTERVAL_MS = 500;  // Log position every 500ms
 
 static StaticTaskHolder<etl::delegate<void()>, 16384> pos_estimator_task = {
   "PosEstimatorTask",
@@ -243,14 +261,27 @@ static void estimatorProcess() {
     if (xSemaphoreTake(measurements_mtx, portMAX_DELAY) == pdTRUE) {
         uint64_t current_time = millis(); // Get time at the start after mutex
         
-        // Remove stale measurements (older than 1 second)
+#if TDOA_STATS_LOGGING == ENABLE
+        size_t meas_count_before = measurements.size();
+#endif
+        
+        // Remove stale measurements (older than 350ms). TODO: Make this parameter configurable in the future.
+        // NOTE: For some reason sometimes we are getting measurements that are older than 350ms. 
         measurements.erase(
             std::remove_if(measurements.begin(), measurements.end(),
                 [current_time](const tdoa_estimator::TDoAMeasurement& m) {
-                    return (current_time - m.timestamp) > 1000;
+                    return (current_time - m.timestamp) > 350;  // 200ms is the timeout for a single measurement
                 }),
             measurements.end()
         );
+
+#if TDOA_STATS_LOGGING == ENABLE
+        size_t meas_count_after = measurements.size();
+        stats_stale_removed += (meas_count_before - meas_count_after);
+        // Track min/max measurement counts
+        if (meas_count_after < stats_min_meas_count) stats_min_meas_count = meas_count_after;
+        if (meas_count_after > stats_max_meas_count) stats_max_meas_count = meas_count_after;
+#endif
 
         // --- Optional Debug Prints ---
         // printf("Measurements: \n");
@@ -367,19 +398,69 @@ static void estimatorProcess() {
             }
 
             // --- Send Data to Application --- 
-            if (is_valid_estimate && !current_estimate_3d.hasNaN()) { // Only send if the estimate is valid
+            bool has_nan = current_estimate_3d.hasNaN();
+            if (is_valid_estimate && !has_nan) { // Only send if the estimate is valid
                 // Convert RMSE to centimeters, clamped to reasonable range [5cm, 200cm]
                 uint16_t error_cm = static_cast<uint16_t>(std::clamp(solution_rmse * 100.0, 5.0, 200.0));
                 App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), error_cm); 
-                
+
                 // Update the persistent state for the next iteration (Warm Start)
                 last_position = current_estimate_3d;
+
+#if TDOA_STATS_LOGGING == ENABLE
+                stats_samples_sent++;
+#endif
+            } else {
+#if TDOA_STATS_LOGGING == ENABLE
+                stats_samples_rejected++;
+                // Track rejection reason
+                if (has_nan) {
+                    stats_reject_nan++;
+                } else if (!is_valid_estimate) {
+                    stats_reject_rmse++;  // RMSE was too high in solver
+                }
+#endif
             }
 
+            // --- Position Logging (timed interval) - logs regardless of validity ---
+            uint64_t now_position_log = millis();
+            if (now_position_log - position_last_log_time_ms >= POSITION_LOG_INTERVAL_MS) {
+                const char* valid_str = (is_valid_estimate && !current_estimate_3d.hasNaN()) ? "OK" : "INVALID";
+                Serial.printf("[TDoA Position] X: %.2f, Y: %.2f, Z: %.2f, RMSE: %.3fm [%s]\n",
+                              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), solution_rmse, valid_str);
+                position_last_log_time_ms = now_position_log;
+            }
+            // ------------------------------------------
+
         } else {
-            // Optional: Print message if not enough measurements
-            // Serial.printf("Waiting for measurements (have %d, need %d)\n", measurements.size(), MIN_MEASUREMENTS);
+            // Not enough measurements to run estimator
+#if TDOA_STATS_LOGGING == ENABLE
+            stats_samples_rejected++;
+            stats_reject_insufficient++;
+#endif
         }
+
+#if TDOA_STATS_LOGGING == ENABLE
+        uint64_t now_ms = millis();
+        if (now_ms - stats_last_log_time_ms >= STATS_LOG_INTERVAL_MS) {
+            Serial.printf("[TDoA Stats] Sent:%u Rej:%u (RMSE:%u NaN:%u Insuff:%u) Meas:[%u-%u] Stale:%u\n", 
+                          stats_samples_sent, stats_samples_rejected,
+                          stats_reject_rmse, stats_reject_nan, stats_reject_insufficient,
+                          (stats_min_meas_count == UINT32_MAX) ? 0 : stats_min_meas_count, 
+                          stats_max_meas_count,
+                          stats_stale_removed);
+            // Reset all counters
+            stats_samples_sent = 0;
+            stats_samples_rejected = 0;
+            stats_reject_rmse = 0;
+            stats_reject_nan = 0;
+            stats_reject_insufficient = 0;
+            stats_stale_removed = 0;
+            stats_min_meas_count = UINT32_MAX;
+            stats_max_meas_count = 0;
+            stats_last_log_time_ms = now_ms;
+        }
+#endif
         
         xSemaphoreGive(measurements_mtx);
     }

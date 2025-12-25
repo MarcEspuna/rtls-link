@@ -4,3 +4,4 @@
 #define DISABLE                0
 
 #define STATUS_TASK             DISABLE
+#define TDOA_STATS_LOGGING      ENABLE

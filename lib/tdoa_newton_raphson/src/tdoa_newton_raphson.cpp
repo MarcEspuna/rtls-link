@@ -133,7 +133,7 @@ namespace tdoa_estimator {
 
         // Sanity check: If RMSE exceeds threshold, result is likely unreliable
         // 0.3m threshold is suitable for typical indoor UWB setups
-        if (result.rmse > 0.3) {
+        if (result.rmse > 0.8) {    // TODO: Make it configurable
             result.valid = false; 
         }
 
@@ -182,7 +182,8 @@ namespace tdoa_estimator {
 
         // Sanity check: If RMSE exceeds threshold, result is likely unreliable
         // 0.3m threshold is suitable for typical indoor UWB setups
-        if (result.rmse > 0.3) {
+        // TODO: Make this configurable
+        if (result.rmse > 0.8) {
             result.valid = false;
         }
 

@@ -63,14 +63,6 @@ private:
     static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 8 seconds healthy device, send global origin position
     static constexpr uint64_t kDeviceHealtyMinDurationMs = 100;     // If no packet sent for more than 100ms, consider device as unhealthy
 
-    // HARDCODE FOR NOW
-    // static constexpr double kOriginLatitude = 41.5032932355418;
-    // static constexpr double kOriginLongitude = 2.16679606586695;
-    // static constexpr float kOriginAltitude = 72.14;
-
-    // Rotation degrees to NED frame
-    // static constexpr float kRotationDegrees = 40.0f;
-
     static constexpr uint8_t kSystemId = 199;
     static constexpr uint8_t kComponentId = MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY;
 

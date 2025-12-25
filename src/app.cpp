@@ -61,6 +61,12 @@ void App::Init()
 void App::Update()
 {
 #if MAVLINK_PROTOCOL_ENABLED
+  // App health stats (static to persist across calls)
+  static uint32_t app_stats_healthy_cycles = 0;
+  static uint32_t app_stats_unhealthy_cycles = 0;
+  static uint64_t app_stats_last_log_ms = 0;
+  static constexpr uint64_t APP_STATS_LOG_INTERVAL_MS = 1000;
+
   uint8_t buffer[1024];
   uint32_t buffer_index = 0;
   uint64_t now_ms = millis();
@@ -76,8 +82,10 @@ void App::Update()
   if (now_ms - last_sample_timestamp_ms_ > kDeviceHealtyMinDurationMs) {
     // Device is unhealthy
     device_unhealthy_timestamp_ms_ = now_ms;
+    app_stats_unhealthy_cycles++;
   } else {
     // Device is healthy
+    app_stats_healthy_cycles++;
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
     uint64_t time_since_rcv_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_; 
     if (time_since_unhealthy > kSendOriginPositionAfterMs 
@@ -91,10 +99,22 @@ void App::Update()
           Front::uwbLittleFSFront.GetParams().originAlt, 
           target_system_id, micros());
       
-      // Keep sending origin positions to test.
       time_since_unhealthy = now_ms;
       is_origin_position_sent_ = true;
     }
+  }
+
+  // Periodic App health log (every 1 second)
+  if (now_ms - app_stats_last_log_ms >= APP_STATS_LOG_INTERVAL_MS) {
+    uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
+    uint64_t time_since_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
+    printf("[App Stats] H:%u U:%u | OriginSent:%d UnhealthyAge:%llums HB_Age:%llums\n",
+           app_stats_healthy_cycles, app_stats_unhealthy_cycles,
+           is_origin_position_sent_ ? 1 : 0,
+           time_since_unhealthy, time_since_heartbeat);
+    app_stats_healthy_cycles = 0;
+    app_stats_unhealthy_cycles = 0;
+    app_stats_last_log_ms = now_ms;
   }
 
   // ********** RECEIVING **********
