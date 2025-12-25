@@ -62,22 +62,22 @@ void WifiDiscovery::SendDiscoveryResponse(IPAddress& remoteIp, uint16_t remotePo
     // Get UWB params
     const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
 
-    // devShortAddr is 2-byte array, NOT null-terminated - format explicitly
-    char shortAddrStr[3];
-    shortAddrStr[0] = uwbParams.devShortAddr[0];
-    shortAddrStr[1] = uwbParams.devShortAddr[1];
-    shortAddrStr[2] = '\0';
+    // devShortAddr is 2-byte array - hex-encode to ensure printable output
+    char shortAddrHex[5];  // "XXYY" + null terminator
+    snprintf(shortAddrHex, sizeof(shortAddrHex), "%02X%02X",
+             (uint8_t)uwbParams.devShortAddr[0],
+             (uint8_t)uwbParams.devShortAddr[1]);
 
     snprintf(response, sizeof(response),
         "{\"device\":\"%s\",\"id\":\"%s\",\"role\":\"%s\","
         "\"ip\":\"%d.%d.%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
         "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\"}",
         DEVICE_TYPE,
-        shortAddrStr,
+        shortAddrHex,
         ModeToRoleString(static_cast<uint8_t>(uwbParams.mode)),
         deviceIp[0], deviceIp[1], deviceIp[2], deviceIp[3],
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-        shortAddrStr,
+        shortAddrHex,
         uwbParams.mavlinkTargetSystemId,
         FIRMWARE_VERSION);
 

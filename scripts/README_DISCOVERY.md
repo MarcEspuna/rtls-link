@@ -69,11 +69,11 @@ ID           Role         IP               MAC                  UWB    MAV   Fir
 [
   {
     "device": "rtls-link",
-    "id": "01",
+    "id": "3031",
     "role": "anchor",
     "ip": "192.168.0.101",
     "mac": "AA:BB:CC:DD:EE:01",
-    "uwb_short": "01",
+    "uwb_short": "3031",
     "mav_sysid": 1,
     "fw": "1.0.0"
   }
@@ -85,11 +85,11 @@ ID           Role         IP               MAC                  UWB    MAV   Fir
 | Field | Description |
 |-------|-------------|
 | `device` | Device type (always "rtls-link") |
-| `id` | Device ID (same as UWB short address) |
+| `id` | Device ID - hex-encoded UWB short address (e.g., ASCII "01" → "3031") |
 | `role` | UWB role: `anchor`, `tag`, `anchor_tdoa`, `tag_tdoa`, `calibration` |
 | `ip` | Device IP address |
 | `mac` | Device MAC address |
-| `uwb_short` | UWB short address (2 characters) |
+| `uwb_short` | UWB short address - hex-encoded 2 bytes (e.g., "3031" for ASCII "01") |
 | `mav_sysid` | MAVLink target system ID |
 | `fw` | Firmware version |
 
