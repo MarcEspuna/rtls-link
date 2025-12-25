@@ -53,7 +53,9 @@ public:
         PARAM_DEF(WifiParams, udpPort),
         PARAM_DEF(WifiParams, enableWebServer),
         PARAM_DEF(WifiParams, enableUartBridge),
-        PARAM_DEF(WifiParams, enableDebugSocket)
+        PARAM_DEF(WifiParams, enableDebugSocket),
+        PARAM_DEF(WifiParams, enableDiscovery),
+        PARAM_DEF(WifiParams, discoveryPort)
     };
 };
 

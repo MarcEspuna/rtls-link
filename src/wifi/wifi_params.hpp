@@ -34,6 +34,8 @@ struct WifiParams {
     uint8_t enableWebServer;        // Enable the web server (Web socket terminal and http page)
     uint8_t enableUartBridge;       // Enable the UART bridge (Bridge between serial port and UDP port)
     uint8_t enableDebugSocket;      // Enable the debug socket (Used for 3D position data visualization)
+    uint8_t enableDiscovery = 1;    // Enable UDP discovery service (default: enabled)
+    uint16_t discoveryPort = 3333;  // UDP port for discovery service
 }ULS_PACKED;
 
 

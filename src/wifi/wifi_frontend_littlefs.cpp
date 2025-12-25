@@ -2,6 +2,7 @@
 #include "wifi_websocket.hpp"
 #include "wifi_uart_bridge.hpp"
 #include "wifi_tcp_server.hpp"
+#include "wifi_discovery.hpp"
 
 #include "command_handler/command_handler.hpp"
 #include <utils/utils.hpp>
@@ -88,6 +89,12 @@ void WifiLittleFSFrontend::SetupWebServer() {
         } else {
             printf("Invalid GSC IP address\n");
         }
+    }
+
+    if (m_Params.enableDiscovery) {
+        WifiDiscovery* discoveryBackend = new WifiDiscovery(m_Params.discoveryPort);
+        m_Backends.push_back(discoveryBackend);
+        printf("Discovery service enabled on port %d\n", m_Params.discoveryPort);
     }
 }
 
