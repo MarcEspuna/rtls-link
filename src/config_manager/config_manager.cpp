@@ -155,16 +155,29 @@ bool ConfigManager::CopyFile(const char* src, const char* dst) {
         return false;
     }
 
-    // Copy in chunks
+    // Copy in chunks, checking for write errors
+    bool success = true;
     uint8_t buffer[256];
     while (srcFile.available()) {
         size_t bytesRead = srcFile.read(buffer, sizeof(buffer));
-        dstFile.write(buffer, bytesRead);
+        size_t bytesWritten = dstFile.write(buffer, bytesRead);
+        if (bytesWritten != bytesRead) {
+            printf("ConfigManager: Write error copying file (wrote %d of %d bytes)\n",
+                   bytesWritten, bytesRead);
+            success = false;
+            break;
+        }
     }
 
     srcFile.close();
     dstFile.close();
-    return true;
+
+    // If copy failed, remove the incomplete destination file
+    if (!success) {
+        LittleFS.remove(dst);
+    }
+
+    return success;
 }
 
 String ConfigManager::ListConfigsJson() {
@@ -282,8 +295,12 @@ ConfigError ConfigManager::LoadConfigNamed(const char* name) {
     s_ActiveConfig.assign(name);
     SaveMetadata();
 
-    // Reload all parameters
-    Front::LoadAllParams();
+    // Reload all parameters and check for errors
+    ErrorParam loadResult = Front::LoadAllParams();
+    if (loadResult != ErrorParam::OK && loadResult != ErrorParam::FILE_NOT_FOUND) {
+        printf("ConfigManager: Warning - failed to reload parameters after loading config\n");
+        return ConfigError::FILE_SYSTEM_ERROR;
+    }
 
     printf("ConfigManager: Loaded config '%s'\n", name);
     return ConfigError::OK;
