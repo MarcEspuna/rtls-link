@@ -10,6 +10,8 @@
 #include "scheduler.hpp"
 
 #include "uwb/uwb_frontend_littlefs.hpp"
+#include "app/app_frontend_littlefs.hpp"
+#include "config_manager/config_manager.hpp"
 
 static constexpr int COMMAND_QUEUE_SIZE = 4;
 static SimpleCLI simpleCLI(COMMAND_QUEUE_SIZE, COMMAND_QUEUE_SIZE);
@@ -25,6 +27,16 @@ static void calibrateCallback(cmd* c);
 static void loadConfigCallback(cmd* c);
 static void saveConfigCallback(cmd* c);
 static void backupConfigCallback(cmd* c);
+
+// Multi-config management callbacks
+static void listConfigsCallback(cmd* c);
+static void saveConfigAsCallback(cmd* c);
+static void loadConfigNamedCallback(cmd* c);
+static void deleteConfigCallback(cmd* c);
+
+// LED 2 control callbacks
+static void toggleLed2Callback(cmd* c);
+static void getLed2StateCallback(cmd* c);
 
 static String escapeJsonString(const String& str) {
     String escaped;
@@ -78,7 +90,23 @@ void CommandHandler::Init()
     Command loadConfigCmd = simpleCLI.addCommand("load-config", loadConfigCallback);
     Command saveConfigCmd = simpleCLI.addCommand("save-config", saveConfigCallback);
     Command backupConfigCmd = simpleCLI.addCommand("backup-config", backupConfigCallback);
-    
+
+    // Multi-config management commands
+    Command listConfigsCmd = simpleCLI.addCommand("list-configs", listConfigsCallback);
+
+    Command saveConfigAsCmd = simpleCLI.addCommand("save-config-as", saveConfigAsCallback);
+    saveConfigAsCmd.addArgument("name");
+
+    Command loadConfigNamedCmd = simpleCLI.addCommand("load-config-named", loadConfigNamedCallback);
+    loadConfigNamedCmd.addArgument("name");
+
+    Command deleteConfigCmd = simpleCLI.addCommand("delete-config", deleteConfigCallback);
+    deleteConfigCmd.addArgument("name");
+
+    // LED 2 control commands
+    Command toggleLed2Cmd = simpleCLI.addCommand("toggle-led2", toggleLed2Callback);
+    Command getLed2StateCmd = simpleCLI.addCommand("get-led2-state", getLed2StateCallback);
+
     simpleCLI.setOnError(errorCallback);
 }
 
@@ -350,4 +378,117 @@ static void backupConfigCallback(cmd* c)
     }
     
     commandResult += "\n}";
+}
+
+// ********** Multi-Config Management Callbacks **********
+
+static void listConfigsCallback(cmd* c)
+{
+    commandResult = ConfigManager::ListConfigsJson();
+}
+
+static void saveConfigAsCallback(cmd* c)
+{
+    Command cmd(c);
+    Argument nameArg = cmd.getArgument("name");
+    String name = nameArg.getValue();
+
+    ConfigError result = ConfigManager::SaveConfigAs(name.c_str());
+
+    switch (result) {
+        case ConfigError::OK:
+            commandResult = "{\"success\":true,\"message\":\"Configuration saved as '" + name + "'\"}";
+            break;
+        case ConfigError::INVALID_NAME:
+            commandResult = "{\"success\":false,\"error\":\"Invalid config name. Use only letters, numbers, underscores, and hyphens.\"}";
+            break;
+        case ConfigError::NAME_TOO_LONG:
+            commandResult = "{\"success\":false,\"error\":\"Config name too long (max 32 characters)\"}";
+            break;
+        case ConfigError::MAX_CONFIGS_REACHED:
+            commandResult = "{\"success\":false,\"error\":\"Maximum number of configurations reached (10)\"}";
+            break;
+        case ConfigError::FILE_SYSTEM_ERROR:
+            commandResult = "{\"success\":false,\"error\":\"File system error\"}";
+            break;
+        default:
+            commandResult = "{\"success\":false,\"error\":\"Unknown error\"}";
+            break;
+    }
+}
+
+static void loadConfigNamedCallback(cmd* c)
+{
+    Command cmd(c);
+    Argument nameArg = cmd.getArgument("name");
+    String name = nameArg.getValue();
+
+    ConfigError result = ConfigManager::LoadConfigNamed(name.c_str());
+
+    switch (result) {
+        case ConfigError::OK:
+            commandResult = "{\"success\":true,\"message\":\"Configuration '" + name + "' loaded\"}";
+            break;
+        case ConfigError::CONFIG_NOT_FOUND:
+            commandResult = "{\"success\":false,\"error\":\"Configuration not found\"}";
+            break;
+        case ConfigError::INVALID_NAME:
+            commandResult = "{\"success\":false,\"error\":\"Invalid config name\"}";
+            break;
+        case ConfigError::FILE_SYSTEM_ERROR:
+            commandResult = "{\"success\":false,\"error\":\"File system error\"}";
+            break;
+        default:
+            commandResult = "{\"success\":false,\"error\":\"Unknown error\"}";
+            break;
+    }
+}
+
+static void deleteConfigCallback(cmd* c)
+{
+    Command cmd(c);
+    Argument nameArg = cmd.getArgument("name");
+    String name = nameArg.getValue();
+
+    ConfigError result = ConfigManager::DeleteConfig(name.c_str());
+
+    switch (result) {
+        case ConfigError::OK:
+            commandResult = "{\"success\":true,\"message\":\"Configuration '" + name + "' deleted\"}";
+            break;
+        case ConfigError::CONFIG_NOT_FOUND:
+            commandResult = "{\"success\":false,\"error\":\"Configuration not found\"}";
+            break;
+        case ConfigError::INVALID_NAME:
+            commandResult = "{\"success\":false,\"error\":\"Invalid config name\"}";
+            break;
+        default:
+            commandResult = "{\"success\":false,\"error\":\"Unknown error\"}";
+            break;
+    }
+}
+
+// ********** LED 2 Control Callbacks **********
+
+static void toggleLed2Callback(cmd* c)
+{
+    if (!Front::appLittleFSFront.IsLed2Configured()) {
+        commandResult = "{\"success\":false,\"error\":\"LED 2 pin not configured\"}";
+        return;
+    }
+
+    Front::appLittleFSFront.ToggleLed2();
+    bool newState = Front::appLittleFSFront.GetLed2State();
+    commandResult = "{\"success\":true,\"led2State\":" + String(newState ? "true" : "false") + "}";
+}
+
+static void getLed2StateCallback(cmd* c)
+{
+    if (!Front::appLittleFSFront.IsLed2Configured()) {
+        commandResult = "{\"configured\":false}";
+        return;
+    }
+
+    bool state = Front::appLittleFSFront.GetLed2State();
+    commandResult = "{\"configured\":true,\"state\":" + String(state ? "true" : "false") + "}";
 }
