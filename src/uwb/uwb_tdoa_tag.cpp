@@ -1,5 +1,6 @@
 #include <Eigen.h>
 
+#include <algorithm>
 #include <iostream>
 
 #include "tdoa_newton_raphson.hpp"
@@ -12,6 +13,7 @@
 
 #include "scheduler.hpp"
 #include "app.hpp"
+#include "bsp/board.hpp"
 
 static void txCallback(dwDevice_t *dev);
 static void rxCallback(dwDevice_t *dev);
@@ -22,13 +24,30 @@ static void estimatorCallback(tdoaMeasurement_t* tdoa);
 Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
 static void estimatorProcess();
 
-static etl::vector<tdoa_estimator::TDoAMeasurement, 10> measurements;
+static etl::vector<tdoa_estimator::TDoAMeasurement, 64> measurements;
 static SemaphoreHandle_t measurements_mtx = xSemaphoreCreateMutex();
 static etl::array<UWBAnchorParam, 8> anchor_positions;
 
-static constexpr uint32_t kNumberMeasurements = 20;     // Preferably to be multiple of the number of anchors
+static constexpr uint32_t kNumberMeasurements = 64;     // Preferably to be multiple of the number of anchors
 
 static bool isr_flag = false;
+
+#if TDOA_STATS_LOGGING == ENABLE
+static uint32_t stats_samples_sent = 0;
+static uint32_t stats_samples_rejected = 0;
+static uint32_t stats_reject_rmse = 0;          // Rejected due to RMSE > threshold
+static uint32_t stats_reject_nan = 0;           // Rejected due to NaN in estimate
+static uint32_t stats_reject_insufficient = 0;  // Rejected due to < MIN_MEASUREMENTS
+static uint32_t stats_stale_removed = 0;        // Number of stale measurements removed
+static uint32_t stats_min_meas_count = UINT32_MAX;  // Min measurements seen this period
+static uint32_t stats_max_meas_count = 0;       // Max measurements seen this period
+static uint64_t stats_last_log_time_ms = 0;
+static constexpr uint64_t STATS_LOG_INTERVAL_MS = 1000;
+#endif
+
+// Position logging with timed interval
+static uint64_t position_last_log_time_ms = 0;
+static constexpr uint64_t POSITION_LOG_INTERVAL_MS = 500;  // Log position every 500ms
 
 static StaticTaskHolder<etl::delegate<void()>, 16384> pos_estimator_task = {
   "PosEstimatorTask",
@@ -124,7 +143,7 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
         }, 
     RISING);
 
-    measurements.reserve(10);
+    measurements.reserve(64);
 
     // Any on event needed? 
     uwbTdoa2TagAlgorithm.onEvent(&m_Device, uwbEvent_t::eventTimeout);
@@ -209,14 +228,13 @@ static void estimatorCallback(tdoaMeasurement_t* tdoa)
             });
 
         if (it != measurements.end()) {
-            // Update running average
-            const float alpha = 0.5f;  // Exponential moving average weight (legacy 0.3)
+            // Use raw measurement - ArduPilot's EKF handles filtering
             float distanceDiff = tdoa->distanceDiff;
             if (tdoa->anchorIdA == it->anchor_b) {  // If it's a reverse measurement, change sign
                 distanceDiff = -distanceDiff;
             }
 
-            it->tdoa = alpha * distanceDiff + (1 - alpha) * it->tdoa;
+            it->tdoa = distanceDiff;
             it->timestamp = millis();
         } else {
             measurements.push_back({tdoa->anchorIdA, tdoa->anchorIdB, tdoa->distanceDiff, millis()});
@@ -243,14 +261,27 @@ static void estimatorProcess() {
     if (xSemaphoreTake(measurements_mtx, portMAX_DELAY) == pdTRUE) {
         uint64_t current_time = millis(); // Get time at the start after mutex
         
-        // Remove stale measurements (older than 1 second)
+#if TDOA_STATS_LOGGING == ENABLE
+        size_t meas_count_before = measurements.size();
+#endif
+        
+        // Remove stale measurements (older than 350ms). TODO: Make this parameter configurable in the future.
+        // NOTE: For some reason sometimes we are getting measurements that are older than 350ms. 
         measurements.erase(
             std::remove_if(measurements.begin(), measurements.end(),
                 [current_time](const tdoa_estimator::TDoAMeasurement& m) {
-                    return (current_time - m.timestamp) > 1000;
+                    return (current_time - m.timestamp) > 350;  // 200ms is the timeout for a single measurement
                 }),
             measurements.end()
         );
+
+#if TDOA_STATS_LOGGING == ENABLE
+        size_t meas_count_after = measurements.size();
+        stats_stale_removed += (meas_count_before - meas_count_after);
+        // Track min/max measurement counts
+        if (meas_count_after < stats_min_meas_count) stats_min_meas_count = meas_count_after;
+        if (meas_count_after > stats_max_meas_count) stats_max_meas_count = meas_count_after;
+#endif
 
         // --- Optional Debug Prints ---
         // printf("Measurements: \n");
@@ -308,6 +339,8 @@ static void estimatorProcess() {
             // --- Run Estimator --- 
             uint64_t estimation_start_time = millis();
             tdoa_estimator::DynVector current_estimate_3d = last_position; // Use last state as starting point
+            bool is_valid_estimate = false;
+            double solution_rmse = 0.0;
 
             if (USE_2D_ESTIMATOR) {
                 // Prepare inputs for 2D estimator
@@ -316,7 +349,7 @@ static void estimatorProcess() {
                 double fixed_z_for_estimation = current_estimate_3d(2);
 
                 // Run 2D Newton-Raphson
-                tdoa_estimator::PosVector2D new_position_2d = tdoa_estimator::newtonRaphson2D(
+                tdoa_estimator::SolverResult2D result = tdoa_estimator::newtonRaphson2D(
                     anchors_left,
                     anchors_right,
                     tdoas,
@@ -325,21 +358,25 @@ static void estimatorProcess() {
                     NUM_ITERATIONS
                 );
 
-                // Update only X and Y components of the 3D state vector
-                current_estimate_3d.head<2>() = new_position_2d;
-                // Z component remains unchanged from the previous state in 2D mode
+                if (result.valid) {
+                    // Update only X and Y components of the 3D state vector
+                    current_estimate_3d.head<2>() = result.position;
+                    // Z component remains unchanged from the previous state in 2D mode
+                    is_valid_estimate = true;
+                    solution_rmse = result.rmse;
+                }
 
                 uint64_t estimation_end_time = millis();
                 int duration = estimation_end_time - estimation_start_time;
-                // Serial.printf("Estimated position (2D): [%.2f, %.2f], Fixed Z: %.2f, it took %d ms\n\r",
-                //              current_estimate_3d(0), current_estimate_3d(1), fixed_z_for_estimation, duration);
+                // Serial.printf("Estimated position (2D): [%.2f, %.2f], RMSE: %.3f, it took %d ms\n\r",
+                //              current_estimate_3d(0), current_estimate_3d(1), result.rmse, duration);
 
             } else { // Use 3D Estimator
                 // Use the full 3D vector as the initial guess
                 tdoa_estimator::DynVector initial_guess_3d = current_estimate_3d;
 
                 // Run 3D Newton-Raphson
-                tdoa_estimator::DynVector new_position_3d = tdoa_estimator::newtonRaphson(
+                tdoa_estimator::SolverResult result = tdoa_estimator::newtonRaphson(
                     anchors_left,
                     anchors_right,
                     tdoas,
@@ -347,30 +384,83 @@ static void estimatorProcess() {
                     NUM_ITERATIONS
                 );
 
-                // Update the full 3D state vector
-                current_estimate_3d = new_position_3d;
+                if (result.valid) {
+                    // Update the full 3D state vector
+                    current_estimate_3d = result.position;
+                    is_valid_estimate = true;
+                    solution_rmse = result.rmse;
+                }
 
                 uint64_t estimation_end_time = millis();
                 int duration = estimation_end_time - estimation_start_time;
-                // Serial.printf("Estimated position (3D): [%.2f, %.2f, %.2f], it took %d ms\n",
-                //              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), duration);
+                // Serial.printf("Estimated position (3D): [%.2f, %.2f, %.2f], RMSE: %.3f, it took %d ms\n",
+                //              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), result.rmse, duration);
             }
 
             // --- Send Data to Application --- 
-            if (!current_estimate_3d.hasNaN()) { // Only send if the estimate is valid
-                App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), 20); 
+            bool has_nan = current_estimate_3d.hasNaN();
+            if (is_valid_estimate && !has_nan) { // Only send if the estimate is valid
+                // Convert RMSE to centimeters, clamped to reasonable range [5cm, 200cm]
+                uint16_t error_cm = static_cast<uint16_t>(std::clamp(solution_rmse * 100.0, 5.0, 200.0));
+                App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), error_cm); 
+
+                // Update the persistent state for the next iteration (Warm Start)
+                last_position = current_estimate_3d;
+
+#if TDOA_STATS_LOGGING == ENABLE
+                stats_samples_sent++;
+#endif
+            } else {
+#if TDOA_STATS_LOGGING == ENABLE
+                stats_samples_rejected++;
+                // Track rejection reason
+                if (has_nan) {
+                    stats_reject_nan++;
+                } else if (!is_valid_estimate) {
+                    stats_reject_rmse++;  // RMSE was too high in solver
+                }
+#endif
             }
 
-            // Update the persistent state for the next iteration
-            // TODO: Add more robust sanity checks before updating (e.g., check for large jumps)
-            if (!current_estimate_3d.hasNaN()) { // Basic sanity check
-                last_position = current_estimate_3d;
+            // --- Position Logging (timed interval) - logs regardless of validity ---
+            uint64_t now_position_log = millis();
+            if (now_position_log - position_last_log_time_ms >= POSITION_LOG_INTERVAL_MS) {
+                const char* valid_str = (is_valid_estimate && !current_estimate_3d.hasNaN()) ? "OK" : "INVALID";
+                Serial.printf("[TDoA Position] X: %.2f, Y: %.2f, Z: %.2f, RMSE: %.3fm [%s]\n",
+                              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), solution_rmse, valid_str);
+                position_last_log_time_ms = now_position_log;
             }
+            // ------------------------------------------
 
         } else {
-            // Optional: Print message if not enough measurements
-            // Serial.printf("Waiting for measurements (have %d, need %d)\n", measurements.size(), MIN_MEASUREMENTS);
+            // Not enough measurements to run estimator
+#if TDOA_STATS_LOGGING == ENABLE
+            stats_samples_rejected++;
+            stats_reject_insufficient++;
+#endif
         }
+
+#if TDOA_STATS_LOGGING == ENABLE
+        uint64_t now_ms = millis();
+        if (now_ms - stats_last_log_time_ms >= STATS_LOG_INTERVAL_MS) {
+            Serial.printf("[TDoA Stats] Sent:%u Rej:%u (RMSE:%u NaN:%u Insuff:%u) Meas:[%u-%u] Stale:%u\n", 
+                          stats_samples_sent, stats_samples_rejected,
+                          stats_reject_rmse, stats_reject_nan, stats_reject_insufficient,
+                          (stats_min_meas_count == UINT32_MAX) ? 0 : stats_min_meas_count, 
+                          stats_max_meas_count,
+                          stats_stale_removed);
+            // Reset all counters
+            stats_samples_sent = 0;
+            stats_samples_rejected = 0;
+            stats_reject_rmse = 0;
+            stats_reject_nan = 0;
+            stats_reject_insufficient = 0;
+            stats_stale_removed = 0;
+            stats_min_meas_count = UINT32_MAX;
+            stats_max_meas_count = 0;
+            stats_last_log_time_ms = now_ms;
+        }
+#endif
         
         xSemaphoreGive(measurements_mtx);
     }
