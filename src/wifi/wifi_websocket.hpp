@@ -8,19 +8,17 @@
 #include "wifi_backend.hpp"
 
 /**
- * @brief Here we should give the HTML web page, ip and port to the websocket server.
- * 
+ * @brief WebSocket server for command handling.
+ * Used by rtls-link-manager tool for device configuration.
  */
-
 class WifiWebSocket : public WifiBackend {
 public:
-    WifiWebSocket(const char* html_page, const char* domain, uint16_t port);
+    WifiWebSocket(const char* wsPath, uint16_t port);
 
     void Update() override;
 
-private: 
+private:
     AsyncWebServer m_Server;
     AsyncWebSocket m_Ws;
     bool initialized = false;
-
 };

@@ -74,8 +74,8 @@ void WifiLittleFSFrontend::SetupWebServer() {
     ClearBackends();
 
     if (m_Params.enableWebServer) {
-        printf("Setting up web server\n");
-        WifiWebSocket* webSocketServer = new WifiWebSocket("web.html", "/ws", 80);
+        printf("Setting up WebSocket server\n");
+        WifiWebSocket* webSocketServer = new WifiWebSocket("/ws", 80);
         m_Backends.push_back(webSocketServer);
     }
     
@@ -92,7 +92,7 @@ void WifiLittleFSFrontend::SetupWebServer() {
     }
 
     if (m_Params.enableDiscovery) {
-        WifiDiscovery* discoveryBackend = new WifiDiscovery(m_Params.discoveryPort);
+        WifiDiscovery* discoveryBackend = new WifiDiscovery(m_Params.discoveryPort, m_Params);
         m_Backends.push_back(discoveryBackend);
         printf("Discovery service enabled on port %d\n", m_Params.discoveryPort);
     }

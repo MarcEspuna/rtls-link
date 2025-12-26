@@ -4,51 +4,31 @@
 
 #include <esp_mac.h>
 
-// Static storage for the discover command string
-constexpr char WifiDiscovery::kDiscoverCommand[];
-
-WifiDiscovery::WifiDiscovery(uint16_t port)
+WifiDiscovery::WifiDiscovery(uint16_t port, const WifiParams& wifiParams)
     : m_Port(port)
+    , m_WifiParams(wifiParams)
 {
-    m_Udp.begin(m_Port);
-    printf("WifiDiscovery: Listening on UDP port %d\n", m_Port);
+    printf("WifiDiscovery: Heartbeat mode on port %d\n", m_Port);
 }
 
 void WifiDiscovery::Update() {
-    int packetSize = m_Udp.parsePacket();
-    if (packetSize == 0) {
-        return;
-    }
-
-    // Read the incoming packet
-    int len = m_Udp.read(m_IncomingPacket, kMaxPacketSize - 1);
-    if (len <= 0) {
-        return;
-    }
-    m_IncomingPacket[len] = '\0';
-
-    // Check if it's a discovery command
-    if (strcmp((const char*)m_IncomingPacket, kDiscoverCommand) != 0) {
-        return;
-    }
-
-    IPAddress remoteIp = m_Udp.remoteIP();
-    uint16_t remotePort = m_Udp.remotePort();
-
-    // Per-sender rate limiting: ignore if same IP within kRateLimitMs
+    // Send heartbeat at interval
     uint32_t now = millis();
-    if (remoteIp == m_LastSenderIp && (now - m_LastResponseTime) < kRateLimitMs) {
+    if (now - m_LastHeartbeat < kHeartbeatIntervalMs) {
         return;
     }
+    m_LastHeartbeat = now;
 
-    // Update rate limiting state
-    m_LastSenderIp = remoteIp;
-    m_LastResponseTime = now;
-
-    SendDiscoveryResponse(remoteIp, remotePort);
+    SendHeartbeat();
 }
 
-void WifiDiscovery::SendDiscoveryResponse(IPAddress& remoteIp, uint16_t remotePort) {
+void WifiDiscovery::SendHeartbeat() {
+    // Get GCS IP from wifi params
+    IPAddress gcsIp;
+    if (!gcsIp.fromString(m_WifiParams.gcsIp.data())) {
+        return; // No valid GCS IP configured
+    }
+
     char response[256];  // Fixed-size stack buffer
 
     // Get IP and MAC based on WiFi mode
@@ -62,26 +42,34 @@ void WifiDiscovery::SendDiscoveryResponse(IPAddress& remoteIp, uint16_t remotePo
     // Get UWB params
     const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
 
-    // devShortAddr is 2-byte array - hex-encode to ensure printable output
-    char shortAddrHex[5];  // "XXYY" + null terminator
-    snprintf(shortAddrHex, sizeof(shortAddrHex), "%02X%02X",
-             (uint8_t)uwbParams.devShortAddr[0],
-             (uint8_t)uwbParams.devShortAddr[1]);
+    // devShortAddr is a 2-byte array; send printable digits when available
+    char shortAddrStr[3] = {};
+    size_t shortAddrLen = 0;
+    if (uwbParams.devShortAddr[0] != '\0') {
+        shortAddrStr[shortAddrLen++] = uwbParams.devShortAddr[0];
+    }
+    if (uwbParams.devShortAddr[1] != '\0') {
+        shortAddrStr[shortAddrLen++] = uwbParams.devShortAddr[1];
+    }
+    if (shortAddrLen == 0) {
+        shortAddrStr[shortAddrLen++] = '0';
+    }
+    shortAddrStr[shortAddrLen] = '\0';
 
     snprintf(response, sizeof(response),
         "{\"device\":\"%s\",\"id\":\"%s\",\"role\":\"%s\","
         "\"ip\":\"%d.%d.%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
         "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\"}",
         DEVICE_TYPE,
-        shortAddrHex,
+        shortAddrStr,
         ModeToRoleString(static_cast<uint8_t>(uwbParams.mode)),
         deviceIp[0], deviceIp[1], deviceIp[2], deviceIp[3],
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-        shortAddrHex,
+        shortAddrStr,
         uwbParams.mavlinkTargetSystemId,
         FIRMWARE_VERSION);
 
-    m_Udp.beginPacket(remoteIp, remotePort);
+    m_Udp.beginPacket(gcsIp, m_Port);
     m_Udp.write((uint8_t*)response, strlen(response));
     m_Udp.endPacket();
 }

@@ -32,11 +32,83 @@ static void backupConfigCallback(cmd* c);
 static void listConfigsCallback(cmd* c);
 static void saveConfigAsCallback(cmd* c);
 static void loadConfigNamedCallback(cmd* c);
+static void readConfigNamedCallback(cmd* c);
 static void deleteConfigCallback(cmd* c);
 
 // LED 2 control callbacks
 static void toggleLed2Callback(cmd* c);
 static void getLed2StateCallback(cmd* c);
+
+static bool IsUwbShortAddrName(const char* name) {
+    if (strcmp(name, "devShortAddr") == 0) {
+        return true;
+    }
+    if (strncmp(name, "devId", 5) == 0) {
+        char idx = name[5];
+        return idx >= '1' && idx <= '6' && name[6] == '\0';
+    }
+    return false;
+}
+
+static const UWBShortAddr* GetUwbShortAddrByName(const char* name) {
+    const UWBParams& params = Front::uwbLittleFSFront.GetParams();
+    if (strcmp(name, "devShortAddr") == 0) return &params.devShortAddr;
+    if (strcmp(name, "devId1") == 0) return &params.devId1;
+    if (strcmp(name, "devId2") == 0) return &params.devId2;
+    if (strcmp(name, "devId3") == 0) return &params.devId3;
+    if (strcmp(name, "devId4") == 0) return &params.devId4;
+    if (strcmp(name, "devId5") == 0) return &params.devId5;
+    if (strcmp(name, "devId6") == 0) return &params.devId6;
+    return nullptr;
+}
+
+static String UwbShortAddrToString(const UWBShortAddr& addr) {
+    char buf[3] = {};
+    size_t len = 0;
+    if (addr[0] != '\0') {
+        buf[len++] = addr[0];
+    }
+    if (addr[1] != '\0') {
+        buf[len++] = addr[1];
+    }
+    if (len == 0) {
+        return String("0");
+    }
+    buf[len] = '\0';
+    return String(buf);
+}
+
+static bool IsDigitChar(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static bool ParseShortAddrDigits(String input, char out[2], uint32_t& outLen) {
+    input.trim();
+    if (input.length() == 0 || input.length() > 2) {
+        return false;
+    }
+    for (size_t i = 0; i < input.length(); i++) {
+        if (!IsDigitChar(input[i])) {
+            return false;
+        }
+    }
+    out[0] = input[0];
+    if (input.length() == 2) {
+        out[1] = input[1];
+        outLen = 2;
+    } else {
+        out[1] = '\0';
+        outLen = 1;
+    }
+    return true;
+}
+
+static void TrimQuotedString(String& value) {
+    value.trim();
+    if (value.length() >= 2 && value[0] == '"' && value[value.length() - 1] == '"') {
+        value = value.substring(1, value.length() - 1);
+    }
+}
 
 static String escapeJsonString(const String& str) {
     String escaped;
@@ -100,6 +172,9 @@ void CommandHandler::Init()
     Command loadConfigNamedCmd = simpleCLI.addCommand("load-config-named", loadConfigNamedCallback);
     loadConfigNamedCmd.addArgument("name");
 
+    Command readConfigNamedCmd = simpleCLI.addCommand("read-config-named", readConfigNamedCallback);
+    readConfigNamedCmd.addArgument("name");
+
     Command deleteConfigCmd = simpleCLI.addCommand("delete-config", deleteConfigCallback);
     deleteConfigCmd.addArgument("name");
 
@@ -132,6 +207,17 @@ static void readCallback(cmd* c)
 
     String paramGroup = groupArg.getValue();
     String valueGroup = nameArg.getValue();
+
+    if (paramGroup == "uwb" && IsUwbShortAddrName(valueGroup.c_str())) {
+        const UWBShortAddr* addr = GetUwbShortAddrByName(valueGroup.c_str());
+        if (!addr) {
+            commandResult = "Name not found";
+            return;
+        }
+        commandResult = "Param: " + UwbShortAddrToString(*addr);
+        return;
+    }
+
     // Read parameter
     char inData[128];
     uint32_t inDataLen = 0;
@@ -173,6 +259,42 @@ static void writeCallback(cmd* c)
     String paramGroup = groupArg.getValue();
     String valueGroup = nameArg.getValue();
     String data = dataArg.getValue();
+    TrimQuotedString(data);
+
+    if (paramGroup == "uwb" && IsUwbShortAddrName(valueGroup.c_str())) {
+        char addrBytes[2] = {};
+        uint32_t addrLen = 0;
+        if (!ParseShortAddrDigits(data, addrBytes, addrLen)) {
+            commandResult = "Invalid short address (expected 1-2 digits)";
+            return;
+        }
+        ErrorParam ret = Front::WriteGlobalParam(paramGroup.c_str(), valueGroup.c_str(), addrBytes, addrLen);
+        switch (ret)
+        {
+        case ErrorParam::OK:
+            commandResult = "Param written";
+            return;
+        case ErrorParam::GROUP_NOT_FOUND:
+            commandResult = "Group not found";
+            break;
+        case ErrorParam::NAME_NOT_FOUND:
+            commandResult = "Name not found";
+            break;
+        case ErrorParam::FAILED_TO_WRITE:
+            commandResult = "Failed to write";
+            break;
+        case ErrorParam::PARAM_TOO_LONG:
+            commandResult = "Param too long";
+            break;
+        case ErrorParam::INVALID_DATA:
+            commandResult = "Invalid data";
+            break;
+        default:
+            commandResult = "Failed to write";
+            break;
+        }
+        return;
+    }
 
     // Write parameter
     ErrorParam ret = Front::WriteGlobalParam(paramGroup.c_str(), valueGroup.c_str(), data.c_str(), data.length());
@@ -195,6 +317,9 @@ static void writeCallback(cmd* c)
         break;
     case ErrorParam::PARAM_TOO_LONG:
         commandResult = "Param too long";
+        break;
+    case ErrorParam::INVALID_DATA:
+        commandResult = "Invalid data";
         break;
     }
 }
@@ -365,8 +490,15 @@ static void backupConfigCallback(cmd* c)
             
             if (frontend->GetParam(param.name, value, len, type) == ErrorParam::OK) {
                 commandResult += "    \"" + String(param.name) + "\": ";
-                
-                if (type == ParamType::STRING) {
+
+                if (frontend->GetParamGroup() == "uwb" && IsUwbShortAddrName(param.name)) {
+                    const UWBShortAddr* addr = GetUwbShortAddrByName(param.name);
+                    if (addr) {
+                        commandResult += "\"" + UwbShortAddrToString(*addr) + "\"";
+                    } else {
+                        commandResult += "\"\"";
+                    }
+                } else if (type == ParamType::STRING) {
                     commandResult += "\"" + escapeJsonString(String(value)) + "\"";
                 } else {
                     commandResult += String(value);
@@ -442,6 +574,15 @@ static void loadConfigNamedCallback(cmd* c)
             commandResult = "{\"success\":false,\"error\":\"Unknown error\"}";
             break;
     }
+}
+
+static void readConfigNamedCallback(cmd* c)
+{
+    Command cmd(c);
+    Argument nameArg = cmd.getArgument("name");
+    String name = nameArg.getValue();
+
+    commandResult = ConfigManager::ReadConfigNamedJson(name.c_str());
 }
 
 static void deleteConfigCallback(cmd* c)
