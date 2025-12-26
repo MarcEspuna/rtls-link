@@ -49,6 +49,9 @@ public:
     // Set active configuration (updates metadata only)
     static ConfigError SetActiveConfig(const char* name);
 
+    // Read a named configuration and return as JSON (without loading it)
+    static String ReadConfigNamedJson(const char* name);
+
 private:
     static bool EnsureConfigDir();
     static bool LoadMetadata();

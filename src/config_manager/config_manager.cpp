@@ -381,3 +381,148 @@ ConfigError ConfigManager::SetActiveConfig(const char* name) {
 
     return ConfigError::OK;
 }
+
+String ConfigManager::ReadConfigNamedJson(const char* name) {
+    if (!s_Initialized) {
+        Init();
+    }
+
+    if (!IsValidConfigName(name)) {
+        return "{\"error\":\"Invalid config name\"}";
+    }
+
+    // Check if config exists
+    bool found = false;
+    for (const auto& config : s_Configs) {
+        if (config.name == name) {
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        return "{\"error\":\"Config not found\"}";
+    }
+
+    String configPath = GetConfigPath(name);
+    File file = LittleFS.open(configPath, "r");
+    if (!file) {
+        return "{\"error\":\"Failed to open config file\"}";
+    }
+
+    // Parse the config file and build JSON
+    // File format: group.paramName: value
+    String json = "{\n";
+    String currentGroup = "";
+    bool firstGroup = true;
+    bool firstParam = true;
+
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+
+        // Skip empty lines and comments
+        if (line.length() == 0 || line.startsWith("#")) {
+            continue;
+        }
+
+        // Find the colon separator
+        int colonIndex = line.indexOf(':');
+        if (colonIndex == -1) {
+            continue;
+        }
+
+        String key = line.substring(0, colonIndex);
+        String value = line.substring(colonIndex + 1);
+        key.trim();
+        value.trim();
+
+        // Find the dot separator for group.param
+        int dotIndex = key.indexOf('.');
+        if (dotIndex == -1) {
+            continue;
+        }
+
+        String group = key.substring(0, dotIndex);
+        String paramName = key.substring(dotIndex + 1);
+
+        // Check if we're starting a new group
+        if (group != currentGroup) {
+            // Close previous group if exists
+            if (!firstGroup) {
+                json += "\n  },\n";
+            }
+            firstGroup = false;
+            firstParam = true;
+            currentGroup = group;
+            json += "  \"" + group + "\": {\n";
+        }
+
+        // Add parameter
+        if (!firstParam) {
+            json += ",\n";
+        }
+        firstParam = false;
+
+        json += "    \"" + paramName + "\": ";
+
+        // Determine if value is numeric or string
+        bool isNumeric = true;
+        bool hasDot = false;
+        for (size_t i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '.') {
+                if (hasDot) {
+                    isNumeric = false;
+                    break;
+                }
+                hasDot = true;
+            } else if (c == '-' && i == 0) {
+                // Allow leading minus
+            } else if (!isdigit(c)) {
+                isNumeric = false;
+                break;
+            }
+        }
+
+        // Handle empty values as strings
+        if (value.length() == 0) {
+            isNumeric = false;
+        }
+
+        if (isNumeric) {
+            json += value;
+        } else {
+            // Escape special characters in string values
+            String escaped = "";
+            for (size_t i = 0; i < value.length(); i++) {
+                char c = value.charAt(i);
+                if (c == '"') {
+                    escaped += "\\\"";
+                } else if (c == '\\') {
+                    escaped += "\\\\";
+                } else if (c == '\n') {
+                    escaped += "\\n";
+                } else if (c == '\r') {
+                    escaped += "\\r";
+                } else if (c == '\t') {
+                    escaped += "\\t";
+                } else {
+                    escaped += c;
+                }
+            }
+            json += "\"" + escaped + "\"";
+        }
+    }
+
+    file.close();
+
+    // Close last group
+    if (!firstGroup) {
+        json += "\n  }";
+    }
+
+    json += "\n}";
+
+    return json;
+}
