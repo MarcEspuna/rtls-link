@@ -31,6 +31,7 @@ namespace bsp {
         UARTPinout mavlink_uart;
         UARTPinout uwb_data_uart;
         int16_t led_pin;
+        int16_t led2_pin;  // LED 2 for device identification (-1 = disabled)
     };
 
 }   // namespace bsp

@@ -31,6 +31,7 @@ namespace bsp {
             .tx_pin = 17,
         },
         .led_pin = 36,
+        .led2_pin = 35,  // LED 2 for device identification
     };
 
 } // namespace bsp
