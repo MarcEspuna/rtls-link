@@ -2,7 +2,7 @@
 
 /**
  * Scheduling all the tasks
- * 
+ *
  */
 #include "front.hpp"
 #include "scheduler.hpp"
@@ -12,6 +12,9 @@
 
 #include <etl/delegate.h>
 #include <cmath> // For sin and cos functions
+
+// Forward declaration for rangefinder sensor
+class RangefinderSensor;
 
 // Define a Vector3f struct for 3D coordinates
 struct Vector3f {
@@ -49,6 +52,9 @@ public:
     // Helper function to correct for yaw orientation
     static Vector3f correct_for_orient_yaw(float x, float y, float z);
 
+    // Get Z coordinate from rangefinder (returns NAN if not using rangefinder mode)
+    static float GetRangefinderZ();
+
 private:
     UartComm uart_comm_;
     LocalPositionSensor local_position_sensor_;
@@ -59,6 +65,13 @@ private:
     uint64_t last_heartbeat_received_timestamp_ms_;
     bool is_origin_position_sent_ = false;
     bool is_origin_set_ = false;
+
+    // Rangefinder sensor (ESP32S3 only)
+    RangefinderSensor* rangefinder_sensor_ = nullptr;
+    uint16_t last_rangefinder_distance_cm_ = 0;
+    uint64_t last_rangefinder_timestamp_ms_ = 0;
+    bool rangefinder_ever_received_ = false;
+
 private:
     static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 8 seconds healthy device, send global origin position
     static constexpr uint64_t kDeviceHealtyMinDurationMs = 100;     // If no packet sent for more than 100ms, consider device as unhealthy

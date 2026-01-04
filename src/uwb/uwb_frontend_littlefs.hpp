@@ -82,7 +82,8 @@ public:
         PARAM_DEF(UWBParams, originLon),
         PARAM_DEF(UWBParams, originAlt),
         PARAM_DEF(UWBParams, mavlinkTargetSystemId),
-        PARAM_DEF(UWBParams, rotationDegrees)
+        PARAM_DEF(UWBParams, rotationDegrees),
+        PARAM_DEF(UWBParams, zCalcMode)
     };
 };
 

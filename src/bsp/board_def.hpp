@@ -30,6 +30,7 @@ namespace bsp {
         UWBConfig uwb;
         UARTPinout mavlink_uart;
         UARTPinout uwb_data_uart;
+        UARTPinout rangefinder_uart;  // UART for rangefinder MAVLink input (-1 = disabled)
         int16_t led_pin;
         int16_t led2_pin;  // LED 2 for device identification (-1 = disabled)
     };

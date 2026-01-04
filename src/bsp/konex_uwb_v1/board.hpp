@@ -30,6 +30,11 @@ namespace bsp {
             .rx_pin = 18,
             .tx_pin = 17,
         },
+        // Serial0 (UART0) for rangefinder MAVLink input
+        .rangefinder_uart = {
+            .rx_pin = 44,
+            .tx_pin = 43,
+        },
         .led_pin = 36,
         .led2_pin = 35,  // LED 2 for device identification
     };
