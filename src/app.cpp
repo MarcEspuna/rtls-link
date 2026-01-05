@@ -73,6 +73,13 @@ void App::Init()
             last_rangefinder_distance_cm_ = distance_cm;
             last_rangefinder_timestamp_ms_ = timestamp_ms;
             rangefinder_ever_received_ = true;
+
+            // Time-limited logging (once per second max)
+            if (timestamp_ms - last_rangefinder_log_ms_ >= kRangefinderLogIntervalMs) {
+                printf("[Rangefinder] Distance: %u cm (%.2f m)\n",
+                       distance_cm, static_cast<float>(distance_cm) / 100.0f);
+                last_rangefinder_log_ms_ = timestamp_ms;
+            }
         }
     );
 
@@ -239,17 +246,44 @@ float App::GetRangefinderZ() {
   ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
 
   if (mode == ZCalcMode::RANGEFINDER) {
+    // Check if we have ever received data and it's not stale
     if (app.rangefinder_ever_received_) {
-      // Convert cm to meters (rangefinder measures altitude above ground)
-      return static_cast<float>(app.last_rangefinder_distance_cm_) / 100.0f;
-    } else {
-      // Never received rangefinder data - return 0
-      return 0.0f;
+      uint64_t age_ms = millis() - app.last_rangefinder_timestamp_ms_;
+      if (age_ms <= kRangefinderStaleTimeoutMs) {
+        // Convert cm to meters (rangefinder measures altitude above ground)
+        return static_cast<float>(app.last_rangefinder_distance_cm_) / 100.0f;
+      }
     }
+    // Never received or stale - return NAN to indicate unavailable
+    return NAN;
   }
 
   // Return NAN to indicate "use original Z from TDoA"
   return NAN;
+}
+
+bool App::IsSendingPositions() {
+  // Guard for initial boot (last_sample_timestamp_ms_ starts at 0)
+  if (app.last_sample_timestamp_ms_ == 0) {
+    return false;
+  }
+  // Use 2s window to match heartbeat interval (avoids flapping)
+  return (millis() - app.last_sample_timestamp_ms_) < 2000;
+}
+
+bool App::IsOriginSent() {
+  return app.is_origin_position_sent_;
+}
+
+bool App::IsRangefinderEnabled() {
+  return Front::uwbLittleFSFront.GetParams().zCalcMode == ZCalcMode::RANGEFINDER;
+}
+
+bool App::IsRangefinderHealthy() {
+  if (!app.rangefinder_ever_received_) {
+    return false;
+  }
+  return (millis() - app.last_rangefinder_timestamp_ms_) <= kRangefinderStaleTimeoutMs;
 }
 
 void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
@@ -260,10 +294,14 @@ void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
 
   #if MAVLINK_PROTOCOL_ENABLED
   // Determine Z coordinate based on zCalcMode parameter
-  float final_z = z_m;  // Default: use TDoA Z
-  float rangefinder_z = GetRangefinderZ();
-  if (!std::isnan(rangefinder_z)) {
-    final_z = rangefinder_z;
+  ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
+  float final_z;
+  if (mode == ZCalcMode::RANGEFINDER) {
+    // Rangefinder mode: use rangefinder Z directly (NAN if unavailable)
+    final_z = GetRangefinderZ();
+  } else {
+    // NONE or UWB mode: use TDoA Z
+    final_z = z_m;
   }
 
   // Apply coordinate system rotation to correct for beacon system orientation

@@ -8,6 +8,30 @@
 #include <utils/utils.hpp>
 #include <etl/vector.h>
 
+#include "app.hpp"
+#include "uwb/uwb_tdoa_tag.hpp"
+#include "uwb/uwb_frontend_littlefs.hpp"
+
+// Free function for telemetry callback (ETL delegates require free function or static method)
+static DeviceTelemetry GetDeviceTelemetry() {
+    DeviceTelemetry t;
+    t.sending_pos = App::IsSendingPositions();
+    t.origin_sent = App::IsOriginSent();
+
+    // Only report anchors_seen for TDoA tag mode
+    if (Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA) {
+        t.anchors_seen = UWBTagTDoA::GetAnchorsSeenCount();
+    } else {
+        t.anchors_seen = 0;  // Not applicable for non-TDoA-tag modes
+    }
+
+    // Rangefinder status
+    t.rf_enabled = App::IsRangefinderEnabled();
+    t.rf_healthy = App::IsRangefinderHealthy();
+
+    return t;
+}
+
 // I will define a static FreeRTOS task holder for station connection checks
 static StaticTaskHolder<etl::delegate<void()>, 4096> wifi_connection_task = {
     "WifiConnTask", // Task name
@@ -93,6 +117,10 @@ void WifiLittleFSFrontend::SetupWebServer() {
 
     if (m_Params.enableDiscovery) {
         WifiDiscovery* discoveryBackend = new WifiDiscovery(m_Params.discoveryPort, m_Params);
+        // Set telemetry callback for heartbeat enrichment
+        discoveryBackend->SetTelemetryCallback(
+            TelemetryCallback::create<&GetDeviceTelemetry>()
+        );
         m_Backends.push_back(discoveryBackend);
         printf("Discovery service enabled on port %d\n", m_Params.discoveryPort);
     }

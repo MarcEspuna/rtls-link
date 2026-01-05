@@ -52,6 +52,12 @@ public:
     // Helper function to correct for yaw orientation
     static Vector3f correct_for_orient_yaw(float x, float y, float z);
 
+    // Telemetry getters for heartbeat broadcast
+    static bool IsSendingPositions();  // True if sent to ArduPilot in last 2s
+    static bool IsOriginSent();        // True if GPS origin sent to ArduPilot
+    static bool IsRangefinderEnabled(); // True if zCalcMode == RANGEFINDER
+    static bool IsRangefinderHealthy(); // True if receiving non-stale rangefinder data
+
     // Get Z coordinate from rangefinder (returns NAN if not using rangefinder mode)
     static float GetRangefinderZ();
 
@@ -71,6 +77,7 @@ private:
     uint16_t last_rangefinder_distance_cm_ = 0;
     uint64_t last_rangefinder_timestamp_ms_ = 0;
     bool rangefinder_ever_received_ = false;
+    uint64_t last_rangefinder_log_ms_ = 0;
 
 private:
     static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 8 seconds healthy device, send global origin position
@@ -82,6 +89,9 @@ private:
     static constexpr uint64_t kHeartbeatIntervalMs = 1000;
 
     static constexpr uint64_t kHeartbeatRcvTimeoutMs = 3000;
+
+    static constexpr uint64_t kRangefinderStaleTimeoutMs = 500;  // Rangefinder data older than this is considered stale
+    static constexpr uint64_t kRangefinderLogIntervalMs = 1000;  // Log rangefinder data once per second
 };
 
 extern App app;
