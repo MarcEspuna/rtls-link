@@ -71,6 +71,11 @@ struct UWBParams {
     uint8_t mavlinkTargetSystemId; // MAVLink Target System ID
     float rotationDegrees;      // Rotation degrees to NED frame
     ZCalcMode zCalcMode;        // Z calculation mode (0=None/TDoA, 1=Rangefinder, 2=UWB-reserved)
+    // Rangefinder forwarding parameters
+    uint8_t rfForwardEnable = 0;        // 0=disabled, 1=enabled (forward DISTANCE_SENSOR to ArduPilot)
+    uint8_t rfForwardSensorId = 0xFF;   // Sensor ID override (0xFF = preserve source value)
+    uint8_t rfForwardOrientation = 0xFF; // Orientation override (0xFF = preserve source)
+    uint8_t rfForwardPreserveSrcIds = 0; // 0=use UWB device IDs (default), 1=preserve source IDs
 
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 6;

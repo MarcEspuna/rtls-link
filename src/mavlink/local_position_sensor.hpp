@@ -6,6 +6,7 @@
 #include <chrono> // For time handling
 #include <array>  // For std::array
 #include <functional> // For std::function
+#include <mutex>  // For thread-safe MAVLink TX
 
 // Forward declare MAVLink message struct if needed, or include directly
 // Including directly is simpler if the library always needs it.
@@ -76,6 +77,26 @@ public:
     bool send_heartbeat();
 
     /**
+     * @brief Sends a DISTANCE_SENSOR message (for rangefinder forwarding).
+     * Uses copy-modify-encode pattern to preserve all fields from source.
+     *
+     * @param source_msg The original DISTANCE_SENSOR message received from rangefinder
+     * @param override_sensor_id Sensor ID to use (0xFF = preserve source value)
+     * @param override_orientation Orientation to use (0xFF = preserve source value)
+     * @param source_sysid Source message system ID (used if preserve_source_ids is true)
+     * @param source_compid Source message component ID (used if preserve_source_ids is true)
+     * @param preserve_source_ids If true, use source sysid/compid instead of this device's
+     * @return bool True if message was successfully sent
+     */
+    bool send_distance_sensor(
+        const mavlink_distance_sensor_t& source_msg,
+        uint8_t override_sensor_id = 0xFF,
+        uint8_t override_orientation = 0xFF,
+        uint8_t source_sysid = 0,
+        uint8_t source_compid = 0,
+        bool preserve_source_ids = false);
+
+    /**
      * @brief Processes received bytes to potentially parse MAVLink messages (e.g., HEARTBEAT from ArduPilot).
      * To be implemented later if needed.
      * @param buffer Pointer to the received data buffer.
@@ -100,8 +121,9 @@ private:
     uint8_t system_id_;
     uint8_t component_id_;
     std::function<void(uint8_t, uint8_t)> heartbeat_callback_;
+    mutable std::mutex tx_mutex_;  // Protects send_message() for thread safety
 
-    // Internal helper to pack and send a message
+    // Internal helper to pack and send a message (thread-safe)
     bool send_message(const mavlink_message_t& msg);
 
     // Internal state for heartbeat

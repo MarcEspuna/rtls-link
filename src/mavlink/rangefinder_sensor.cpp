@@ -15,7 +15,7 @@ void RangefinderSensor::init(uint32_t baud_rate, uint8_t rx_pin, uint8_t tx_pin)
            rx_pin, tx_pin, baud_rate);
 }
 
-void RangefinderSensor::set_distance_callback(std::function<void(uint16_t, uint64_t)> callback) {
+void RangefinderSensor::set_distance_callback(std::function<void(mavlink_distance_sensor_t, uint64_t, uint8_t, uint8_t)> callback) {
     distance_callback_ = callback;
 }
 
@@ -36,9 +36,9 @@ void RangefinderSensor::process_received_bytes() {
                 last_timestamp_ms_ = millis();
                 has_received_data_ = true;
 
-                // Invoke callback if set
+                // Invoke callback with full struct (by value) and source IDs if set
                 if (distance_callback_) {
-                    distance_callback_(last_distance_cm_, last_timestamp_ms_);
+                    distance_callback_(distance_sensor, last_timestamp_ms_, msg.sysid, msg.compid);
                 }
             }
         }

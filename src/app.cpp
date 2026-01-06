@@ -69,15 +69,41 @@ void App::Init()
     );
 
     rangefinder_sensor_->set_distance_callback(
-        [this](uint16_t distance_cm, uint64_t timestamp_ms) {
-            last_rangefinder_distance_cm_ = distance_cm;
+        [this](mavlink_distance_sensor_t distance_msg, uint64_t timestamp_ms,
+               uint8_t src_sysid, uint8_t src_compid) {
+            last_rangefinder_distance_cm_ = distance_msg.current_distance;
             last_rangefinder_timestamp_ms_ = timestamp_ms;
             rangefinder_ever_received_ = true;
 
+            // Forward to ArduPilot if enabled
+            const auto& params = Front::uwbLittleFSFront.GetParams();
+            if (params.rfForwardEnable) {
+                bool success = local_position_sensor_.send_distance_sensor(
+                    distance_msg,
+                    params.rfForwardSensorId,
+                    params.rfForwardOrientation,
+                    src_sysid,
+                    src_compid,
+                    params.rfForwardPreserveSrcIds != 0);
+
+                // Track and log failures
+                if (!success) {
+                    rf_forward_fail_count_++;
+                    if (rf_forward_fail_count_ == kRfForwardFailLogThreshold) {
+                        printf("[Rangefinder] Forward failed %lu consecutive times\n",
+                               static_cast<unsigned long>(rf_forward_fail_count_));
+                    }
+                } else {
+                    rf_forward_fail_count_ = 0;
+                }
+            }
+
             // Time-limited logging (once per second max)
             if (timestamp_ms - last_rangefinder_log_ms_ >= kRangefinderLogIntervalMs) {
-                printf("[Rangefinder] Distance: %u cm (%.2f m)\n",
-                       distance_cm, static_cast<float>(distance_cm) / 100.0f);
+                printf("[Rangefinder] Distance: %u cm (%.2f m) [fwd=%d]\n",
+                       distance_msg.current_distance,
+                       static_cast<float>(distance_msg.current_distance) / 100.0f,
+                       params.rfForwardEnable ? 1 : 0);
                 last_rangefinder_log_ms_ = timestamp_ms;
             }
         }

@@ -21,8 +21,8 @@ public:
     void process_received_bytes();
 
     // Set callback for distance updates
-    // Callback receives: distance_cm, timestamp_ms
-    void set_distance_callback(std::function<void(uint16_t, uint64_t)> callback);
+    // Callback receives: full mavlink_distance_sensor_t struct (by value), timestamp_ms, source_sysid, source_compid
+    void set_distance_callback(std::function<void(mavlink_distance_sensor_t, uint64_t, uint8_t, uint8_t)> callback);
 
     // Get last known distance (cm) and timestamp
     uint16_t get_last_distance_cm() const { return last_distance_cm_; }
@@ -31,7 +31,7 @@ public:
 
 private:
     HardwareSerial& serial_;
-    std::function<void(uint16_t, uint64_t)> distance_callback_;
+    std::function<void(mavlink_distance_sensor_t, uint64_t, uint8_t, uint8_t)> distance_callback_;
 
     uint16_t last_distance_cm_ = 0;
     uint64_t last_timestamp_ms_ = 0;

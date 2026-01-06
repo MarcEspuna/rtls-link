@@ -78,6 +78,7 @@ private:
     uint64_t last_rangefinder_timestamp_ms_ = 0;
     bool rangefinder_ever_received_ = false;
     uint64_t last_rangefinder_log_ms_ = 0;
+    uint32_t rf_forward_fail_count_ = 0;  // Consecutive forwarding failures
 
 private:
     static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 8 seconds healthy device, send global origin position
@@ -92,6 +93,7 @@ private:
 
     static constexpr uint64_t kRangefinderStaleTimeoutMs = 500;  // Rangefinder data older than this is considered stale
     static constexpr uint64_t kRangefinderLogIntervalMs = 1000;  // Log rangefinder data once per second
+    static constexpr uint32_t kRfForwardFailLogThreshold = 10;   // Log after this many consecutive failures
 };
 
 extern App app;
