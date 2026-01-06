@@ -276,8 +276,10 @@ float App::GetRangefinderZ() {
     if (app.rangefinder_ever_received_) {
       uint64_t age_ms = millis() - app.last_rangefinder_timestamp_ms_;
       if (age_ms <= kRangefinderStaleTimeoutMs) {
-        // Convert cm to meters (rangefinder measures altitude above ground)
-        return static_cast<float>(app.last_rangefinder_distance_cm_) / 100.0f;
+        // Convert cm to meters and negate for NED frame
+        // Rangefinder measures positive distance to ground, but in NED
+        // Z is positive downward, so altitude above ground is negative
+        return -static_cast<float>(app.last_rangefinder_distance_cm_) / 100.0f;
       }
     }
     // Never received or stale - return NAN to indicate unavailable
@@ -312,10 +314,102 @@ bool App::IsRangefinderHealthy() {
   return (millis() - app.last_rangefinder_timestamp_ms_) <= kRangefinderStaleTimeoutMs;
 }
 
-void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
+/**
+ * @brief Rotates a 3x3 position covariance matrix by yaw angle
+ *
+ * Applies the transformation P' = R * P * R^T where R is a 2D rotation matrix.
+ * The Z variance is unchanged, but cross-correlations with Z are rotated.
+ *
+ * @param cov Input covariance [var_x, cov_xy, cov_xz, var_y, cov_yz, var_z]
+ * @param yaw_rad Yaw rotation angle in radians
+ * @return Rotated covariance array
+ */
+static std::array<float, 6> rotateCovarianceByYaw(
+    const std::array<float, 6>& cov, float yaw_rad)
+{
+  if (yaw_rad == 0.0f) {
+    return cov;
+  }
+
+  float c = cosf(yaw_rad);
+  float s = sinf(yaw_rad);
+
+  // Input: [var_x, cov_xy, cov_xz, var_y, cov_yz, var_z]
+  float var_x = cov[0];
+  float cov_xy = cov[1];
+  float cov_xz = cov[2];
+  float var_y = cov[3];
+  float cov_yz = cov[4];
+  float var_z = cov[5];
+
+  // 2D rotation for XY plane, Z unchanged
+  // R = [c -s 0; s c 0; 0 0 1]
+  // P_rot = R * P * R^T
+
+  std::array<float, 6> rotated;
+  rotated[0] = c*c*var_x + 2*c*s*cov_xy + s*s*var_y;           // var_x'
+  rotated[1] = c*c*cov_xy - s*s*cov_xy + c*s*(var_y - var_x);  // cov_xy'
+  rotated[2] = c*cov_xz + s*cov_yz;                             // cov_xz'
+  rotated[3] = s*s*var_x - 2*c*s*cov_xy + c*c*var_y;           // var_y'
+  rotated[4] = -s*cov_xz + c*cov_yz;                            // cov_yz'
+  rotated[5] = var_z;                                           // var_z' (unchanged)
+
+  return rotated;
+}
+
+/**
+ * @brief Maps 6-element position covariance to MAVLink 21-element array
+ *
+ * MAVLink uses row-major upper triangular packing for 6x6 covariance.
+ * We only have position (3x3), so orientation terms are set to NaN.
+ */
+static std::array<float, VISION_POSITION_COVARIANCE_SIZE> mapToMAVLinkCovariance(
+    const std::array<float, 6>& posCovariance)
+{
+  std::array<float, VISION_POSITION_COVARIANCE_SIZE> mavCov;
+
+  // Initialize all to NaN (indicates unknown/not-provided)
+  for (size_t i = 0; i < mavCov.size(); ++i) {
+    mavCov[i] = NAN;
+  }
+
+  // Position variances and covariances (3x3 block)
+  // Row 0: [var_x, cov_xy, cov_xz, cov_x_roll, cov_x_pitch, cov_x_yaw]
+  mavCov[0] = posCovariance[0];   // var(x)
+  mavCov[1] = posCovariance[1];   // cov(x,y)
+  mavCov[2] = posCovariance[2];   // cov(x,z)
+  // indices 3,4,5 = position-orientation cross-covariances -> 0 (no correlation)
+  mavCov[3] = 0.0f;
+  mavCov[4] = 0.0f;
+  mavCov[5] = 0.0f;
+
+  // Row 1: [var_y, cov_yz, cov_y_roll, cov_y_pitch, cov_y_yaw]
+  mavCov[6] = posCovariance[3];   // var(y)
+  mavCov[7] = posCovariance[4];   // cov(y,z)
+  // indices 8,9,10 = position-orientation cross-covariances -> 0
+  mavCov[8] = 0.0f;
+  mavCov[9] = 0.0f;
+  mavCov[10] = 0.0f;
+
+  // Row 2: [var_z, cov_z_roll, cov_z_pitch, cov_z_yaw]
+  mavCov[11] = posCovariance[5];  // var(z)
+  // indices 12,13,14 = position-orientation cross-covariances -> 0
+  mavCov[12] = 0.0f;
+  mavCov[13] = 0.0f;
+  mavCov[14] = 0.0f;
+
+  // Orientation variances: indices 15,18,20 -> NaN (UWB provides no orientation)
+  // These are already set to NaN from initialization
+
+  return mavCov;
+}
+
+void App::SendSample(float x_m, float y_m, float z_m,
+                     std::optional<std::array<float, 6>> positionCovariance)
 {
   #if BEACON_PROTOCOL_ENABLED
-  bcn_konex::BeaconProtocol::SendSample(x_m, y_m, z_m, error);
+  // Beacon protocol doesn't use covariance
+  bcn_konex::BeaconProtocol::SendSample(x_m, y_m, z_m, 0);
   #endif
 
   #if MAVLINK_PROTOCOL_ENABLED
@@ -335,8 +429,28 @@ void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
 
   // Check if we have received a heartbeat recently
   if (millis() - app.last_heartbeat_received_timestamp_ms_ < kHeartbeatRcvTimeoutMs) {
-    // Send the rotated coordinates
-    app.local_position_sensor_.send_vision_position_estimate(rotated_vector.x, rotated_vector.y, rotated_vector.z, 0, 0, 0);
+    // Defense in depth: also check enableCovMatrix parameter here
+    bool sendCovMatrix = positionCovariance.has_value() &&
+                         Front::uwbLittleFSFront.GetParams().enableCovMatrix != 0;
+
+    if (sendCovMatrix) {
+      // Rotate covariance to match rotated position
+      float rotationDegrees = Front::uwbLittleFSFront.GetParams().rotationDegrees;
+      float yaw_rad = rotationDegrees * M_PI / 180.0f;
+
+      std::array<float, 6> rotatedCov = rotateCovarianceByYaw(*positionCovariance, yaw_rad);
+      std::array<float, VISION_POSITION_COVARIANCE_SIZE> mavCov = mapToMAVLinkCovariance(rotatedCov);
+
+      app.local_position_sensor_.send_vision_position_estimate(
+          rotated_vector.x, rotated_vector.y, rotated_vector.z,
+          0, 0, 0,  // No orientation from UWB
+          &mavCov);
+    } else {
+      // No covariance - send with nullptr (will use NaN)
+      app.local_position_sensor_.send_vision_position_estimate(
+          rotated_vector.x, rotated_vector.y, rotated_vector.z,
+          0, 0, 0);
+    }
     app.last_sample_timestamp_ms_ = millis();
   }
   #endif

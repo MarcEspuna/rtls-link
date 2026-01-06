@@ -76,6 +76,9 @@ struct UWBParams {
     uint8_t rfForwardSensorId = 0xFF;   // Sensor ID override (0xFF = preserve source value)
     uint8_t rfForwardOrientation = 0xFF; // Orientation override (0xFF = preserve source)
     uint8_t rfForwardPreserveSrcIds = 0; // 0=use UWB device IDs (default), 1=preserve source IDs
+    // Position estimation parameters
+    uint8_t enableCovMatrix = 0;    // 0=disabled, 1=enabled (send covariance to ArduPilot)
+    float rmseThreshold = 0.8f;     // RMSE threshold for position validity (meters)
 
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 6;
