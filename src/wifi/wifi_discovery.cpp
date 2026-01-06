@@ -11,6 +11,10 @@ WifiDiscovery::WifiDiscovery(uint16_t port, const WifiParams& wifiParams)
     printf("WifiDiscovery: Heartbeat mode on port %d\n", m_Port);
 }
 
+void WifiDiscovery::SetTelemetryCallback(TelemetryCallback callback) {
+    m_TelemetryCallback = callback;
+}
+
 void WifiDiscovery::Update() {
     // Send heartbeat at interval
     uint32_t now = millis();
@@ -29,7 +33,7 @@ void WifiDiscovery::SendHeartbeat() {
         return; // No valid GCS IP configured
     }
 
-    char response[256];  // Fixed-size stack buffer
+    char response[384];  // Increased buffer for telemetry fields
 
     // Get IP and MAC based on WiFi mode
     bool isAP = (WiFi.getMode() == WIFI_AP);
@@ -56,10 +60,18 @@ void WifiDiscovery::SendHeartbeat() {
     }
     shortAddrStr[shortAddrLen] = '\0';
 
-    snprintf(response, sizeof(response),
+    // Get telemetry data via callback (or use defaults)
+    DeviceTelemetry telemetry = {};
+    if (m_TelemetryCallback.is_valid()) {
+        telemetry = m_TelemetryCallback();
+    }
+
+    int written = snprintf(response, sizeof(response),
         "{\"device\":\"%s\",\"id\":\"%s\",\"role\":\"%s\","
         "\"ip\":\"%d.%d.%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
-        "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\"}",
+        "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\","
+        "\"sending_pos\":%s,\"anchors_seen\":%u,\"origin_sent\":%s,"
+        "\"rf_enabled\":%s,\"rf_healthy\":%s}",
         DEVICE_TYPE,
         shortAddrStr,
         ModeToRoleString(static_cast<uint8_t>(uwbParams.mode)),
@@ -67,7 +79,19 @@ void WifiDiscovery::SendHeartbeat() {
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
         shortAddrStr,
         uwbParams.mavlinkTargetSystemId,
-        FIRMWARE_VERSION);
+        FIRMWARE_VERSION,
+        telemetry.sending_pos ? "true" : "false",
+        static_cast<unsigned int>(telemetry.anchors_seen),
+        telemetry.origin_sent ? "true" : "false",
+        telemetry.rf_enabled ? "true" : "false",
+        telemetry.rf_healthy ? "true" : "false");
+
+    // Log truncation warning once
+    static bool truncation_warned = false;
+    if (written >= static_cast<int>(sizeof(response)) && !truncation_warned) {
+        printf("WifiDiscovery: heartbeat JSON truncated!\n");
+        truncation_warned = true;
+    }
 
     m_Udp.beginPacket(gcsIp, m_Port);
     m_Udp.write((uint8_t*)response, strlen(response));

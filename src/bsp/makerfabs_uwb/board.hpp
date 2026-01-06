@@ -28,6 +28,11 @@ namespace bsp {
             .rx_pin = 21,
             .tx_pin = 22,
         },
+        // Rangefinder not supported on Makerfabs board (use 0xFFFF to indicate disabled)
+        .rangefinder_uart = {
+            .rx_pin = 0xFFFF,
+            .tx_pin = 0xFFFF,
+        },
         .led_pin = -1,
         .led2_pin = -1,  // LED 2 not available on this board
     };

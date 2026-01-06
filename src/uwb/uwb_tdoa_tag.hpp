@@ -28,6 +28,13 @@ public:
 
     virtual uint32_t GetNumberOfConnectedDevices() override;
 
+    /**
+     * @brief Get the number of unique anchors seen in the current measurement set.
+     * Thread-safe with caching - returns cached value if mutex is unavailable.
+     * @return Number of unique anchor IDs (0-16)
+     */
+    static uint8_t GetAnchorsSeenCount();
+
     void InterruptHandler();
 private:
     // Libdw1000 device

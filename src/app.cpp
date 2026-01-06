@@ -12,9 +12,11 @@
 
 #include "bsp/board.hpp"
 #include "mavlink/local_position_sensor.hpp"
+#include "mavlink/rangefinder_sensor.hpp"
 #include "bcn_konex/beacon_protocool.hpp"
 #include "mavlink/uart_comm.hpp"
 #include "uwb/uwb_frontend_littlefs.hpp"
+#include "uwb/uwb_params.hpp"
 
 #define BEACON_PROTOCOL_ENABLED 0
 #define MAVLINK_PROTOCOL_ENABLED 1
@@ -52,6 +54,63 @@ void App::Init()
   printf("------ Status task enabled ------\n");
   pinMode(bsp::kBoardConfig.led_pin, OUTPUT);       // Set the LED pin as output
   digitalWrite(bsp::kBoardConfig.led_pin, LOW);     // Turn off the LED
+#endif
+
+  // Initialize rangefinder sensor (ESP32S3 only)
+#if defined(ESP32S3_UWB_BOARD)
+  // Check for valid pin configuration (0xFFFF indicates disabled)
+  if (bsp::kBoardConfig.rangefinder_uart.rx_pin < 64) {
+    // Use Serial0 for UART0 (Serial is USB CDC on ESP32S3)
+    rangefinder_sensor_ = new RangefinderSensor(Serial0);
+    rangefinder_sensor_->init(
+        115200,
+        bsp::kBoardConfig.rangefinder_uart.rx_pin,
+        bsp::kBoardConfig.rangefinder_uart.tx_pin
+    );
+
+    rangefinder_sensor_->set_distance_callback(
+        [this](mavlink_distance_sensor_t distance_msg, uint64_t timestamp_ms,
+               uint8_t src_sysid, uint8_t src_compid) {
+            last_rangefinder_distance_cm_ = distance_msg.current_distance;
+            last_rangefinder_timestamp_ms_ = timestamp_ms;
+            rangefinder_ever_received_ = true;
+
+            // Forward to ArduPilot if enabled
+            const auto& params = Front::uwbLittleFSFront.GetParams();
+            if (params.rfForwardEnable) {
+                bool success = local_position_sensor_.send_distance_sensor(
+                    distance_msg,
+                    params.rfForwardSensorId,
+                    params.rfForwardOrientation,
+                    src_sysid,
+                    src_compid,
+                    params.rfForwardPreserveSrcIds != 0);
+
+                // Track and log failures
+                if (!success) {
+                    rf_forward_fail_count_++;
+                    if (rf_forward_fail_count_ == kRfForwardFailLogThreshold) {
+                        printf("[Rangefinder] Forward failed %lu consecutive times\n",
+                               static_cast<unsigned long>(rf_forward_fail_count_));
+                    }
+                } else {
+                    rf_forward_fail_count_ = 0;
+                }
+            }
+
+            // Time-limited logging (once per second max)
+            if (timestamp_ms - last_rangefinder_log_ms_ >= kRangefinderLogIntervalMs) {
+                printf("[Rangefinder] Distance: %u cm (%.2f m) [fwd=%d]\n",
+                       distance_msg.current_distance,
+                       static_cast<float>(distance_msg.current_distance) / 100.0f,
+                       params.rfForwardEnable ? 1 : 0);
+                last_rangefinder_log_ms_ = timestamp_ms;
+            }
+        }
+    );
+
+    printf("[App] Rangefinder sensor initialized\n");
+  }
 #endif
 
   printf("------ Application initialized ------\n");
@@ -118,6 +177,14 @@ void App::Update()
   }
 
   // ********** RECEIVING **********
+
+#if defined(ESP32S3_UWB_BOARD)
+  // Process rangefinder MAVLink messages
+  if (rangefinder_sensor_) {
+    rangefinder_sensor_->process_received_bytes();
+  }
+#endif
+
   // For now we are only receiving heartbeat messages
   // Read the buffer
   while (Serial1.available() && buffer_index < sizeof(buffer)) {
@@ -197,8 +264,52 @@ Vector3f App::correct_for_orient_yaw(float x, float y, float z) {
   result.x = x * orient_cos_yaw - y * orient_sin_yaw;
   result.y = x * orient_sin_yaw + y * orient_cos_yaw;
   // z stays the same
-  
+
   return result;
+}
+
+float App::GetRangefinderZ() {
+  ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
+
+  if (mode == ZCalcMode::RANGEFINDER) {
+    // Check if we have ever received data and it's not stale
+    if (app.rangefinder_ever_received_) {
+      uint64_t age_ms = millis() - app.last_rangefinder_timestamp_ms_;
+      if (age_ms <= kRangefinderStaleTimeoutMs) {
+        // Convert cm to meters (rangefinder measures altitude above ground)
+        return static_cast<float>(app.last_rangefinder_distance_cm_) / 100.0f;
+      }
+    }
+    // Never received or stale - return NAN to indicate unavailable
+    return NAN;
+  }
+
+  // Return NAN to indicate "use original Z from TDoA"
+  return NAN;
+}
+
+bool App::IsSendingPositions() {
+  // Guard for initial boot (last_sample_timestamp_ms_ starts at 0)
+  if (app.last_sample_timestamp_ms_ == 0) {
+    return false;
+  }
+  // Use 2s window to match heartbeat interval (avoids flapping)
+  return (millis() - app.last_sample_timestamp_ms_) < 2000;
+}
+
+bool App::IsOriginSent() {
+  return app.is_origin_position_sent_;
+}
+
+bool App::IsRangefinderEnabled() {
+  return Front::uwbLittleFSFront.GetParams().zCalcMode == ZCalcMode::RANGEFINDER;
+}
+
+bool App::IsRangefinderHealthy() {
+  if (!app.rangefinder_ever_received_) {
+    return false;
+  }
+  return (millis() - app.last_rangefinder_timestamp_ms_) <= kRangefinderStaleTimeoutMs;
 }
 
 void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
@@ -208,8 +319,19 @@ void App::SendSample(float x_m, float y_m, float z_m, uint16_t error)
   #endif
 
   #if MAVLINK_PROTOCOL_ENABLED
+  // Determine Z coordinate based on zCalcMode parameter
+  ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
+  float final_z;
+  if (mode == ZCalcMode::RANGEFINDER) {
+    // Rangefinder mode: use rangefinder Z directly (NAN if unavailable)
+    final_z = GetRangefinderZ();
+  } else {
+    // NONE or UWB mode: use TDoA Z
+    final_z = z_m;
+  }
+
   // Apply coordinate system rotation to correct for beacon system orientation
-  Vector3f rotated_vector = correct_for_orient_yaw(x_m, y_m, z_m);
+  Vector3f rotated_vector = correct_for_orient_yaw(x_m, y_m, final_z);
 
   // Check if we have received a heartbeat recently
   if (millis() - app.last_heartbeat_received_timestamp_ms_ < kHeartbeatRcvTimeoutMs) {

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iostream>
 
+#include <etl/set.h>
+
 #include "tdoa_newton_raphson.hpp"
 
 #include "FunctionalInterrupt.h"
@@ -31,6 +33,9 @@ static etl::array<UWBAnchorParam, 8> anchor_positions;
 static constexpr uint32_t kNumberMeasurements = 64;     // Preferably to be multiple of the number of anchors
 
 static bool isr_flag = false;
+
+// Cache for anchors_seen (used when mutex is unavailable)
+static uint8_t cached_anchors_seen = 0;
 
 #if TDOA_STATS_LOGGING == ENABLE
 static uint32_t stats_samples_sent = 0;
@@ -165,9 +170,28 @@ void UWBTagTDoA::Update()
     dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
 }
 
+uint8_t UWBTagTDoA::GetAnchorsSeenCount()
+{
+    // Try to acquire mutex with small timeout (10ms) - non-blocking would often fail
+    // since the estimator holds the mutex frequently
+    if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
+        // Collect unique anchor IDs using etl::set for arbitrary uint8_t IDs
+        etl::set<uint8_t, 16> seen_anchors;  // Max 16 unique anchors expected
+        for (const auto& m : measurements) {
+            seen_anchors.insert(static_cast<uint8_t>(m.anchor_a));
+            seen_anchors.insert(static_cast<uint8_t>(m.anchor_b));
+        }
+        cached_anchors_seen = static_cast<uint8_t>(seen_anchors.size());
+        xSemaphoreGive(measurements_mtx);
+    }
+    // Return cached value (either fresh or from last successful read)
+    return cached_anchors_seen;
+}
+
 uint32_t UWBTagTDoA::GetNumberOfConnectedDevices()
 {
-    return measurements.size(); // Not quite right since there can be redundant measurements but OK for now
+    // Use the thread-safe anchors_seen count for consistency
+    return GetAnchorsSeenCount();
 }
 
 template<libDw1000::IsrFlags TFlags>

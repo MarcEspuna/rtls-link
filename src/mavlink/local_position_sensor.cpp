@@ -32,6 +32,7 @@ void LocalPositionSensor::set_heartbeat_callback(std::function<void(uint8_t, uin
 // --- Message Sending ---
 
 bool LocalPositionSensor::send_message(const mavlink_message_t& msg) {
+    std::lock_guard<std::mutex> lock(tx_mutex_);  // Thread-safe MAVLink TX
     // Create buffer, pack message, and send using comm_interface_
     std::array<uint8_t, MAVLINK_MAX_PACKET_LEN> send_buf;
     uint16_t len = mavlink_msg_to_send_buffer(send_buf.data(), &msg);
@@ -97,6 +98,38 @@ bool LocalPositionSensor::send_heartbeat() {
         heartbeat.custom_mode, heartbeat.system_status);
 
     return send_message(msg);
+}
+
+bool LocalPositionSensor::send_distance_sensor(
+    const mavlink_distance_sensor_t& source_msg,
+    uint8_t override_sensor_id,
+    uint8_t override_orientation,
+    uint8_t source_sysid,
+    uint8_t source_compid,
+    bool preserve_source_ids)
+{
+    // Copy source struct to preserve all fields (FOV, quaternion, signal_quality, etc.)
+    mavlink_distance_sensor_t msg = source_msg;
+
+    // Apply overrides (0xFF = preserve source value)
+    if (override_sensor_id != 0xFF) {
+        msg.id = override_sensor_id;
+    }
+    if (override_orientation != 0xFF) {
+        msg.orientation = override_orientation;
+    }
+
+    // Update timestamp to local boot time
+    msg.time_boot_ms = static_cast<uint32_t>(comm_interface_.get_time_us() / 1000);
+
+    // Determine system/component IDs
+    uint8_t final_sysid = preserve_source_ids ? source_sysid : system_id_;
+    uint8_t final_compid = preserve_source_ids ? source_compid : component_id_;
+
+    // Encode and send (preserves extension fields automatically)
+    mavlink_message_t mav_msg;
+    mavlink_msg_distance_sensor_encode(final_sysid, final_compid, &mav_msg, &msg);
+    return send_message(mav_msg);
 }
 
 bool LocalPositionSensor::send_set_gps_global_origin(

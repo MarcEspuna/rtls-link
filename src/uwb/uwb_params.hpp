@@ -15,6 +15,12 @@ enum class UWBMode : uint8_t {      // Added mode to names since the UWBLibrary 
     UNKNOWN
 };
 
+enum class ZCalcMode : uint8_t {
+    NONE = 0,        // Use Z from UWB TDoA estimator (default)
+    RANGEFINDER = 1, // Use Z from MAVLink DISTANCE_SENSOR
+    UWB = 2          // Reserved for future UWB-based Z calculation
+};
+
 using UWBShortAddr = etl::array<char, 2>;
 
 /**
@@ -64,6 +70,12 @@ struct UWBParams {
     float originAlt;            // Origin Altitude
     uint8_t mavlinkTargetSystemId; // MAVLink Target System ID
     float rotationDegrees;      // Rotation degrees to NED frame
+    ZCalcMode zCalcMode;        // Z calculation mode (0=None/TDoA, 1=Rangefinder, 2=UWB-reserved)
+    // Rangefinder forwarding parameters
+    uint8_t rfForwardEnable = 0;        // 0=disabled, 1=enabled (forward DISTANCE_SENSOR to ArduPilot)
+    uint8_t rfForwardSensorId = 0xFF;   // Sensor ID override (0xFF = preserve source value)
+    uint8_t rfForwardOrientation = 0xFF; // Orientation override (0xFF = preserve source)
+    uint8_t rfForwardPreserveSrcIds = 0; // 0=use UWB device IDs (default), 1=preserve source IDs
 
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 6;
