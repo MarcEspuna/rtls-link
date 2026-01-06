@@ -12,6 +12,8 @@
 
 #include <etl/delegate.h>
 #include <cmath> // For sin and cos functions
+#include <optional>
+#include <array>
 
 // Forward declaration for rangefinder sensor
 class RangefinderSensor;
@@ -40,7 +42,8 @@ public:
     // Setup the anchors to echo
     static void AnchorsToEcho(const etl::array<double, 12>& anchor_locations);
 
-    static void SendSample(float x_m, float y_m, float z_m, uint16_t error);
+    static void SendSample(float x_m, float y_m, float z_m,
+                           std::optional<std::array<float, 6>> positionCovariance = std::nullopt);
     static void SendRangeSample(uint8_t id, float range);
 
     static void Start();
