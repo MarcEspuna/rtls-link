@@ -1,4 +1,5 @@
 #include <Eigen.h>
+#include <Eigen/Eigenvalues>  // For SelfAdjointEigenSolver
 #include <gtest/gtest.h>
 
 #include "tdoa_newton_raphson.hpp"
@@ -412,6 +413,199 @@ TEST_F(TDOANewtonRaphsonTest, WithNoise2D) {
     
     // Expect the 2D error to be reasonably low, maybe within 3*noiseStd?
     EXPECT_LT(errorXY, noiseStd * 5); // Allow slightly more margin for 2D projection
+}
+
+// --- Covariance Tests ---
+
+TEST_F(TDOANewtonRaphsonTest, CovarianceComputation3D) {
+    std::cout << "\nTesting 3D covariance computation..." << std::endl;
+
+    tdoa_estimator::DynVector truePosition(3);
+    truePosition << 2.0, 1.0, 2.5;
+
+    tdoa_estimator::PosMatrix anchors(5, 3);
+    anchors << -5.0, -5.0, 0.0,
+               5.0, -5.0, 0.0,
+               -5.0, 5.0, 0.0,
+               5.0, 5.0, 1.5,
+               2.5, 2.5, 0.0;
+
+    std::vector<std::pair<int, int>> measurementAnchorIds = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 4}, {4, 0}
+    };
+
+    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] =
+        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition);
+
+    tdoa_estimator::DynVector initialGuess = calculateInitialGuess(anchors);
+
+    auto result = tdoa_estimator::newtonRaphson(
+        anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuess, 10);
+
+    // Verify covariance is computed
+    EXPECT_TRUE(result.covarianceValid);
+    EXPECT_TRUE(result.converged);
+    EXPECT_TRUE(result.valid);
+
+    // Verify symmetry
+    EXPECT_NEAR(result.positionCovariance(0, 1), result.positionCovariance(1, 0), 1e-10);
+    EXPECT_NEAR(result.positionCovariance(0, 2), result.positionCovariance(2, 0), 1e-10);
+    EXPECT_NEAR(result.positionCovariance(1, 2), result.positionCovariance(2, 1), 1e-10);
+
+    // Verify positive semi-definite (all eigenvalues >= 0)
+    Eigen::SelfAdjointEigenSolver<tdoa_estimator::CovMatrix3D> eigensolver(result.positionCovariance);
+    auto eigenvalues = eigensolver.eigenvalues();
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_GE(eigenvalues(i), -1e-10) << "Covariance should be PSD";
+    }
+
+    // Verify variances are positive
+    EXPECT_GT(result.positionCovariance(0, 0), 0.0);
+    EXPECT_GT(result.positionCovariance(1, 1), 0.0);
+    EXPECT_GT(result.positionCovariance(2, 2), 0.0);
+
+    std::cout << "Covariance matrix:\n" << result.positionCovariance << std::endl;
+    std::cout << "Eigenvalues: " << eigenvalues.transpose() << std::endl;
+}
+
+TEST_F(TDOANewtonRaphsonTest, CovarianceScalesWithNoise) {
+    std::cout << "\nTesting covariance scaling with measurement noise..." << std::endl;
+
+    tdoa_estimator::DynVector truePosition(3);
+    truePosition << 2.0, -3.0, 4.2;
+
+    tdoa_estimator::PosMatrix anchors(5, 3);
+    anchors << -5.0, -5.0, 2.0,
+               5.0, -5.0, 0.0,
+               -5.0, 5.0, 0.0,
+               5.0, 5.0, 2.0,
+               2.5, 2.5, 0.0;
+
+    std::vector<std::pair<int, int>> measurementAnchorIds = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 4}, {4, 0}
+    };
+
+    std::vector<double> noiseLevels = {0.01, 0.1, 0.5};
+    std::vector<double> avgVariances;
+
+    for (double noiseStd : noiseLevels) {
+        auto [anchorPositionsLeft, anchorPositionsRight, tdoas] =
+            calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition);
+
+        tdoa_estimator::DynVector noisyTdoas = addNoiseToTDOAs(tdoas, noiseStd);
+        tdoa_estimator::DynVector initialGuess = tdoa_estimator::DynVector::Zero(3);
+
+        auto result = tdoa_estimator::newtonRaphson(
+            anchorPositionsLeft, anchorPositionsRight, noisyTdoas, initialGuess, 10);
+
+        double avgVar = (result.positionCovariance(0,0) +
+                        result.positionCovariance(1,1) +
+                        result.positionCovariance(2,2)) / 3.0;
+        avgVariances.push_back(avgVar);
+
+        std::cout << "Noise std: " << noiseStd << ", Avg variance: " << avgVar
+                  << ", Converged: " << result.converged
+                  << ", CovValid: " << result.covarianceValid << std::endl;
+    }
+
+    // Verify variance increases with noise
+    EXPECT_LT(avgVariances[0], avgVariances[1]);
+    EXPECT_LT(avgVariances[1], avgVariances[2]);
+}
+
+TEST_F(TDOANewtonRaphsonTest, Covariance2DMode) {
+    std::cout << "\nTesting 2D covariance computation..." << std::endl;
+
+    tdoa_estimator::DynVector truePosition3D(3);
+    truePosition3D << 2.0, 1.0, 2.5;
+
+    tdoa_estimator::PosMatrix anchors(5, 3);
+    anchors << -5.0, -5.0, 0.0,
+               5.0, -5.0, 0.0,
+               -5.0, 5.0, 0.0,
+               5.0, 5.0, 1.5,
+               2.5, 2.5, 0.0;
+
+    std::vector<std::pair<int, int>> measurementAnchorIds = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 4}, {4, 0}
+    };
+
+    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] =
+        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition3D);
+
+    auto anchorsXY = anchors.leftCols<2>();
+    auto minCoordsXY = anchorsXY.colwise().minCoeff();
+    auto maxCoordsXY = anchorsXY.colwise().maxCoeff();
+    tdoa_estimator::PosVector2D initialGuessXY = (minCoordsXY + maxCoordsXY).transpose() / 2.0;
+
+    double fixedZ = truePosition3D(2);
+
+    auto result = tdoa_estimator::newtonRaphson2D(
+        anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuessXY, fixedZ, 10);
+
+    EXPECT_TRUE(result.covarianceValid);
+    EXPECT_TRUE(result.converged);
+    EXPECT_TRUE(result.valid);
+
+    // Verify 2x2 symmetry
+    EXPECT_NEAR(result.positionCovariance(0, 1), result.positionCovariance(1, 0), 1e-10);
+
+    // Verify positive variances
+    EXPECT_GT(result.positionCovariance(0, 0), 0.0);
+    EXPECT_GT(result.positionCovariance(1, 1), 0.0);
+
+    // Verify positive semi-definite
+    Eigen::SelfAdjointEigenSolver<tdoa_estimator::CovMatrix2D> eigensolver(result.positionCovariance);
+    auto eigenvalues = eigensolver.eigenvalues();
+    for (int i = 0; i < 2; ++i) {
+        EXPECT_GE(eigenvalues(i), -1e-10) << "2D Covariance should be PSD";
+    }
+
+    std::cout << "2D Covariance matrix:\n" << result.positionCovariance << std::endl;
+    std::cout << "Eigenvalues: " << eigenvalues.transpose() << std::endl;
+}
+
+TEST_F(TDOANewtonRaphsonTest, CovarianceWithPoorGeometry) {
+    std::cout << "\nTesting covariance with challenging geometry..." << std::endl;
+
+    tdoa_estimator::DynVector truePosition(3);
+    truePosition << 0.0, 0.0, 0.0;  // Position at origin
+
+    // Collinear anchors - challenging geometry
+    tdoa_estimator::PosMatrix anchors(4, 3);
+    anchors << -5.0, 0.0, 0.0,
+               -2.5, 0.0, 0.0,
+               2.5, 0.0, 0.0,
+               5.0, 0.0, 0.0;
+
+    std::vector<std::pair<int, int>> measurementAnchorIds = {
+        {0, 1}, {1, 2}, {2, 3}
+    };
+
+    auto [anchorPositionsLeft, anchorPositionsRight, tdoas] =
+        calculateTrueTDOAs(anchors, measurementAnchorIds, truePosition);
+
+    tdoa_estimator::DynVector initialGuess = calculateInitialGuess(anchors);
+
+    auto result = tdoa_estimator::newtonRaphson(
+        anchorPositionsLeft, anchorPositionsRight, tdoas, initialGuess, 10);
+
+    // With Tikhonov regularization, we should still get a valid covariance
+    // (though with large variances in poorly constrained directions)
+    std::cout << "Converged: " << result.converged << std::endl;
+    std::cout << "Valid: " << result.valid << std::endl;
+    std::cout << "Covariance valid: " << result.covarianceValid << std::endl;
+    std::cout << "Covariance matrix:\n" << result.positionCovariance << std::endl;
+
+    // If converged and valid, covariance should be computed
+    // (regularization should handle the ill-conditioned case)
+    if (result.converged && result.valid) {
+        // Y and Z directions should have much larger variance than X
+        // due to collinear anchor geometry
+        std::cout << "Var(X): " << result.positionCovariance(0, 0) << std::endl;
+        std::cout << "Var(Y): " << result.positionCovariance(1, 1) << std::endl;
+        std::cout << "Var(Z): " << result.positionCovariance(2, 2) << std::endl;
+    }
 }
 
 #ifndef ARDUINO
