@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <iostream>
+#include <optional>
+#include <array>
 
 #include <etl/set.h>
 
@@ -16,6 +18,7 @@
 #include "scheduler.hpp"
 #include "app.hpp"
 #include "bsp/board.hpp"
+#include "uwb_frontend_littlefs.hpp"
 
 static void txCallback(dwDevice_t *dev);
 static void rxCallback(dwDevice_t *dev);
@@ -366,6 +369,14 @@ static void estimatorProcess() {
             bool is_valid_estimate = false;
             double solution_rmse = 0.0;
 
+            // Covariance to pass to App layer
+            std::optional<std::array<float, 6>> position_covariance = std::nullopt;
+
+            // Get configurable parameters
+            const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
+            const double rmseThreshold = static_cast<double>(uwbParams.rmseThreshold);
+            const bool enableCovMatrix = uwbParams.enableCovMatrix != 0;
+
             if (USE_2D_ESTIMATOR) {
                 // Prepare inputs for 2D estimator
                 tdoa_estimator::PosVector2D initial_guess_2d = current_estimate_3d.head<2>();
@@ -379,7 +390,9 @@ static void estimatorProcess() {
                     tdoas,
                     initial_guess_2d,
                     fixed_z_for_estimation,
-                    NUM_ITERATIONS
+                    NUM_ITERATIONS,
+                    1e-4,  // convergenceThreshold (default)
+                    rmseThreshold
                 );
 
                 if (result.valid) {
@@ -388,6 +401,18 @@ static void estimatorProcess() {
                     // Z component remains unchanged from the previous state in 2D mode
                     is_valid_estimate = true;
                     solution_rmse = result.rmse;
+
+                    // Extract covariance if valid and enabled
+                    if (enableCovMatrix && result.covarianceValid) {
+                        position_covariance = std::array<float, 6>{
+                            static_cast<float>(result.positionCovariance(0, 0)),  // var_x
+                            static_cast<float>(result.positionCovariance(0, 1)),  // cov_xy
+                            0.0f,                                                   // cov_xz (no Z correlation in 2D)
+                            static_cast<float>(result.positionCovariance(1, 1)),  // var_y
+                            0.0f,                                                   // cov_yz (no Z correlation in 2D)
+                            100.0f                                                  // var_z (large uncertainty, Z is fixed)
+                        };
+                    }
                 }
 
                 uint64_t estimation_end_time = millis();
@@ -405,7 +430,9 @@ static void estimatorProcess() {
                     anchors_right,
                     tdoas,
                     initial_guess_3d,
-                    NUM_ITERATIONS
+                    NUM_ITERATIONS,
+                    1e-4,  // convergenceThreshold (default)
+                    rmseThreshold
                 );
 
                 if (result.valid) {
@@ -413,6 +440,18 @@ static void estimatorProcess() {
                     current_estimate_3d = result.position;
                     is_valid_estimate = true;
                     solution_rmse = result.rmse;
+
+                    // Extract covariance if valid and enabled
+                    if (enableCovMatrix && result.covarianceValid) {
+                        position_covariance = std::array<float, 6>{
+                            static_cast<float>(result.positionCovariance(0, 0)),  // var_x
+                            static_cast<float>(result.positionCovariance(0, 1)),  // cov_xy
+                            static_cast<float>(result.positionCovariance(0, 2)),  // cov_xz
+                            static_cast<float>(result.positionCovariance(1, 1)),  // var_y
+                            static_cast<float>(result.positionCovariance(1, 2)),  // cov_yz
+                            static_cast<float>(result.positionCovariance(2, 2))   // var_z
+                        };
+                    }
                 }
 
                 uint64_t estimation_end_time = millis();
@@ -421,12 +460,10 @@ static void estimatorProcess() {
                 //              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), result.rmse, duration);
             }
 
-            // --- Send Data to Application --- 
+            // --- Send Data to Application ---
             bool has_nan = current_estimate_3d.hasNaN();
             if (is_valid_estimate && !has_nan) { // Only send if the estimate is valid
-                // Convert RMSE to centimeters, clamped to reasonable range [5cm, 200cm]
-                uint16_t error_cm = static_cast<uint16_t>(std::clamp(solution_rmse * 100.0, 5.0, 200.0));
-                App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), error_cm); 
+                App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), position_covariance);
 
                 // Update the persistent state for the next iteration (Warm Start)
                 last_position = current_estimate_3d;

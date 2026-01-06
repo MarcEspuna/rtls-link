@@ -1,4 +1,5 @@
 #include "tdoa_estimator.hpp"
+#include <Eigen/LU>  // For .inverse() in calculateGDOP3D
 
 /**
  * Estimates 3D position using Time Difference of Arrival (TDoA) measurements through gradient descent.

@@ -87,7 +87,9 @@ public:
         PARAM_DEF(UWBParams, rfForwardEnable),
         PARAM_DEF(UWBParams, rfForwardSensorId),
         PARAM_DEF(UWBParams, rfForwardOrientation),
-        PARAM_DEF(UWBParams, rfForwardPreserveSrcIds)
+        PARAM_DEF(UWBParams, rfForwardPreserveSrcIds),
+        PARAM_DEF(UWBParams, enableCovMatrix),
+        PARAM_DEF(UWBParams, rmseThreshold)
     };
 };
 
