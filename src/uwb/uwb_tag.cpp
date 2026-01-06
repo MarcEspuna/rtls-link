@@ -191,7 +191,7 @@ static void newRange()
     // Here we should send data through uart to ardupilot
     uint32_t now = millis();
     if (now - last_pos_timestamp > 500  || !started ) {
-      App::SendSample(current_tag_position(0), current_tag_position(1), 0.0f, 20); // Hardcode error for now (Added a fixed concervative)
+      App::SendSample(current_tag_position(0), current_tag_position(1), 0.0f);  // TWR mode: no covariance
       last_pos_timestamp = now;
     }
 
