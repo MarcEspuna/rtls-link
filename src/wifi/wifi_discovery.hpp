@@ -18,6 +18,10 @@ struct DeviceTelemetry {
     bool origin_sent = false;   // True if GPS origin sent to ArduPilot
     bool rf_enabled = false;    // True if zCalcMode == RANGEFINDER
     bool rf_healthy = false;    // True if receiving non-stale rangefinder data
+    // Update rate statistics (centi-Hz for 0.01 Hz precision without floats)
+    uint16_t avg_rate_cHz = 0;  // Average update rate in centi-Hz (e.g., 1000 = 10.0 Hz)
+    uint16_t min_rate_cHz = 0;  // Min rate in last 5s window
+    uint16_t max_rate_cHz = 0;  // Max rate in last 5s window
 };
 
 using TelemetryCallback = etl::delegate<DeviceTelemetry()>;

@@ -29,6 +29,11 @@ static DeviceTelemetry GetDeviceTelemetry() {
     t.rf_enabled = App::IsRangefinderEnabled();
     t.rf_healthy = App::IsRangefinderHealthy();
 
+    // Update rate statistics (for tags)
+    t.avg_rate_cHz = App::GetAvgUpdateRateCHz();
+    t.min_rate_cHz = App::GetMinRateCHz();
+    t.max_rate_cHz = App::GetMaxRateCHz();
+
     return t;
 }
 

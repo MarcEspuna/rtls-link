@@ -314,6 +314,133 @@ bool App::IsRangefinderHealthy() {
   return (millis() - app.last_rangefinder_timestamp_ms_) <= kRangefinderStaleTimeoutMs;
 }
 
+// --- Update rate tracking ---
+void App::RecordSampleTimestamp() {
+  uint64_t now = millis();
+  sample_timestamps_[sample_timestamps_index_] = now;
+  sample_timestamps_index_ = (sample_timestamps_index_ + 1) % kRateWindowSize;
+  if (sample_timestamps_count_ < kRateWindowSize) {
+    sample_timestamps_count_++;
+  }
+}
+
+void App::CalculateRateStatistics() {
+  uint64_t now = millis();
+
+  // Only recalculate every 500ms to reduce overhead
+  if (now - last_rate_calc_ms_ < 500) {
+    return;
+  }
+  last_rate_calc_ms_ = now;
+
+  // Need at least 2 samples to calculate rate
+  if (sample_timestamps_count_ < 2) {
+    cached_avg_rate_cHz_ = 0;
+    cached_min_rate_cHz_ = 0;
+    cached_max_rate_cHz_ = 0;
+    return;
+  }
+
+  // Collect timestamps within the 5-second window
+  uint64_t window_start = (now > kRateWindowDurationMs) ? (now - kRateWindowDurationMs) : 0;
+
+  // Count samples in window and find time range
+  uint32_t samples_in_window = 0;
+  uint64_t oldest_in_window = now;
+  uint64_t newest_in_window = 0;
+
+  // Track inter-sample intervals for min/max rate
+  uint64_t min_interval_ms = UINT64_MAX;
+  uint64_t max_interval_ms = 0;
+  uint64_t prev_ts = 0;
+
+  // Iterate through all stored timestamps
+  for (size_t i = 0; i < sample_timestamps_count_; i++) {
+    uint64_t ts = sample_timestamps_[i];
+    if (ts >= window_start && ts <= now) {
+      samples_in_window++;
+      if (ts < oldest_in_window) oldest_in_window = ts;
+      if (ts > newest_in_window) newest_in_window = ts;
+    }
+  }
+
+  // Calculate average rate
+  if (samples_in_window >= 2 && newest_in_window > oldest_in_window) {
+    uint64_t duration_ms = newest_in_window - oldest_in_window;
+    // rate = (samples - 1) / duration_seconds
+    // rate_cHz = (samples - 1) * 100000 / duration_ms
+    cached_avg_rate_cHz_ = static_cast<uint16_t>(
+        ((samples_in_window - 1) * 100000ULL) / duration_ms);
+  } else {
+    cached_avg_rate_cHz_ = 0;
+  }
+
+  // For min/max, collect sorted timestamps and compute intervals
+  // Simple approach: find min/max intervals from consecutive samples
+  // First, collect and sort timestamps in window
+  uint64_t sorted_ts[kRateWindowSize];
+  size_t sorted_count = 0;
+  for (size_t i = 0; i < sample_timestamps_count_; i++) {
+    uint64_t ts = sample_timestamps_[i];
+    if (ts >= window_start && ts <= now) {
+      sorted_ts[sorted_count++] = ts;
+    }
+  }
+
+  // Simple insertion sort (small array)
+  for (size_t i = 1; i < sorted_count; i++) {
+    uint64_t key = sorted_ts[i];
+    int j = i - 1;
+    while (j >= 0 && sorted_ts[j] > key) {
+      sorted_ts[j + 1] = sorted_ts[j];
+      j--;
+    }
+    sorted_ts[j + 1] = key;
+  }
+
+  // Compute min/max intervals
+  if (sorted_count >= 2) {
+    for (size_t i = 1; i < sorted_count; i++) {
+      uint64_t interval = sorted_ts[i] - sorted_ts[i - 1];
+      if (interval > 0) {  // Ignore zero intervals (duplicate timestamps)
+        if (interval < min_interval_ms) min_interval_ms = interval;
+        if (interval > max_interval_ms) max_interval_ms = interval;
+      }
+    }
+
+    // Convert intervals to rates (rate = 1/interval)
+    // min_interval -> max_rate, max_interval -> min_rate
+    if (min_interval_ms > 0 && min_interval_ms < UINT64_MAX) {
+      cached_max_rate_cHz_ = static_cast<uint16_t>(100000ULL / min_interval_ms);
+    } else {
+      cached_max_rate_cHz_ = 0;
+    }
+    if (max_interval_ms > 0) {
+      cached_min_rate_cHz_ = static_cast<uint16_t>(100000ULL / max_interval_ms);
+    } else {
+      cached_min_rate_cHz_ = 0;
+    }
+  } else {
+    cached_min_rate_cHz_ = 0;
+    cached_max_rate_cHz_ = 0;
+  }
+}
+
+uint16_t App::GetAvgUpdateRateCHz() {
+  app.CalculateRateStatistics();
+  return app.cached_avg_rate_cHz_;
+}
+
+uint16_t App::GetMinRateCHz() {
+  app.CalculateRateStatistics();
+  return app.cached_min_rate_cHz_;
+}
+
+uint16_t App::GetMaxRateCHz() {
+  app.CalculateRateStatistics();
+  return app.cached_max_rate_cHz_;
+}
+
 /**
  * @brief Rotates a 3x3 position covariance matrix by yaw angle
  *
@@ -452,6 +579,7 @@ void App::SendSample(float x_m, float y_m, float z_m,
           0, 0, 0);
     }
     app.last_sample_timestamp_ms_ = millis();
+    app.RecordSampleTimestamp();  // Track for rate statistics
   }
   #endif
 }

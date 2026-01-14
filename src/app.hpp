@@ -61,6 +61,11 @@ public:
     static bool IsRangefinderEnabled(); // True if zCalcMode == RANGEFINDER
     static bool IsRangefinderHealthy(); // True if receiving non-stale rangefinder data
 
+    // Update rate statistics (centi-Hz for 0.01 Hz precision)
+    static uint16_t GetAvgUpdateRateCHz();  // Average rate over recent samples
+    static uint16_t GetMinRateCHz();        // Min rate in 5s window
+    static uint16_t GetMaxRateCHz();        // Max rate in 5s window
+
     // Get Z coordinate from rangefinder (returns NAN if not using rangefinder mode)
     static float GetRangefinderZ();
 
@@ -82,6 +87,20 @@ private:
     bool rangefinder_ever_received_ = false;
     uint64_t last_rangefinder_log_ms_ = 0;
     uint32_t rf_forward_fail_count_ = 0;  // Consecutive forwarding failures
+
+    // Update rate tracking
+    static constexpr size_t kRateWindowSize = 50;  // Store last N timestamps for rate calculation
+    static constexpr uint64_t kRateWindowDurationMs = 5000;  // 5 second window
+    uint64_t sample_timestamps_[kRateWindowSize] = {0};
+    size_t sample_timestamps_index_ = 0;
+    size_t sample_timestamps_count_ = 0;
+    uint16_t cached_avg_rate_cHz_ = 0;
+    uint16_t cached_min_rate_cHz_ = 0;
+    uint16_t cached_max_rate_cHz_ = 0;
+    uint64_t last_rate_calc_ms_ = 0;
+
+    void RecordSampleTimestamp();
+    void CalculateRateStatistics();
 
 private:
     static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 8 seconds healthy device, send global origin position
