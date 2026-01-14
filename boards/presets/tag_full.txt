@@ -1,0 +1,49 @@
+; =============================================================================
+; tag_full.txt - Full-Featured TDoA Tag Build
+; =============================================================================
+; Target: ESP32S3 Konex UWB
+; Use case: Drone-mounted tag with all telemetry features
+;
+; Features:
+;   - Full WiFi stack for configuration and debugging
+;   - Full MAVLink stack for ArduPilot integration
+;   - Full console with all management features
+;   - TDoA tag mode with calibration support
+;   - Rangefinder support (ESP32S3)
+;   - Status LED and rate statistics
+;
+; This is the maximum feature build for drone integration.
+;
+; To use: Copy contents to user_defines.txt and rebuild
+; =============================================================================
+
+; Full WiFi stack
+-D USE_WIFI
+-D USE_WIFI_WEBSERVER
+-D USE_WIFI_TCP_LOGGING
+-D USE_WIFI_UART_BRIDGE
+-D USE_WIFI_DISCOVERY
+-D USE_WIFI_MDNS
+
+; Full MAVLink stack for ArduPilot
+-D USE_MAVLINK
+-D USE_MAVLINK_POSITION
+-D USE_MAVLINK_HEARTBEAT
+-D USE_MAVLINK_ORIGIN
+-D USE_MAVLINK_COVARIANCE
+-D USE_MAVLINK_RANGEFINDER
+
+; Full console
+-D USE_CONSOLE
+-D USE_CONSOLE_PARAM_RW
+-D USE_CONSOLE_CONFIG_MGMT
+-D USE_CONSOLE_UWB_CONTROL
+-D USE_CONSOLE_LED_CONTROL
+
+; TDoA tag + calibration
+-D USE_UWB_MODE_TDOA_TAG
+-D USE_UWB_CALIBRATION
+
+; All extras
+-D USE_STATUS_LED_TASK
+-D USE_RATE_STATISTICS

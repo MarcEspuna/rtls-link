@@ -1,0 +1,34 @@
+; =============================================================================
+; anchor_minimal.txt - Minimal TDoA Anchor Build
+; =============================================================================
+; Target: ESP32 Makerfabs (limited flash)
+; Use case: Fixed anchor stations, WiFi configuration only
+;
+; Features:
+;   - WiFi web server for configuration
+;   - WiFi discovery service
+;   - Basic console for parameter access
+;   - TDoA anchor mode only
+;
+; Stripped features:
+;   - MAVLink output (not needed for anchors)
+;   - Beacon protocol
+;   - All tag modes (TWR/TDoA)
+;   - Calibration mode
+;   - Rate statistics
+;   - Status LED task
+;
+; To use: Copy contents to user_defines.txt and rebuild
+; =============================================================================
+
+; WiFi for configuration only
+-D USE_WIFI
+-D USE_WIFI_WEBSERVER
+-D USE_WIFI_DISCOVERY
+
+; Basic console for debugging and parameter access
+-D USE_CONSOLE
+-D USE_CONSOLE_PARAM_RW
+
+; TDoA anchor mode only
+-D USE_UWB_MODE_TDOA_ANCHOR
