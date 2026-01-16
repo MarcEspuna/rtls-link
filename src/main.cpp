@@ -1,16 +1,26 @@
 #include <Arduino.h>
 
+#include "config/features.hpp"  // MUST be first project include
+
 #include "bsp/board.hpp"
 
 #include "app.hpp"
 #include "scheduler.hpp"
 
 #include "uwb/uwb_frontend_littlefs.hpp"
-#include "wifi/wifi_frontend_littlefs.hpp"
-#include "bcn_konex/beacon_protocool.hpp"
 
+#ifdef USE_WIFI
+#include "wifi/wifi_frontend_littlefs.hpp"
+#endif
+
+#ifdef USE_BEACON_PROTOCOL
+#include "bcn_konex/beacon_protocool.hpp"
+#endif
+
+#ifdef USE_CONSOLE
 #include "console/console.hpp"
 #include "command_handler/command_handler.hpp"
+#endif
 
 #include "esp_task_wdt.h" // For Task Watchdog Timer
 
@@ -33,35 +43,39 @@ static StaticTaskHolder<etl::delegate<void()>, 8192> application_task = {
   {}
 };
 
+#ifdef USE_WIFI
 // Wifi task holder
 static StaticTaskHolder<etl::delegate<void()>, 8192> wifi_task = {
   "WifiTask",
-  50,                // 50Hz         
+  50,                // 50Hz
   1,                 // Priority
   etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::Update>(),
   {},
   {}
 };
+#endif // USE_WIFI
 
+#ifdef USE_CONSOLE
 static StaticTaskHolder<etl::delegate<void()>, 8192> console_task = {
   "ConsoleTask",
-  50,                // 50Hz for console refresh rate        
+  50,                // 50Hz for console refresh rate
   1,                 // Priority
   etl::delegate<void()>::create<Console, Console::s_Console, &Console::Update>(),
   {},
   {}
 };
+#endif // USE_CONSOLE
 
-#if STATUS_TASK == ENABLE
+#if defined(USE_STATUS_LED_TASK) && defined(BOARD_HAS_LED)
 static StaticTaskHolder<etl::delegate<void()>, 8192> status_led_task = {
   "StatusLedTask",
-  5,                // 10Hz for status led refresh rate        
+  5,                // 5Hz for status led refresh rate
   1,                 // Priority
   etl::delegate<void()>::create<App, app, &App::StatusLedTask>(),
   {},
   {}
 };
-#endif
+#endif // USE_STATUS_LED_TASK && BOARD_HAS_LED
 
 
 void setup() {
@@ -99,33 +113,36 @@ void setup() {
     Front::InitFrontends();
 
     /**
-     * @brief Initialize command handler 
-     * 
+     * @brief Initialize command handler and console
      */
+#ifdef USE_CONSOLE
     CommandHandler::Init();
 
-    /**
-     * Initialize console
-     */
 #if defined(MAKERFABS_ESP32_BOARD)
-    Serial.flush(); // THis is done because if USB CDC is used it actually blocks until read is finished
+    Serial.flush(); // This is done because if USB CDC is used it actually blocks until read is finished
 #endif
-    Serial.begin(115200); // THis is due to S3
+    Serial.begin(115200);
     Console::s_Console.Init();
+#endif // USE_CONSOLE
 
     esp_task_wdt_init(0xFFFF, false);  // Disable task watchdog
-    // Disable the wdt for now
 
     /**
-     * Instantiate tasks
+     * Instantiate tasks based on enabled features
      */
     Scheduler::scheduler.CreateStaticTask(application_task);
-    Scheduler::scheduler.CreateStaticTask(wifi_task);
-    Scheduler::scheduler.CreateStaticTask(console_task);
 
-    #if STATUS_TASK == ENABLE
+#ifdef USE_WIFI
+    Scheduler::scheduler.CreateStaticTask(wifi_task);
+#endif
+
+#ifdef USE_CONSOLE
+    Scheduler::scheduler.CreateStaticTask(console_task);
+#endif
+
+#if defined(USE_STATUS_LED_TASK) && defined(BOARD_HAS_LED)
     Scheduler::scheduler.CreateStaticTask(status_led_task);
-    #endif
+#endif
 }
 
 

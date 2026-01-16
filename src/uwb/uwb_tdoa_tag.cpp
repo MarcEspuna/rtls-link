@@ -1,3 +1,5 @@
+#include "config/features.hpp"  // MUST be first project include
+
 #include <Eigen.h>
 
 #include <algorithm>
@@ -128,7 +130,8 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
         } 
     }
 
-    // --- Echo anchor positions to the App --- 
+#ifdef USE_BEACON_PROTOCOL
+    // --- Echo anchor positions to the App (for beacon protocol) ---
     etl::array<double, 12> anchors_to_echo = {};
     // Fill the anchor positions from id 0 up to 3 (max 4 anchors for echoing)
     for (uint32_t i = 0; i < anchor_positions.size() && i < anchors_to_echo.size()/3 ; i++) {
@@ -136,14 +139,15 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
         anchors_to_echo[i*3 + 1] = anchor_positions[i].y;
         anchors_to_echo[i*3 + 2] = anchor_positions[i].z;
     }
-    // --- Logging --- 
+    // --- Logging ---
     Serial.println("[App LOG] Echoing Anchor Positions:");
     for (uint32_t i = 0; i < anchors_to_echo.size() / 3; ++i) {
-        Serial.printf("  Anchor %d: X=%.2f, Y=%.2f, Z=%.2f\n", 
+        Serial.printf("  Anchor %d: X=%.2f, Y=%.2f, Z=%.2f\n",
                       i, anchors_to_echo[i*3], anchors_to_echo[i*3+1], anchors_to_echo[i*3+2]);
     }
     // ---------------
     App::AnchorsToEcho(anchors_to_echo);
+#endif
     // --------------------------------------
 
     // Spi pins already setup on uwb_backend
