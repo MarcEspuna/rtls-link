@@ -19,6 +19,8 @@
 #include <cmath> // For sin and cos functions
 #include <optional>
 #include <array>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #ifdef HAS_RANGEFINDER
 // Forward declaration for rangefinder sensor
@@ -122,6 +124,7 @@ private:
     // Update rate tracking
     static constexpr size_t kRateWindowSize = 50;  // Store last N timestamps for rate calculation
     static constexpr uint64_t kRateWindowDurationMs = 5000;  // 5 second window
+    static constexpr uint16_t kMaxRateCHz = 65535;  // Max value for uint16_t centi-Hz
     uint64_t sample_timestamps_[kRateWindowSize] = {0};
     size_t sample_timestamps_index_ = 0;
     size_t sample_timestamps_count_ = 0;
@@ -129,6 +132,7 @@ private:
     uint16_t cached_min_rate_cHz_ = 0;
     uint16_t cached_max_rate_cHz_ = 0;
     uint64_t last_rate_calc_ms_ = 0;
+    SemaphoreHandle_t rate_stats_mutex_ = nullptr;  // Mutex for thread-safe rate statistics access
 
     void RecordSampleTimestamp();
     void CalculateRateStatistics();

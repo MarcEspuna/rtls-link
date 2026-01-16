@@ -58,6 +58,9 @@ void App::Init()
   // Initialize timestamp
   device_unhealthy_timestamp_ms_ = millis();
 
+  // Initialize mutex for rate statistics thread safety
+  rate_stats_mutex_ = xSemaphoreCreateMutex();
+
 #if defined(USE_STATUS_LED_TASK) && defined(BOARD_HAS_LED)
   printf("------ Status task enabled ------\n");
   pinMode(bsp::kBoardConfig.led_pin, OUTPUT);
@@ -328,21 +331,35 @@ bool App::IsOriginSent() {
 #ifdef USE_RATE_STATISTICS
 // --- Update rate tracking ---
 void App::RecordSampleTimestamp() {
-  uint64_t now = millis();
-  sample_timestamps_[sample_timestamps_index_] = now;
-  sample_timestamps_index_ = (sample_timestamps_index_ + 1) % kRateWindowSize;
-  if (sample_timestamps_count_ < kRateWindowSize) {
-    sample_timestamps_count_++;
+  if (rate_stats_mutex_ == nullptr) return;
+
+  if (xSemaphoreTake(rate_stats_mutex_, pdMS_TO_TICKS(1)) == pdTRUE) {
+    uint64_t now = millis();
+    sample_timestamps_[sample_timestamps_index_] = now;
+    sample_timestamps_index_ = (sample_timestamps_index_ + 1) % kRateWindowSize;
+    if (sample_timestamps_count_ < kRateWindowSize) {
+      sample_timestamps_count_++;
+    }
+    xSemaphoreGive(rate_stats_mutex_);
   }
 }
 
 void App::CalculateRateStatistics() {
+  if (rate_stats_mutex_ == nullptr) return;
+
   uint64_t now = millis();
 
   // Only recalculate every 500ms to reduce overhead
   if (now - last_rate_calc_ms_ < 500) {
     return;
   }
+
+  // Acquire mutex for thread-safe access to sample_timestamps_
+  if (xSemaphoreTake(rate_stats_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+    return;  // Could not acquire mutex, skip this calculation (don't update throttle)
+  }
+
+  // Update throttle timestamp only after successful mutex acquisition
   last_rate_calc_ms_ = now;
 
   // Need at least 2 samples to calculate rate
@@ -350,6 +367,7 @@ void App::CalculateRateStatistics() {
     cached_avg_rate_cHz_ = 0;
     cached_min_rate_cHz_ = 0;
     cached_max_rate_cHz_ = 0;
+    xSemaphoreGive(rate_stats_mutex_);
     return;
   }
 
@@ -371,13 +389,18 @@ void App::CalculateRateStatistics() {
     }
   }
 
-  // Calculate average rate
+  // Use local variables to calculate all rates, then update cached values atomically
+  uint16_t new_avg_rate = 0;
+  uint16_t new_min_rate = 0;
+  uint16_t new_max_rate = 0;
+
+  // Calculate average rate with overflow protection
   if (samples_in_window >= 2 && newest_in_window > oldest_in_window) {
     uint64_t duration_ms = newest_in_window - oldest_in_window;
-    cached_avg_rate_cHz_ = static_cast<uint16_t>(
-        ((samples_in_window - 1) * 100000ULL) / duration_ms);
-  } else {
-    cached_avg_rate_cHz_ = 0;
+    // rate = (samples - 1) / duration_seconds
+    // rate_cHz = (samples - 1) * 100000 / duration_ms
+    uint64_t rate = ((samples_in_window - 1) * 100000ULL) / duration_ms;
+    new_avg_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
   }
 
   // For min/max, collect sorted timestamps and compute intervals
@@ -389,6 +412,9 @@ void App::CalculateRateStatistics() {
       sorted_ts[sorted_count++] = ts;
     }
   }
+
+  // Release mutex after copying data - sorting and rate calculation can proceed without it
+  xSemaphoreGive(rate_stats_mutex_);
 
   // Simple insertion sort (small array)
   for (size_t i = 1; i < sorted_count; i++) {
@@ -413,20 +439,22 @@ void App::CalculateRateStatistics() {
       }
     }
 
+    // Convert intervals to rates (rate = 1/interval) with overflow protection
+    // min_interval -> max_rate, max_interval -> min_rate
     if (min_interval_ms > 0 && min_interval_ms < UINT64_MAX) {
-      cached_max_rate_cHz_ = static_cast<uint16_t>(100000ULL / min_interval_ms);
-    } else {
-      cached_max_rate_cHz_ = 0;
+      uint64_t rate = 100000ULL / min_interval_ms;
+      new_max_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
     }
     if (max_interval_ms > 0) {
-      cached_min_rate_cHz_ = static_cast<uint16_t>(100000ULL / max_interval_ms);
-    } else {
-      cached_min_rate_cHz_ = 0;
+      uint64_t rate = 100000ULL / max_interval_ms;
+      new_min_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
     }
-  } else {
-    cached_min_rate_cHz_ = 0;
-    cached_max_rate_cHz_ = 0;
   }
+
+  // Update all cached values together to ensure consistency for readers
+  cached_avg_rate_cHz_ = new_avg_rate;
+  cached_min_rate_cHz_ = new_min_rate;
+  cached_max_rate_cHz_ = new_max_rate;
 }
 
 uint16_t App::GetAvgUpdateRateCHz() {
