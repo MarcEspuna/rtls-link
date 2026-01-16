@@ -1,0 +1,70 @@
+; =============================================================================
+; user_defines.txt - RTLS-Link Feature Configuration
+; =============================================================================
+;
+; This file controls which features are compiled into the firmware.
+; Comment out lines with ';' or '#' to disable features.
+;
+; After making changes, rebuild with: pio run -e <target>
+;
+; For preset configurations, see boards/presets/
+;   - anchor_minimal.txt   : Minimal ESP32 anchor (WiFi config + TDoA)
+;   - anchor_standard.txt  : Standard anchor with full management
+;   - tag_full.txt         : Full-featured TDoA tag
+;
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; WIFI SUBSYSTEM
+; Required for web configuration and network features
+; -----------------------------------------------------------------------------
+-D USE_WIFI
+-D USE_WIFI_WEBSERVER           ; Web configuration UI
+-D USE_WIFI_TCP_LOGGING         ; TCP debug logging server
+-D USE_WIFI_UART_BRIDGE         ; UART-to-UDP bridge
+-D USE_WIFI_DISCOVERY           ; UDP discovery service
+-D USE_WIFI_MDNS                ; mDNS service discovery
+
+; -----------------------------------------------------------------------------
+; MAVLINK OUTPUT PROTOCOL
+; Used for communication with ArduPilot/PX4 flight controllers
+; NOTE: Mutually exclusive with USE_BEACON_PROTOCOL
+; -----------------------------------------------------------------------------
+-D USE_MAVLINK
+-D USE_MAVLINK_POSITION         ; VISION_POSITION_ESTIMATE messages
+-D USE_MAVLINK_HEARTBEAT        ; Heartbeat send/receive
+-D USE_MAVLINK_ORIGIN           ; SET_GPS_GLOBAL_ORIGIN
+-D USE_MAVLINK_COVARIANCE       ; Position covariance matrix
+; -D USE_MAVLINK_RANGEFINDER    ; Distance sensor forwarding (ESP32S3 only)
+
+; -----------------------------------------------------------------------------
+; ALTERNATIVE: BEACON PROTOCOL (Konex proprietary)
+; NOTE: Mutually exclusive with USE_MAVLINK - uncomment only one
+; -----------------------------------------------------------------------------
+; -D USE_BEACON_PROTOCOL
+
+; -----------------------------------------------------------------------------
+; UWB OPERATIONAL MODES
+; Enable only the modes you need to save flash space
+; -----------------------------------------------------------------------------
+-D USE_UWB_MODE_TWR_ANCHOR      ; Two-Way Ranging anchor mode
+-D USE_UWB_MODE_TWR_TAG         ; Two-Way Ranging tag mode
+-D USE_UWB_MODE_TDOA_ANCHOR     ; Time Difference of Arrival anchor mode
+-D USE_UWB_MODE_TDOA_TAG        ; Time Difference of Arrival tag mode
+-D USE_UWB_CALIBRATION          ; Antenna delay calibration mode
+
+; -----------------------------------------------------------------------------
+; CONSOLE / CLI
+; Serial command interface for configuration and debugging
+; -----------------------------------------------------------------------------
+-D USE_CONSOLE
+-D USE_CONSOLE_PARAM_RW         ; read/write/readall parameter commands
+-D USE_CONSOLE_CONFIG_MGMT      ; save-config/load-config/backup commands
+-D USE_CONSOLE_UWB_CONTROL      ; start/calibrate UWB commands
+-D USE_CONSOLE_LED_CONTROL      ; LED control commands (if board supports)
+
+; -----------------------------------------------------------------------------
+; MISCELLANEOUS FEATURES
+; -----------------------------------------------------------------------------
+-D USE_STATUS_LED_TASK          ; Status LED blink task (board-dependent)
+-D USE_RATE_STATISTICS          ; Position update rate tracking

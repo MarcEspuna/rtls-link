@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include "uwb_tdoa_anchor.hpp"
+#include "uwb_frontend_littlefs.hpp"
 
 #include "FunctionalInterrupt.h"
 
@@ -14,6 +15,51 @@ static void txCallback(dwDevice_t *dev);
 static void rxCallback(dwDevice_t *dev);
 static void rxTimeoutCallback(dwDevice_t *dev);
 static void rxFailedCallback(dwDevice_t *dev);
+
+// Helper function to get DW1000 mode array by index
+static const uint8_t* getDwModeByIndex(uint8_t idx) {
+    switch(idx) {
+        case 0: return MODE_SHORTDATA_FAST_ACCURACY;   // 6.8Mb/s, 64MHz PRF, 128 preamble (DEFAULT)
+        case 1: return MODE_LONGDATA_FAST_ACCURACY;    // 6.8Mb/s, 64MHz PRF, 1024 preamble
+        case 2: return MODE_SHORTDATA_FAST_LOWPOWER;   // 6.8Mb/s, 16MHz PRF, 128 preamble
+        case 3: return MODE_LONGDATA_FAST_LOWPOWER;    // 6.8Mb/s, 16MHz PRF, 1024 preamble
+        case 4: return MODE_SHORTDATA_MID_ACCURACY;    // 850kb/s, 64MHz PRF, 128 preamble
+        case 5: return MODE_LONGDATA_MID_ACCURACY;     // 850kb/s, 64MHz PRF, 1024 preamble
+        case 6: return MODE_LONGDATA_RANGE_ACCURACY;   // 110kb/s, 64MHz PRF, 2048 preamble
+        case 7: return MODE_LONGDATA_RANGE_LOWPOWER;   // 110kb/s, 16MHz PRF, 2048 preamble
+        default: return MODE_SHORTDATA_FAST_ACCURACY;
+    }
+}
+
+// Helper function to check if mode uses 64MHz PRF (for preamble code selection)
+static bool isDwMode64MHzPRF(uint8_t idx) {
+    // Modes 2, 3, 7 use 16MHz PRF; others use 64MHz PRF
+    return (idx != 2 && idx != 3 && idx != 7);
+}
+
+// Helper function to apply TX power settings
+static void applyTxPower(dwDevice_t* dev, uint8_t powerLevel, uint8_t smartPowerEnable) {
+    if (smartPowerEnable) {
+        dwUseSmartPower(dev, true);
+    } else {
+        dwUseSmartPower(dev, false);
+        switch(powerLevel) {
+            case 0: // Low power
+                dwSetTxPower(dev, 0x07070707ul);
+                break;
+            case 1: // Medium-low
+                dwSetTxPower(dev, 0x0F0F0F0Ful);
+                break;
+            case 2: // Medium-high
+                dwSetTxPower(dev, 0x17171717ul);
+                break;
+            case 3: // High (large power) - default
+            default:
+                dwEnableLargePower(dev);
+                break;
+        }
+    }
+}
 
 static volatile bool isr_flag = false;
 
@@ -47,17 +93,23 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
     dwAttachReceivedHandler(&m_Device, rxCallback);
     dwAttachReceiveTimeoutHandler(&m_Device, rxTimeoutCallback);
     dwAttachReceiveFailedHandler(&m_Device, rxFailedCallback);
-    dwNewConfiguration(&m_Device);  
+    dwNewConfiguration(&m_Device);
     dwSetDefaults(&m_Device);
 
-    const uint8_t* mode = MODE_SHORTDATA_FAST_ACCURACY;
-    dwEnableMode(&m_Device, mode);
-    dwSetChannel(&m_Device, CHANNEL_2);
-    dwSetPreambleCode(&m_Device, PREAMBLE_CODE_64MHZ_9);
+    // Get UWB radio settings from parameters
+    const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
+    const uint8_t* dwMode = getDwModeByIndex(uwbParams.dwMode);
+    dwEnableMode(&m_Device, dwMode);
+    dwSetChannel(&m_Device, uwbParams.channel);
+    // Select preamble code based on PRF (16MHz vs 64MHz)
+    if (isDwMode64MHzPRF(uwbParams.dwMode)) {
+        dwSetPreambleCode(&m_Device, PREAMBLE_CODE_64MHZ_9);
+    } else {
+        dwSetPreambleCode(&m_Device, PREAMBLE_CODE_16MHZ_4);
+    }
 
-    dwEnableLargePower(&m_Device);
-    dwUseSmartPower(&m_Device, false);
-    // dwSetTxPower(&m_Device, 0x1F1F1F1Ful);
+    // Apply TX power settings
+    applyTxPower(&m_Device, uwbParams.txPowerLevel, uwbParams.smartPowerEnable);
 
     dwSetReceiveWaitTimeout(&m_Device, DEFAULT_RX_TIMEOUT);
 

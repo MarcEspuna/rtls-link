@@ -1,3 +1,5 @@
+#include "config/features.hpp"  // MUST be first project include
+
 #include <Eigen.h>
 
 #include <algorithm>
@@ -24,6 +26,51 @@ static void txCallback(dwDevice_t *dev);
 static void rxCallback(dwDevice_t *dev);
 static void rxTimeoutCallback(dwDevice_t *dev);
 static void rxFailedCallback(dwDevice_t *dev);
+
+// Helper function to get DW1000 mode array by index
+static const uint8_t* getDwModeByIndex(uint8_t idx) {
+    switch(idx) {
+        case 0: return MODE_SHORTDATA_FAST_ACCURACY;   // 6.8Mb/s, 64MHz PRF, 128 preamble (DEFAULT)
+        case 1: return MODE_LONGDATA_FAST_ACCURACY;    // 6.8Mb/s, 64MHz PRF, 1024 preamble
+        case 2: return MODE_SHORTDATA_FAST_LOWPOWER;   // 6.8Mb/s, 16MHz PRF, 128 preamble
+        case 3: return MODE_LONGDATA_FAST_LOWPOWER;    // 6.8Mb/s, 16MHz PRF, 1024 preamble
+        case 4: return MODE_SHORTDATA_MID_ACCURACY;    // 850kb/s, 64MHz PRF, 128 preamble
+        case 5: return MODE_LONGDATA_MID_ACCURACY;     // 850kb/s, 64MHz PRF, 1024 preamble
+        case 6: return MODE_LONGDATA_RANGE_ACCURACY;   // 110kb/s, 64MHz PRF, 2048 preamble
+        case 7: return MODE_LONGDATA_RANGE_LOWPOWER;   // 110kb/s, 16MHz PRF, 2048 preamble
+        default: return MODE_SHORTDATA_FAST_ACCURACY;
+    }
+}
+
+// Helper function to check if mode uses 64MHz PRF (for preamble code selection)
+static bool isDwMode64MHzPRF(uint8_t idx) {
+    // Modes 2, 3, 7 use 16MHz PRF; others use 64MHz PRF
+    return (idx != 2 && idx != 3 && idx != 7);
+}
+
+// Helper function to apply TX power settings
+static void applyTxPower(dwDevice_t* dev, uint8_t powerLevel, uint8_t smartPowerEnable) {
+    if (smartPowerEnable) {
+        dwUseSmartPower(dev, true);
+    } else {
+        dwUseSmartPower(dev, false);
+        switch(powerLevel) {
+            case 0: // Low power
+                dwSetTxPower(dev, 0x07070707ul);
+                break;
+            case 1: // Medium-low
+                dwSetTxPower(dev, 0x0F0F0F0Ful);
+                break;
+            case 2: // Medium-high
+                dwSetTxPower(dev, 0x17171717ul);
+                break;
+            case 3: // High (large power) - default
+            default:
+                dwEnableLargePower(dev);
+                break;
+        }
+    }
+}
 
 static void estimatorCallback(tdoaMeasurement_t* tdoa);
 Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
@@ -83,7 +130,8 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
         } 
     }
 
-    // --- Echo anchor positions to the App --- 
+#ifdef USE_BEACON_PROTOCOL
+    // --- Echo anchor positions to the App (for beacon protocol) ---
     etl::array<double, 12> anchors_to_echo = {};
     // Fill the anchor positions from id 0 up to 3 (max 4 anchors for echoing)
     for (uint32_t i = 0; i < anchor_positions.size() && i < anchors_to_echo.size()/3 ; i++) {
@@ -91,14 +139,15 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
         anchors_to_echo[i*3 + 1] = anchor_positions[i].y;
         anchors_to_echo[i*3 + 2] = anchor_positions[i].z;
     }
-    // --- Logging --- 
+    // --- Logging ---
     Serial.println("[App LOG] Echoing Anchor Positions:");
     for (uint32_t i = 0; i < anchors_to_echo.size() / 3; ++i) {
-        Serial.printf("  Anchor %d: X=%.2f, Y=%.2f, Z=%.2f\n", 
+        Serial.printf("  Anchor %d: X=%.2f, Y=%.2f, Z=%.2f\n",
                       i, anchors_to_echo[i*3], anchors_to_echo[i*3+1], anchors_to_echo[i*3+2]);
     }
     // ---------------
     App::AnchorsToEcho(anchors_to_echo);
+#endif
     // --------------------------------------
 
     // Spi pins already setup on uwb_backend
@@ -121,17 +170,23 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     dwAttachReceivedHandler(&m_Device, rxCallback);
     dwAttachReceiveTimeoutHandler(&m_Device, rxTimeoutCallback);
     dwAttachReceiveFailedHandler(&m_Device, rxFailedCallback);
-    dwNewConfiguration(&m_Device);  
+    dwNewConfiguration(&m_Device);
     dwSetDefaults(&m_Device);
 
-    const uint8_t* mode = MODE_SHORTDATA_FAST_ACCURACY;
-    dwEnableMode(&m_Device, mode);
-    dwSetChannel(&m_Device, CHANNEL_2);
-    dwSetPreambleCode(&m_Device, PREAMBLE_CODE_64MHZ_9);
+    // Get UWB radio settings from parameters
+    const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
+    const uint8_t* dwMode = getDwModeByIndex(uwbParams.dwMode);
+    dwEnableMode(&m_Device, dwMode);
+    dwSetChannel(&m_Device, uwbParams.channel);
+    // Select preamble code based on PRF (16MHz vs 64MHz)
+    if (isDwMode64MHzPRF(uwbParams.dwMode)) {
+        dwSetPreambleCode(&m_Device, PREAMBLE_CODE_64MHZ_9);
+    } else {
+        dwSetPreambleCode(&m_Device, PREAMBLE_CODE_16MHZ_4);
+    }
 
-    dwEnableLargePower(&m_Device);
-    dwUseSmartPower(&m_Device, false);
-    // dwSetTxPower(&m_Device, 0x1F1F1F1Ful);
+    // Apply TX power settings
+    applyTxPower(&m_Device, uwbParams.txPowerLevel, uwbParams.smartPowerEnable);
 
     dwSetReceiveWaitTimeout(&m_Device, 10000);
 

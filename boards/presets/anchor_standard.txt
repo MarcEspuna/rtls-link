@@ -1,0 +1,42 @@
+; =============================================================================
+; anchor_standard.txt - Standard TDoA Anchor Build
+; =============================================================================
+; Target: ESP32S3 Konex UWB or ESP32 with sufficient flash
+; Use case: Anchor with full management and calibration capabilities
+;
+; Features:
+;   - Full WiFi stack for configuration
+;   - Full console for parameter and config management
+;   - TDoA anchor mode
+;   - Calibration mode for antenna delay tuning
+;   - Status LED for diagnostics (on supported boards)
+;
+; Stripped features:
+;   - MAVLink output (not needed for anchors)
+;   - Beacon protocol
+;   - All tag modes (TWR/TDoA)
+;   - Rate statistics (only useful for tags)
+;
+; To use: Copy contents to user_defines.txt and rebuild
+; =============================================================================
+
+; Full WiFi stack
+-D USE_WIFI
+-D USE_WIFI_WEBSERVER
+-D USE_WIFI_TCP_LOGGING
+-D USE_WIFI_DISCOVERY
+-D USE_WIFI_MDNS
+
+; Full console with all management features
+-D USE_CONSOLE
+-D USE_CONSOLE_PARAM_RW
+-D USE_CONSOLE_CONFIG_MGMT
+-D USE_CONSOLE_UWB_CONTROL
+-D USE_CONSOLE_LED_CONTROL
+
+; TDoA anchor mode + calibration
+-D USE_UWB_MODE_TDOA_ANCHOR
+-D USE_UWB_CALIBRATION
+
+; Status LED for diagnostics
+-D USE_STATUS_LED_TASK

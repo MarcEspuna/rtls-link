@@ -1,3 +1,5 @@
+#include "config/features.hpp"  // MUST be first project include
+
 #include "wifi_frontend_littlefs.hpp"
 #include "wifi_websocket.hpp"
 #include "wifi_uart_bridge.hpp"
@@ -15,19 +17,45 @@
 // Free function for telemetry callback (ETL delegates require free function or static method)
 static DeviceTelemetry GetDeviceTelemetry() {
     DeviceTelemetry t;
+
+#ifdef USE_MAVLINK
     t.sending_pos = App::IsSendingPositions();
     t.origin_sent = App::IsOriginSent();
+#else
+    t.sending_pos = false;
+    t.origin_sent = false;
+#endif
 
     // Only report anchors_seen for TDoA tag mode
+#ifdef USE_UWB_MODE_TDOA_TAG
     if (Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA) {
         t.anchors_seen = UWBTagTDoA::GetAnchorsSeenCount();
     } else {
         t.anchors_seen = 0;  // Not applicable for non-TDoA-tag modes
     }
+#else
+    t.anchors_seen = 0;
+#endif
 
     // Rangefinder status
+#ifdef HAS_RANGEFINDER
     t.rf_enabled = App::IsRangefinderEnabled();
     t.rf_healthy = App::IsRangefinderHealthy();
+#else
+    t.rf_enabled = false;
+    t.rf_healthy = false;
+#endif
+
+    // Update rate statistics (for tags)
+#ifdef USE_RATE_STATISTICS
+    t.avg_rate_cHz = App::GetAvgUpdateRateCHz();
+    t.min_rate_cHz = App::GetMinRateCHz();
+    t.max_rate_cHz = App::GetMaxRateCHz();
+#else
+    t.avg_rate_cHz = 0;
+    t.min_rate_cHz = 0;
+    t.max_rate_cHz = 0;
+#endif
 
     return t;
 }

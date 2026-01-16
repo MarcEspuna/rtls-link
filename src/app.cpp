@@ -1,3 +1,5 @@
+#include "config/features.hpp"  // MUST be first project include
+
 #include "app.hpp"
 
 #include <Arduino.h>
@@ -5,60 +7,65 @@
 #include <freertos/task.h>
 
 #include <etl/delegate.h>
-
 #include <etl/queue.h>
 
 #include <utils/utils.hpp>
 
 #include "bsp/board.hpp"
-#include "mavlink/local_position_sensor.hpp"
-#include "mavlink/rangefinder_sensor.hpp"
-#include "bcn_konex/beacon_protocool.hpp"
-#include "mavlink/uart_comm.hpp"
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "uwb/uwb_params.hpp"
 
-#define BEACON_PROTOCOL_ENABLED 0
-#define MAVLINK_PROTOCOL_ENABLED 1
-
-#if BEACON_PROTOCOL_ENABLED && MAVLINK_PROTOCOL_ENABLED
-#error "Beacon protocol and MAVLink cannot be enabled at the same time"
+#ifdef USE_MAVLINK
+#include "mavlink/local_position_sensor.hpp"
+#include "mavlink/uart_comm.hpp"
 #endif
 
+#ifdef HAS_RANGEFINDER
+#include "mavlink/rangefinder_sensor.hpp"
+#endif
+
+#ifdef USE_BEACON_PROTOCOL
+#include "bcn_konex/beacon_protocool.hpp"
+#endif
+
+#ifdef USE_MAVLINK
 App::App()
   : uart_comm_(App::GetArdupilotSerial()), local_position_sensor_(uart_comm_, kSystemId, kComponentId)
 {}
+#else
+App::App()
+{}
+#endif
 
 // For the future maybe we should wait for reception of heartbeats before starting sending samples
 // to avoid transmition before the copter is ready
 void App::Init()
 {
   printf("------ Initializing the application ------\n");
-  
-  bcn_konex::BeaconProtocol::Init();
 
+#ifdef USE_BEACON_PROTOCOL
+  bcn_konex::BeaconProtocol::Init();
+#endif
+
+#ifdef USE_MAVLINK
   Serial1.begin(921600, SERIAL_8N1, bsp::kBoardConfig.uwb_data_uart.rx_pin, bsp::kBoardConfig.uwb_data_uart.tx_pin);
 
   local_position_sensor_.set_heartbeat_callback([this](uint8_t system_id, uint8_t component_id) {
-    // printf("Heartbeat received from system %d, component %d\n", system_id, component_id);
     last_heartbeat_received_timestamp_ms_ = millis();
-    // Future implementation:
-    // If all of a sudden we stop receiving heartbeats maybe we should retry to send the origin position
-    // maybe the copter has been reset
   });
+#endif
 
   // Initialize timestamp
   device_unhealthy_timestamp_ms_ = millis();
 
-#if STATUS_TASK == ENABLE
+#if defined(USE_STATUS_LED_TASK) && defined(BOARD_HAS_LED)
   printf("------ Status task enabled ------\n");
-  pinMode(bsp::kBoardConfig.led_pin, OUTPUT);       // Set the LED pin as output
-  digitalWrite(bsp::kBoardConfig.led_pin, LOW);     // Turn off the LED
+  pinMode(bsp::kBoardConfig.led_pin, OUTPUT);
+  digitalWrite(bsp::kBoardConfig.led_pin, LOW);
 #endif
 
+#ifdef HAS_RANGEFINDER
   // Initialize rangefinder sensor (ESP32S3 only)
-#if defined(ESP32S3_UWB_BOARD)
-  // Check for valid pin configuration (0xFFFF indicates disabled)
   if (bsp::kBoardConfig.rangefinder_uart.rx_pin < 64) {
     // Use Serial0 for UART0 (Serial is USB CDC on ESP32S3)
     rangefinder_sensor_ = new RangefinderSensor(Serial0);
@@ -111,7 +118,7 @@ void App::Init()
 
     printf("[App] Rangefinder sensor initialized\n");
   }
-#endif
+#endif // HAS_RANGEFINDER
 
   printf("------ Application initialized ------\n");
 }
@@ -119,7 +126,7 @@ void App::Init()
 
 void App::Update()
 {
-#if MAVLINK_PROTOCOL_ENABLED
+#ifdef USE_MAVLINK
   // App health stats (static to persist across calls)
   static uint32_t app_stats_healthy_cycles = 0;
   static uint32_t app_stats_unhealthy_cycles = 0;
@@ -129,6 +136,7 @@ void App::Update()
   uint8_t buffer[1024];
   uint32_t buffer_index = 0;
   uint64_t now_ms = millis();
+
   // ********** SENDING **********
 
   // Listen and send heartbeat
@@ -146,18 +154,18 @@ void App::Update()
     // Device is healthy
     app_stats_healthy_cycles++;
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
-    uint64_t time_since_rcv_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_; 
-    if (time_since_unhealthy > kSendOriginPositionAfterMs 
-        && !is_origin_position_sent_ 
+    uint64_t time_since_rcv_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
+    if (time_since_unhealthy > kSendOriginPositionAfterMs
+        && !is_origin_position_sent_
         && time_since_rcv_heartbeat < kHeartbeatRcvTimeoutMs) {
       uint8_t target_system_id = Front::uwbLittleFSFront.GetParams().mavlinkTargetSystemId;
       printf("Sending origin position to system %d\n", target_system_id);
       local_position_sensor_.send_set_gps_global_origin(
-          Front::uwbLittleFSFront.GetParams().originLat, 
-          Front::uwbLittleFSFront.GetParams().originLon, 
-          Front::uwbLittleFSFront.GetParams().originAlt, 
+          Front::uwbLittleFSFront.GetParams().originLat,
+          Front::uwbLittleFSFront.GetParams().originLon,
+          Front::uwbLittleFSFront.GetParams().originAlt,
           target_system_id, micros());
-      
+
       time_since_unhealthy = now_ms;
       is_origin_position_sent_ = true;
     }
@@ -178,7 +186,7 @@ void App::Update()
 
   // ********** RECEIVING **********
 
-#if defined(ESP32S3_UWB_BOARD)
+#ifdef HAS_RANGEFINDER
   // Process rangefinder MAVLink messages
   if (rangefinder_sensor_) {
     rangefinder_sensor_->process_received_bytes();
@@ -195,26 +203,26 @@ void App::Update()
   // Process the buffer
   local_position_sensor_.process_received_bytes(buffer, buffer_index);
 
-#endif
-#if BEACON_PROTOCOL_ENABLED
+#endif // USE_MAVLINK
+
+#ifdef USE_BEACON_PROTOCOL
   AddAnchorEcho();
 #endif
 }
 
+#ifdef USE_BEACON_PROTOCOL
 /**
- *  @brief Run the application task
- * 
- *  @todo In the future we should take into account timestamps so we don't sand too old data.
- * 
+ *  @brief Run the application task for beacon protocol
  */
 void App::AddAnchorEcho()
 {
   bcn_konex::BeaconProtocol::SendAddAnchorEcho();
 }
+#endif
 
+#if defined(USE_STATUS_LED_TASK) && defined(BOARD_HAS_LED)
 void App::StatusLedTask()
 {
-#if STATUS_TASK == ENABLE
   static uint32_t i = 0;
 
   // It will blink to the number of connected anchors
@@ -227,17 +235,16 @@ void App::StatusLedTask()
   // Reset i every 10 cycles
   i++;
   i = i % 10;
-#endif
 }
+#endif
 
-
+#ifdef USE_BEACON_PROTOCOL
 // --- Only used for TWR (legacy)---
 void App::AnchorsToEcho(const etl::array<double, 12>& anchor_locations)
 {
-  #if BEACON_PROTOCOL_ENABLED
   bcn_konex::BeaconProtocol::SetAnchorsToEcho(anchor_locations);
-  #endif
 }
+#endif
 
 // Helper function to correct for yaw orientation
 // Note: This function works correctly with negative values of kRotationDegrees
@@ -268,6 +275,7 @@ Vector3f App::correct_for_orient_yaw(float x, float y, float z) {
   return result;
 }
 
+#ifdef HAS_RANGEFINDER
 float App::GetRangefinderZ() {
   ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
 
@@ -290,6 +298,19 @@ float App::GetRangefinderZ() {
   return NAN;
 }
 
+bool App::IsRangefinderEnabled() {
+  return Front::uwbLittleFSFront.GetParams().zCalcMode == ZCalcMode::RANGEFINDER;
+}
+
+bool App::IsRangefinderHealthy() {
+  if (!app.rangefinder_ever_received_) {
+    return false;
+  }
+  return (millis() - app.last_rangefinder_timestamp_ms_) <= kRangefinderStaleTimeoutMs;
+}
+#endif // HAS_RANGEFINDER
+
+#ifdef USE_MAVLINK
 bool App::IsSendingPositions() {
   // Guard for initial boot (last_sample_timestamp_ms_ starts at 0)
   if (app.last_sample_timestamp_ms_ == 0) {
@@ -302,18 +323,129 @@ bool App::IsSendingPositions() {
 bool App::IsOriginSent() {
   return app.is_origin_position_sent_;
 }
+#endif // USE_MAVLINK
 
-bool App::IsRangefinderEnabled() {
-  return Front::uwbLittleFSFront.GetParams().zCalcMode == ZCalcMode::RANGEFINDER;
-}
-
-bool App::IsRangefinderHealthy() {
-  if (!app.rangefinder_ever_received_) {
-    return false;
+#ifdef USE_RATE_STATISTICS
+// --- Update rate tracking ---
+void App::RecordSampleTimestamp() {
+  uint64_t now = millis();
+  sample_timestamps_[sample_timestamps_index_] = now;
+  sample_timestamps_index_ = (sample_timestamps_index_ + 1) % kRateWindowSize;
+  if (sample_timestamps_count_ < kRateWindowSize) {
+    sample_timestamps_count_++;
   }
-  return (millis() - app.last_rangefinder_timestamp_ms_) <= kRangefinderStaleTimeoutMs;
 }
 
+void App::CalculateRateStatistics() {
+  uint64_t now = millis();
+
+  // Only recalculate every 500ms to reduce overhead
+  if (now - last_rate_calc_ms_ < 500) {
+    return;
+  }
+  last_rate_calc_ms_ = now;
+
+  // Need at least 2 samples to calculate rate
+  if (sample_timestamps_count_ < 2) {
+    cached_avg_rate_cHz_ = 0;
+    cached_min_rate_cHz_ = 0;
+    cached_max_rate_cHz_ = 0;
+    return;
+  }
+
+  // Collect timestamps within the 5-second window
+  uint64_t window_start = (now > kRateWindowDurationMs) ? (now - kRateWindowDurationMs) : 0;
+
+  // Count samples in window and find time range
+  uint32_t samples_in_window = 0;
+  uint64_t oldest_in_window = now;
+  uint64_t newest_in_window = 0;
+
+  // Iterate through all stored timestamps
+  for (size_t i = 0; i < sample_timestamps_count_; i++) {
+    uint64_t ts = sample_timestamps_[i];
+    if (ts >= window_start && ts <= now) {
+      samples_in_window++;
+      if (ts < oldest_in_window) oldest_in_window = ts;
+      if (ts > newest_in_window) newest_in_window = ts;
+    }
+  }
+
+  // Calculate average rate
+  if (samples_in_window >= 2 && newest_in_window > oldest_in_window) {
+    uint64_t duration_ms = newest_in_window - oldest_in_window;
+    cached_avg_rate_cHz_ = static_cast<uint16_t>(
+        ((samples_in_window - 1) * 100000ULL) / duration_ms);
+  } else {
+    cached_avg_rate_cHz_ = 0;
+  }
+
+  // For min/max, collect sorted timestamps and compute intervals
+  uint64_t sorted_ts[kRateWindowSize];
+  size_t sorted_count = 0;
+  for (size_t i = 0; i < sample_timestamps_count_; i++) {
+    uint64_t ts = sample_timestamps_[i];
+    if (ts >= window_start && ts <= now) {
+      sorted_ts[sorted_count++] = ts;
+    }
+  }
+
+  // Simple insertion sort (small array)
+  for (size_t i = 1; i < sorted_count; i++) {
+    uint64_t key = sorted_ts[i];
+    int j = i - 1;
+    while (j >= 0 && sorted_ts[j] > key) {
+      sorted_ts[j + 1] = sorted_ts[j];
+      j--;
+    }
+    sorted_ts[j + 1] = key;
+  }
+
+  // Compute min/max intervals
+  uint64_t min_interval_ms = UINT64_MAX;
+  uint64_t max_interval_ms = 0;
+  if (sorted_count >= 2) {
+    for (size_t i = 1; i < sorted_count; i++) {
+      uint64_t interval = sorted_ts[i] - sorted_ts[i - 1];
+      if (interval > 0) {
+        if (interval < min_interval_ms) min_interval_ms = interval;
+        if (interval > max_interval_ms) max_interval_ms = interval;
+      }
+    }
+
+    if (min_interval_ms > 0 && min_interval_ms < UINT64_MAX) {
+      cached_max_rate_cHz_ = static_cast<uint16_t>(100000ULL / min_interval_ms);
+    } else {
+      cached_max_rate_cHz_ = 0;
+    }
+    if (max_interval_ms > 0) {
+      cached_min_rate_cHz_ = static_cast<uint16_t>(100000ULL / max_interval_ms);
+    } else {
+      cached_min_rate_cHz_ = 0;
+    }
+  } else {
+    cached_min_rate_cHz_ = 0;
+    cached_max_rate_cHz_ = 0;
+  }
+}
+
+uint16_t App::GetAvgUpdateRateCHz() {
+  app.CalculateRateStatistics();
+  return app.cached_avg_rate_cHz_;
+}
+
+uint16_t App::GetMinRateCHz() {
+  app.CalculateRateStatistics();
+  return app.cached_min_rate_cHz_;
+}
+
+uint16_t App::GetMaxRateCHz() {
+  app.CalculateRateStatistics();
+  return app.cached_max_rate_cHz_;
+}
+#endif // USE_RATE_STATISTICS
+
+#ifdef USE_MAVLINK
 /**
  * @brief Rotates a 3x3 position covariance matrix by yaw angle
  *
@@ -403,23 +535,28 @@ static std::array<float, VISION_POSITION_COVARIANCE_SIZE> mapToMAVLinkCovariance
 
   return mavCov;
 }
+#endif // USE_MAVLINK (covariance helper functions)
 
+#ifdef HAS_POSITION_OUTPUT
 void App::SendSample(float x_m, float y_m, float z_m,
                      std::optional<std::array<float, 6>> positionCovariance)
 {
-  #if BEACON_PROTOCOL_ENABLED
+#ifdef USE_BEACON_PROTOCOL
   // Beacon protocol doesn't use covariance
   bcn_konex::BeaconProtocol::SendSample(x_m, y_m, z_m, 0);
-  #endif
+#endif
 
-  #if MAVLINK_PROTOCOL_ENABLED
+#ifdef USE_MAVLINK
   // Determine Z coordinate based on zCalcMode parameter
   ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
   float final_z;
+#ifdef HAS_RANGEFINDER
   if (mode == ZCalcMode::RANGEFINDER) {
     // Rangefinder mode: use rangefinder Z directly (NAN if unavailable)
     final_z = GetRangefinderZ();
-  } else {
+  } else
+#endif
+  {
     // NONE or UWB mode: use TDoA Z
     final_z = z_m;
   }
@@ -452,24 +589,29 @@ void App::SendSample(float x_m, float y_m, float z_m,
           0, 0, 0);
     }
     app.last_sample_timestamp_ms_ = millis();
+#ifdef USE_RATE_STATISTICS
+    app.RecordSampleTimestamp();  // Track for rate statistics
+#endif
   }
-  #endif
+#endif // USE_MAVLINK
 }
+#endif // HAS_POSITION_OUTPUT
 
+#ifdef USE_BEACON_PROTOCOL
 void App::SendRangeSample(uint8_t id, float range)
 {
-  #if BEACON_PROTOCOL_ENABLED
   bcn_konex::BeaconProtocol::SendRangeSample(id, range);
-  #endif
 }
-// --- End of legacy TWR ---
+#endif
 
 void App::Start()
 {
   // For now the start will do nothing
 }
 
+#ifdef USE_MAVLINK
 HardwareSerial& App::GetArdupilotSerial()
 {
     return Serial1;
 }
+#endif

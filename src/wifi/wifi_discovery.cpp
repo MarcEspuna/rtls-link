@@ -71,7 +71,8 @@ void WifiDiscovery::SendHeartbeat() {
         "\"ip\":\"%d.%d.%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
         "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\","
         "\"sending_pos\":%s,\"anchors_seen\":%u,\"origin_sent\":%s,"
-        "\"rf_enabled\":%s,\"rf_healthy\":%s}",
+        "\"rf_enabled\":%s,\"rf_healthy\":%s,"
+        "\"avg_rate_cHz\":%u,\"min_rate_cHz\":%u,\"max_rate_cHz\":%u}",
         DEVICE_TYPE,
         shortAddrStr,
         ModeToRoleString(static_cast<uint8_t>(uwbParams.mode)),
@@ -84,7 +85,10 @@ void WifiDiscovery::SendHeartbeat() {
         static_cast<unsigned int>(telemetry.anchors_seen),
         telemetry.origin_sent ? "true" : "false",
         telemetry.rf_enabled ? "true" : "false",
-        telemetry.rf_healthy ? "true" : "false");
+        telemetry.rf_healthy ? "true" : "false",
+        static_cast<unsigned int>(telemetry.avg_rate_cHz),
+        static_cast<unsigned int>(telemetry.min_rate_cHz),
+        static_cast<unsigned int>(telemetry.max_rate_cHz));
 
     // Log truncation warning once
     static bool truncation_warned = false;
