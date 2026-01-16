@@ -389,15 +389,18 @@ void App::CalculateRateStatistics() {
     }
   }
 
+  // Use local variables to calculate all rates, then update cached values atomically
+  uint16_t new_avg_rate = 0;
+  uint16_t new_min_rate = 0;
+  uint16_t new_max_rate = 0;
+
   // Calculate average rate with overflow protection
   if (samples_in_window >= 2 && newest_in_window > oldest_in_window) {
     uint64_t duration_ms = newest_in_window - oldest_in_window;
     // rate = (samples - 1) / duration_seconds
     // rate_cHz = (samples - 1) * 100000 / duration_ms
     uint64_t rate = ((samples_in_window - 1) * 100000ULL) / duration_ms;
-    cached_avg_rate_cHz_ = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
-  } else {
-    cached_avg_rate_cHz_ = 0;
+    new_avg_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
   }
 
   // For min/max, collect sorted timestamps and compute intervals
@@ -440,20 +443,18 @@ void App::CalculateRateStatistics() {
     // min_interval -> max_rate, max_interval -> min_rate
     if (min_interval_ms > 0 && min_interval_ms < UINT64_MAX) {
       uint64_t rate = 100000ULL / min_interval_ms;
-      cached_max_rate_cHz_ = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
-    } else {
-      cached_max_rate_cHz_ = 0;
+      new_max_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
     }
     if (max_interval_ms > 0) {
       uint64_t rate = 100000ULL / max_interval_ms;
-      cached_min_rate_cHz_ = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
-    } else {
-      cached_min_rate_cHz_ = 0;
+      new_min_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
     }
-  } else {
-    cached_min_rate_cHz_ = 0;
-    cached_max_rate_cHz_ = 0;
   }
+
+  // Update all cached values together to ensure consistency for readers
+  cached_avg_rate_cHz_ = new_avg_rate;
+  cached_min_rate_cHz_ = new_min_rate;
+  cached_max_rate_cHz_ = new_max_rate;
 }
 
 uint16_t App::GetAvgUpdateRateCHz() {
