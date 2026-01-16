@@ -341,12 +341,14 @@ void App::CalculateRateStatistics() {
   if (now - last_rate_calc_ms_ < 500) {
     return;
   }
-  last_rate_calc_ms_ = now;
 
   // Acquire mutex for thread-safe access to sample_timestamps_
   if (xSemaphoreTake(rate_stats_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
-    return;  // Could not acquire mutex, skip this calculation
+    return;  // Could not acquire mutex, skip this calculation (don't update throttle)
   }
+
+  // Update throttle timestamp only after successful mutex acquisition
+  last_rate_calc_ms_ = now;
 
   // Need at least 2 samples to calculate rate
   if (sample_timestamps_count_ < 2) {
