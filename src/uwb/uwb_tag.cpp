@@ -13,9 +13,6 @@
 #include <DW1000.h>
 #include <DW1000Time.h>
 
-// Undefine DEBUG macro from DW1000 to avoid conflict with logging system
-#undef DEBUG
-
 #include <etl/vector.h>
 #include <etl/variant.h>
 #include <etl/visitor.h>

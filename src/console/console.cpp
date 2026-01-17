@@ -22,6 +22,7 @@ void Console::Init()
     // the host to be connected.
     delay(100);
     // m_Serial->begin(115200);
+    // TODO: This should be moved to the proper logger.
     m_Serial->print("------- Console Initialized -------\n> ");
 }
 

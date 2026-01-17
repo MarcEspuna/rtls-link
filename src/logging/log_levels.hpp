@@ -29,7 +29,7 @@ enum class LogLevel : uint8_t {
     ERROR   = 1,  ///< Error conditions
     WARN    = 2,  ///< Warning conditions
     INFO    = 3,  ///< Informational messages
-    DEBUG   = 4,  ///< Debug information
+    DBG     = 4,  ///< Debug information
     VERBOSE = 5   ///< Verbose trace information
 };
 
@@ -43,7 +43,7 @@ constexpr const char* logLevelToChar(LogLevel level) {
         case LogLevel::ERROR:   return "E";
         case LogLevel::WARN:    return "W";
         case LogLevel::INFO:    return "I";
-        case LogLevel::DEBUG:   return "D";
+        case LogLevel::DBG:     return "D";
         case LogLevel::VERBOSE: return "V";
         default:                return "?";
     }
@@ -59,7 +59,7 @@ constexpr const char* logLevelToString(LogLevel level) {
         case LogLevel::ERROR:   return "ERROR";
         case LogLevel::WARN:    return "WARN";
         case LogLevel::INFO:    return "INFO";
-        case LogLevel::DEBUG:   return "DEBUG";
+        case LogLevel::DBG:     return "DEBUG";
         case LogLevel::VERBOSE: return "VERBOSE";
         default:                return "UNKNOWN";
     }

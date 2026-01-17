@@ -8,9 +8,6 @@
 #include <DW1000Ranging.h>
 #include <DW1000.h>
 
-// Undefine DEBUG macro from DW1000 to avoid conflict with logging system
-#undef DEBUG
-
 #include "uwb_config.hpp"
 #include "uwb_calibration.hpp"
 

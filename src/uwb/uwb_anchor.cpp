@@ -8,9 +8,6 @@
 #include <DW1000.h>
 #include <DW1000Time.h>
 
-// Undefine DEBUG macro from DW1000 to avoid conflict with logging system
-#undef DEBUG
-
 #include "uwb_params.hpp"
 #include "uwb_anchor.hpp"
 

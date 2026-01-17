@@ -188,14 +188,14 @@ private:
 #define LOG_ERROR(fmt, ...)   LOG_IMPL(rtls::log::LogLevel::ERROR, LOG_TAG, fmt, ##__VA_ARGS__)
 #define LOG_WARN(fmt, ...)    LOG_IMPL(rtls::log::LogLevel::WARN, LOG_TAG, fmt, ##__VA_ARGS__)
 #define LOG_INFO(fmt, ...)    LOG_IMPL(rtls::log::LogLevel::INFO, LOG_TAG, fmt, ##__VA_ARGS__)
-#define LOG_DEBUG(fmt, ...)   LOG_IMPL(rtls::log::LogLevel::DEBUG, LOG_TAG, fmt, ##__VA_ARGS__)
+#define LOG_DEBUG(fmt, ...)   LOG_IMPL(rtls::log::LogLevel::DBG, LOG_TAG, fmt, ##__VA_ARGS__)
 #define LOG_VERBOSE(fmt, ...) LOG_IMPL(rtls::log::LogLevel::VERBOSE, LOG_TAG, fmt, ##__VA_ARGS__)
 
 // Variants with explicit tag (for special cases)
 #define LOG_ERROR_TAG(tag, fmt, ...)   LOG_IMPL(rtls::log::LogLevel::ERROR, tag, fmt, ##__VA_ARGS__)
 #define LOG_WARN_TAG(tag, fmt, ...)    LOG_IMPL(rtls::log::LogLevel::WARN, tag, fmt, ##__VA_ARGS__)
 #define LOG_INFO_TAG(tag, fmt, ...)    LOG_IMPL(rtls::log::LogLevel::INFO, tag, fmt, ##__VA_ARGS__)
-#define LOG_DEBUG_TAG(tag, fmt, ...)   LOG_IMPL(rtls::log::LogLevel::DEBUG, tag, fmt, ##__VA_ARGS__)
+#define LOG_DEBUG_TAG(tag, fmt, ...)   LOG_IMPL(rtls::log::LogLevel::DBG, tag, fmt, ##__VA_ARGS__)
 #define LOG_VERBOSE_TAG(tag, fmt, ...) LOG_IMPL(rtls::log::LogLevel::VERBOSE, tag, fmt, ##__VA_ARGS__)
 
 #else // USE_LOGGING not defined
