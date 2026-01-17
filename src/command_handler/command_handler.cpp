@@ -11,6 +11,7 @@
 #include "front.hpp"
 #include "scheduler.hpp"
 #include "version.hpp"
+#include "logging/logging.hpp"
 
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "app/app_frontend_littlefs.hpp"
@@ -155,7 +156,7 @@ void CommandHandler::Init()
 
     if (commandQueueMutex == NULL)
     {
-        printf("Failed to create command queue mutex\n");
+        LOG_ERROR("Failed to create command queue mutex");
     }
 
 #ifdef USE_CONSOLE_PARAM_RW

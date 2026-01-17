@@ -11,6 +11,7 @@ public:
 
     virtual void Init() override;
     virtual void Update() override;
+    virtual ErrorParam SetParam(const char* name, const void* data, uint32_t len) override;
 
     virtual etl::span<const ParamDef> GetParamLayout() const override {
         return etl::span<const ParamDef>(s_ParamDefs, sizeof(s_ParamDefs)/sizeof(ParamDef));
@@ -33,6 +34,7 @@ private:
     void SetupWebServer();
     void UpdateMode(WifiMode mode);
     void ClearBackends();
+    void ApplyLoggingSettings();
 
     static constexpr uint32_t maxClients = 10;
 
@@ -55,7 +57,10 @@ public:
         PARAM_DEF(WifiParams, enableUartBridge),
         PARAM_DEF(WifiParams, enableDebugSocket),
         PARAM_DEF(WifiParams, enableDiscovery),
-        PARAM_DEF(WifiParams, discoveryPort)
+        PARAM_DEF(WifiParams, discoveryPort),
+        PARAM_DEF(WifiParams, logUdpPort),
+        PARAM_DEF(WifiParams, logSerialEnabled),
+        PARAM_DEF(WifiParams, logUdpEnabled)
     };
 };
 

@@ -1,5 +1,6 @@
 #include "app_frontend_littlefs.hpp"
 #include "bsp/board.hpp"
+#include "logging/logging.hpp"
 
 void AppLittleFSFrontend::Init() {
     // Set defaults from BSP before loading from file
@@ -9,8 +10,7 @@ void AppLittleFSFrontend::Init() {
     // Load parameters from LittleFS (will override defaults if file exists)
     LittleFSFrontend<AppParams>::Init();
 
-    printf("AppLittleFSFrontend::Init() - LED2 pin: %d, state: %d\n",
-           m_Params.led2Pin, m_Params.led2State);
+    LOG_DEBUG("App frontend init - LED2: %d, state: %d", m_Params.led2Pin, m_Params.led2State);
 
     // Initialize LED 2 pin if configured
     if (m_Params.led2Pin >= 0) {

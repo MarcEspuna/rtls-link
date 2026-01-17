@@ -2,6 +2,8 @@
 
 #ifdef USE_UWB_MODE_TDOA_TAG
 
+#include "logging/logging.hpp"
+
 #include <Eigen.h>
 
 #include <algorithm>
@@ -121,7 +123,7 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
 {
     // NOTE: Look into short data fast accuracy...
     // Using a lambda to attach the class method as an interrupt handler
-    Serial.println("--- UWB Tag TDOA ---\n\r");
+    LOG_INFO("--- UWB Tag TDOA Mode ---");
     vTaskDelay(pdMS_TO_TICKS(300));
 
     // Fill in anchor positions lookup table
@@ -142,10 +144,10 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
         anchors_to_echo[i*3 + 2] = anchor_positions[i].z;
     }
     // --- Logging ---
-    Serial.println("[App LOG] Echoing Anchor Positions:");
+    LOG_INFO("Echoing Anchor Positions:");
     for (uint32_t i = 0; i < anchors_to_echo.size() / 3; ++i) {
-        Serial.printf("  Anchor %d: X=%.2f, Y=%.2f, Z=%.2f\n",
-                      i, anchors_to_echo[i*3], anchors_to_echo[i*3+1], anchors_to_echo[i*3+2]);
+        LOG_INFO("  Anchor %u: X=%.2f, Y=%.2f, Z=%.2f",
+                 i, anchors_to_echo[i*3], anchors_to_echo[i*3+1], anchors_to_echo[i*3+2]);
     }
     // ---------------
     App::AnchorsToEcho(anchors_to_echo);
@@ -156,12 +158,11 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     dwInit(&m_Device, &m_Ops);          // Initialize the driver. Init resets user data!
     m_Device.userdata = &m_DwData;
 
-    int result = dwConfigure(&m_Device);      // Configure the DW1000    
+    int result = dwConfigure(&m_Device);      // Configure the DW1000
     if (result != 0) {
-        Serial.print("DW1000 configuration failed, devid: ");
-        Serial.println(static_cast<uint32_t>(result));
+        LOG_WARN("DW1000 configuration failed, devid: %u", static_cast<uint32_t>(result));
     }
-    Serial.print("DW1000 Configured\n\r");
+    LOG_INFO("DW1000 Configured");
     vTaskDelay(pdMS_TO_TICKS(300));
 
     dwEnableAllLeds(&m_Device);
@@ -194,10 +195,8 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
 
     dwCommitConfiguration(&m_Device);
 
-    Serial.print("Initialized TDoA Tag: ");
     uint32_t dev_id = dwGetDeviceId(&m_Device);
-    Serial.println(dev_id, HEX);
-    Serial.println("\n\r");
+    LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
 
     // Init the tdoa anchor algorithm
     uwbTdoa2TagAlgorithm.init(&m_Device, estimatorCallback); 
@@ -417,7 +416,8 @@ static void estimatorProcess() {
                     last_position(2) = ASSUMED_TAG_Z;
                 }
                 first_estimation = false;
-                Serial.println("Initialized position estimate.");
+                LOG_INFO("Position estimator initialized at [%.2f, %.2f, %.2f]",
+                         last_position(0), last_position(1), last_position(2));
             }
 
             // --- Run Estimator --- 
@@ -544,8 +544,8 @@ static void estimatorProcess() {
             uint64_t now_position_log = millis();
             if (now_position_log - position_last_log_time_ms >= POSITION_LOG_INTERVAL_MS) {
                 const char* valid_str = (is_valid_estimate && !current_estimate_3d.hasNaN()) ? "OK" : "INVALID";
-                Serial.printf("[TDoA Position] X: %.2f, Y: %.2f, Z: %.2f, RMSE: %.3fm [%s]\n",
-                              current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), solution_rmse, valid_str);
+                LOG_DEBUG("Position: X=%.2f Y=%.2f Z=%.2f RMSE=%.3fm [%s]",
+                          current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), solution_rmse, valid_str);
                 position_last_log_time_ms = now_position_log;
             }
             // ------------------------------------------
@@ -561,12 +561,12 @@ static void estimatorProcess() {
 #if TDOA_STATS_LOGGING == ENABLE
         uint64_t now_ms = millis();
         if (now_ms - stats_last_log_time_ms >= STATS_LOG_INTERVAL_MS) {
-            Serial.printf("[TDoA Stats] Sent:%u Rej:%u (RMSE:%u NaN:%u Insuff:%u) Meas:[%u-%u] Stale:%u\n", 
-                          stats_samples_sent, stats_samples_rejected,
-                          stats_reject_rmse, stats_reject_nan, stats_reject_insufficient,
-                          (stats_min_meas_count == UINT32_MAX) ? 0 : stats_min_meas_count, 
-                          stats_max_meas_count,
-                          stats_stale_removed);
+            LOG_DEBUG("Stats: Sent=%u Rej=%u (RMSE=%u NaN=%u Insuff=%u) Meas=[%u-%u] Stale=%u",
+                      stats_samples_sent, stats_samples_rejected,
+                      stats_reject_rmse, stats_reject_nan, stats_reject_insufficient,
+                      (stats_min_meas_count == UINT32_MAX) ? 0 : stats_min_meas_count,
+                      stats_max_meas_count,
+                      stats_stale_removed);
             // Reset all counters
             stats_samples_sent = 0;
             stats_samples_rejected = 0;

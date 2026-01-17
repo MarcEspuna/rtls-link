@@ -19,6 +19,8 @@
 #include "wifi_discovery.hpp"
 #endif
 
+#include "logging/logging.hpp"
+
 #include "command_handler/command_handler.hpp"
 #include <utils/utils.hpp>
 #include <etl/vector.h>
@@ -88,7 +90,7 @@ static StaticTaskHolder<etl::delegate<void()>, 4096> wifi_connection_task = {
 void WifiLittleFSFrontend::Init() {
     LittleFSFrontend<WifiParams>::Init();
 
-    printf("WifiLittleFSFrontend::Init()\n");
+    LOG_INFO("WifiLittleFSFrontend initialized");
 
     UpdateMode(m_Params.mode);
 
@@ -97,6 +99,9 @@ void WifiLittleFSFrontend::Init() {
 #else
     m_TcpLoggingServer = nullptr;
 #endif
+
+    // Apply logging settings from stored params
+    ApplyLoggingSettings();
 
     // Set the delegate after initialization
     wifi_connection_task.taskFunction = etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::StationConnectionThread>();
@@ -116,26 +121,23 @@ void WifiLittleFSFrontend::Update() {
 }
 
 bool WifiLittleFSFrontend::SetupAP() {
-    printf("Setting up WiFi Access Point mode\n");
-    printf("SSID: %s, Password: %s\n", m_Params.ssidAP.data(), m_Params.pswdAP.data());
+    LOG_INFO("WiFi AP mode - SSID: %s", m_Params.ssidAP.data());
 
     WiFi.mode(WIFI_AP);
     bool success = WiFi.softAP(m_Params.ssidAP.data(), m_Params.pswdAP.data());
-    
+
     if (success) {
-        printf("AP setup successful\n");
-        printf("AP IP address: %s\n", WiFi.softAPIP().toString().c_str());
+        LOG_INFO("AP IP: %s", WiFi.softAPIP().toString().c_str());
         SetupWebServer();
         return true;
     } else {
-        printf("AP setup failed\n");
+        LOG_WARN("AP setup failed");
         return false;
     }
 }
 
 void WifiLittleFSFrontend::SetupStation() {
-    printf("Setting up WiFi Station mode\n");
-    printf("SSID: %s, Password: %s\n", m_Params.ssidST.data(), m_Params.pswdST.data());
+    LOG_INFO("WiFi Station mode - SSID: %s", m_Params.ssidST.data());
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(m_Params.ssidST.data(), m_Params.pswdST.data());
@@ -146,27 +148,27 @@ void WifiLittleFSFrontend::SetupWebServer() {
 
     if (m_Params.enableWebServer) {
 #ifdef USE_WIFI_WEBSERVER
-        printf("Setting up WebSocket server\n");
+        LOG_INFO("WebSocket server enabled");
         WifiWebSocket* webSocketServer = new WifiWebSocket("/ws", 80);
         m_Backends.push_back(webSocketServer);
 #else
-        printf("WARNING: WebServer requested but USE_WIFI_WEBSERVER not compiled\n");
+        LOG_WARN("WebServer requested but USE_WIFI_WEBSERVER not compiled");
 #endif
     }
 
     if (m_Params.enableUartBridge) {
 #ifdef USE_WIFI_UART_BRIDGE
-        printf("Setting up UART bridge on port %d\n", m_Params.udpPort);
+        LOG_INFO("UART bridge setup on port %d", m_Params.udpPort);
         IPAddress ip;
         if(ip.fromString(m_Params.gcsIp.data())) {
             WifiUartBridge* uartBridge = new WifiUartBridge(Serial2, ip, m_Params.udpPort);
             m_Backends.push_back(uartBridge);
-            printf("--- Uart bridge enabled ---\n");
+            LOG_INFO("UART bridge enabled");
         } else {
-            printf("Invalid GSC IP address\n");
+            LOG_WARN("Invalid GCS IP address");
         }
 #else
-        printf("WARNING: UART bridge requested but USE_WIFI_UART_BRIDGE not compiled\n");
+        LOG_WARN("UART bridge requested but USE_WIFI_UART_BRIDGE not compiled");
 #endif
     }
 
@@ -178,9 +180,9 @@ void WifiLittleFSFrontend::SetupWebServer() {
             TelemetryCallback::create<&GetDeviceTelemetry>()
         );
         m_Backends.push_back(discoveryBackend);
-        printf("Discovery service enabled on port %d\n", m_Params.discoveryPort);
+        LOG_INFO("Discovery service enabled on port %d", m_Params.discoveryPort);
 #else
-        printf("WARNING: Discovery requested but USE_WIFI_DISCOVERY not compiled\n");
+        LOG_WARN("Discovery requested but USE_WIFI_DISCOVERY not compiled");
 #endif
     }
 }
@@ -196,7 +198,7 @@ void WifiLittleFSFrontend::UpdateMode(WifiMode mode) {
             SetupStation();
             break;
         default:
-            printf("Undefined WiFi mode\n");
+            LOG_ERROR("Undefined WiFi mode");
             break;
     }
 }
@@ -204,12 +206,15 @@ void WifiLittleFSFrontend::UpdateMode(WifiMode mode) {
 void WifiLittleFSFrontend::StationConnectionThread() {
     if (m_currentMode == WifiMode::STATION) {
         if (WiFi.status() == WL_CONNECTED && !m_stationConnected) {
-            printf("WiFi station connected\n");
-            printf("Station IP address: %s\n", WiFi.localIP().toString().c_str());
+            LOG_INFO("WiFi connected - IP: %s", WiFi.localIP().toString().c_str());
             SetupWebServer();
             m_stationConnected = true;
+
+            // Re-apply logging settings now that WiFi is connected
+            // (UDP backend requires WiFi to be ready)
+            ApplyLoggingSettings();
         } else if (WiFi.status() != WL_CONNECTED && m_stationConnected) {
-            printf("WiFi station disconnected\n");
+            LOG_WARN("WiFi disconnected");
             m_stationConnected = false;
         }
     }
@@ -240,6 +245,39 @@ void WifiLittleFSFrontend::ClearBackends() {
         delete backend;
     }
     m_Backends.clear();
+}
+
+void WifiLittleFSFrontend::ApplyLoggingSettings() {
+#ifdef USE_LOGGING
+    // Ensure Logger is initialized before configuring
+    rtls::log::Logger::init();
+
+    // Apply serial and UDP enabled settings
+    rtls::log::Logger::setSerialEnabled(m_Params.logSerialEnabled != 0);
+    rtls::log::Logger::setUdpEnabled(m_Params.logUdpEnabled != 0);
+
+    // Set UDP target IP (use GCS IP) and port for log streaming
+    if (m_Params.gcsIp[0] != '\0') {
+        rtls::log::Logger::setUdpTarget(m_Params.gcsIp.data(), m_Params.logUdpPort);
+    }
+#endif
+}
+
+ErrorParam WifiLittleFSFrontend::SetParam(const char* name, const void* data, uint32_t len) {
+    // Call base class implementation first
+    ErrorParam result = LittleFSFrontend<WifiParams>::SetParam(name, data, len);
+
+    if (result == ErrorParam::OK) {
+        // Check if this was a logging-related parameter and apply changes
+        if (strcmp(name, "logSerialEnabled") == 0 ||
+            strcmp(name, "logUdpEnabled") == 0 ||
+            strcmp(name, "logUdpPort") == 0 ||
+            strcmp(name, "gcsIp") == 0) {
+            ApplyLoggingSettings();
+        }
+    }
+
+    return result;
 }
 
 namespace Front {

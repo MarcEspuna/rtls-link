@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <cstring>
+#include "logging/logging.hpp"
 
 RangefinderSensor::RangefinderSensor(HardwareSerial& serial)
     : serial_(serial), distance_callback_(nullptr)
@@ -11,8 +12,7 @@ RangefinderSensor::RangefinderSensor(HardwareSerial& serial)
 
 void RangefinderSensor::init(uint32_t baud_rate, uint8_t rx_pin, uint8_t tx_pin) {
     serial_.begin(baud_rate, SERIAL_8N1, rx_pin, tx_pin);
-    printf("[RangefinderSensor] Initialized on RX:%d TX:%d @ %lu baud\n",
-           rx_pin, tx_pin, baud_rate);
+    LOG_INFO("Rangefinder on RX:%d TX:%d @ %lu baud", rx_pin, tx_pin, baud_rate);
 }
 
 void RangefinderSensor::set_distance_callback(std::function<void(mavlink_distance_sensor_t, uint64_t, uint8_t, uint8_t)> callback) {

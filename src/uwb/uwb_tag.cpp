@@ -2,6 +2,8 @@
 
 #ifdef USE_UWB_MODE_TWR_TAG
 
+#include "logging/logging.hpp"
+
 #include <Eigen.h>
 
 #include <iostream>
@@ -11,6 +13,8 @@
 #include <DW1000.h>
 #include <DW1000Time.h>
 
+// Undefine DEBUG macro from DW1000 to avoid conflict with logging system
+#undef DEBUG
 
 #include <etl/vector.h>
 #include <etl/variant.h>
@@ -95,7 +99,7 @@ UWBTag::UWBTag(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<
   last_anchor_update.reserve(anchorCount);
   last_anchor_distance.resize(anchorCount);
 
-  printf("anchor count: %d\n", anchorCount); 
+  LOG_DEBUG("Anchor count: %d", anchorCount); 
 
   for(int i = 0; i < anchorCount; ++i) {
       // Assign the x, y, z coordinates to the matrix
@@ -166,7 +170,7 @@ static void newRange()
 #ifdef USE_BEACON_PROTOCOL
       App::SendRangeSample(id, range);
 #endif
-      printf("Range %d: %f m\n", index, range);
+      LOG_DEBUG("Range %d: %.2f m", index, range);
     } 
   }
   //check for four measurements within the last interval
@@ -187,8 +191,7 @@ static void newRange()
     uint16_t rms__cm = (uint16_t)(rms__m * 100.0);
 
     if (rms__cm > max_rms__cm) {
-      // Discard the measurement
-      printf("Discarding measurement due to high RMS: %u\n", rms__cm);
+      LOG_DEBUG("Discarding measurement - RMS: %u cm", rms__cm);
       return;
     }
 
@@ -206,17 +209,9 @@ static void newRange()
     uint32_t refresh_rate_hz = Utils::GetRefreshRate(last_sample_timestamp);
 
     Front::wifiLittleFSFront.UpdateLastTWRSample(current_tag_position(0), current_tag_position(1), current_tag_position(2), refresh_rate_hz);
-    
-    Serial.print("P= ");  //result
-    Serial.print(current_tag_position(0));
-    Serial.write(',');
-    Serial.print(current_tag_position(1));
-    Serial.write(',');
-    Serial.print(current_tag_position(2));
-    Serial.write(", RMS: ");
-    Serial.print(rms__cm);
-    Serial.println(" cm");
-    
+
+    LOG_DEBUG("Position: [%.2f, %.2f, %.2f] RMS: %u cm",
+              current_tag_position(0), current_tag_position(1), current_tag_position(2), rms__cm);
   }
 }  //end newRange
 
@@ -227,11 +222,10 @@ static void newDevice(DW1000Device *device)
   if (index > 0 && index < anchor_coordinates.rows()+1) {
     // App::AddAnchorEcho(index);
   } else {
-    printf("Careful!!! Index out of bounds: %d\n", index);
+    LOG_ERROR("Index out of bounds: %d", index);
   }
 
-  Serial.print("Device added: ");
-  Serial.println(index, HEX);
+  LOG_DEBUG("Device added: 0x%X", index);
 }
 
 static void inactiveDevice(DW1000Device *device)
@@ -240,8 +234,7 @@ static void inactiveDevice(DW1000Device *device)
 
   // App::SendRemoveAnchor(index);
 
-  Serial.print("delete inactive device: ");
-  Serial.println(index, HEX);
+  LOG_DEBUG("Device removed: 0x%X", index);
 }
 
 static void CreateTrilat(const Eigen::MatrixX3d& anchors)

@@ -4,6 +4,7 @@
 
 #include "command_handler/command_handler.hpp"
 #include "wifi_websocket.hpp"
+#include "logging/logging.hpp"
 
 #ifdef USE_OTA_WEB
 #include "ota/ota_handler.hpp"
@@ -27,7 +28,7 @@ WifiWebSocket::WifiWebSocket(const char* wsPath, uint16_t port)
     // Start server
     m_Server.begin();
     initialized = true;
-    printf("WebSocket server started on port %d at path %s\n", port, wsPath);
+    LOG_INFO("WebSocket server started on port %d", port);
 }
 
 void WifiWebSocket::Update()
@@ -41,10 +42,10 @@ static void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEve
              void *arg, uint8_t *data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
-            printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+            LOG_DEBUG("WebSocket client #%u connected", client->id());
             break;
         case WS_EVT_DISCONNECT:
-            printf("WebSocket client #%u disconnected\n", client->id());
+            LOG_DEBUG("WebSocket client #%u disconnected", client->id());
             break;
         case WS_EVT_DATA:
         {

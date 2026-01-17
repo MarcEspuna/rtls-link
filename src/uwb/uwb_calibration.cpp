@@ -2,9 +2,14 @@
 
 #ifdef USE_UWB_CALIBRATION
 
+#include "logging/logging.hpp"
+
 #include <Arduino.h>
 #include <DW1000Ranging.h>
 #include <DW1000.h>
+
+// Undefine DEBUG macro from DW1000 to avoid conflict with logging system
+#undef DEBUG
 
 #include "uwb_config.hpp"
 #include "uwb_calibration.hpp"
@@ -49,7 +54,7 @@ UWBCalibration::UWBCalibration(IUWBFrontend& front, const bsp::UWBConfig& uwb_co
     
     DW1000.setAntennaDelay(UWBConstParam::calibr_starting_adelay);
 
-    printf("------- UWB Calibration Initialized -------\n");
+    LOG_INFO("UWB Calibration initialized");
 }
 
 void UWBCalibration::Update()
@@ -76,17 +81,12 @@ static void newRange()
 
   // We do a mean of 10 samples before we run one iteration of the antenna delay calibration
   if (counter > 9) {
-    
+
     dist = dist/10;
     counter = 0;
-    Serial.print(",");
-    Serial.print(dist); 
 
     if (Adelay_delta < 3) {
-      Serial.print(", final Adelay ");
-      Serial.println(this_anchor_Adelay);
-      Serial.print("Check: stored Adelay = ");
-      Serial.println(DW1000.getAntennaDelay());
+      LOG_DEBUG("Calibration complete: dist=%.2f, Adelay=%d", dist, this_anchor_Adelay);
       calibrationDone = true;
       s_Backend->UpdateAntennaDelay(this_anchor_Adelay);
       s_Backend->UpdateMode(UWBMode::ANCHOR_MODE_TWR);        // This signifies that the calibration mode is complete
@@ -97,12 +97,11 @@ static void newRange()
 
     if ( this_delta * last_delta < 0.0) Adelay_delta = Adelay_delta / 2; //sign changed, reduce step size
       last_delta = this_delta;
-    
+
     if (this_delta > 0.0 ) this_anchor_Adelay += Adelay_delta; //new trial Adelay
     else this_anchor_Adelay -= Adelay_delta;
-    
-    Serial.print(", Adelay = ");
-    Serial.println (this_anchor_Adelay);
+
+    LOG_DEBUG("Calibration: dist=%.2f, Adelay=%d", dist, this_anchor_Adelay);
 
     DW1000.setAntennaDelay(this_anchor_Adelay);
     dist = 0;
@@ -111,14 +110,12 @@ static void newRange()
 
 static void newDevice(DW1000Device *device)
 {
-  Serial.print("Device added: ");
-  Serial.println(device->getShortAddress(), HEX);
+  LOG_DEBUG("Device added: 0x%X", device->getShortAddress());
 }
 
 static void inactiveDevice(DW1000Device *device)
 {
-  Serial.print("Delete inactive device: ");
-  Serial.println(device->getShortAddress(), HEX);
+  LOG_DEBUG("Device removed: 0x%X", device->getShortAddress());
 }
 
 #endif // USE_UWB_CALIBRATION
