@@ -75,3 +75,12 @@
 ; -----------------------------------------------------------------------------
 -D USE_STATUS_LED_TASK          ; Status LED blink task (board-dependent)
 -D USE_RATE_STATISTICS          ; Position update rate tracking
+
+; -----------------------------------------------------------------------------
+; LOGGING SUBSYSTEM
+; Structured logging with Serial and UDP output
+; -----------------------------------------------------------------------------
+-D USE_LOGGING                  ; Master logging toggle
+-D USE_LOGGING_SERIAL           ; Serial output (enabled by default)
+-D USE_LOGGING_UDP              ; UDP streaming to rtls-link-manager
+-D LOG_GLOBAL_LEVEL=3

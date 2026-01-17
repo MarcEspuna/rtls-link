@@ -3,6 +3,7 @@
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
 
 #include <Arduino.h>
+#include "logging/logging.hpp"
 
 #include "uwb_tdoa_anchor.hpp"
 #include "uwb_frontend_littlefs.hpp"
@@ -80,12 +81,11 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
     dwInit(&m_Device, &m_Ops);          // Initialize the driver. Init resets user data!
     m_Device.userdata = &m_DwData;
 
-    int result = dwConfigure(&m_Device);      // Configure the DW1000    
+    int result = dwConfigure(&m_Device);      // Configure the DW1000
     if (result != 0) {
-        Serial.print("DW1000 configuration failed, devid: ");
-        Serial.println(static_cast<uint32_t>(result));
+        LOG_WARN("DW1000 configuration failed, devid: %u", static_cast<uint32_t>(result));
     }
-    Serial.print("DW1000 Configured\n");
+    LOG_INFO("DW1000 Configured (Anchor TDoA)");
 
     dwEnableAllLeds(&m_Device);
 
@@ -119,9 +119,8 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
 
     dwCommitConfiguration(&m_Device);
 
-    Serial.print("Initialized TDoA Anchor: ");
     uint32_t dev_id = dwGetDeviceId(&m_Device);
-    Serial.println(dev_id, HEX);
+    LOG_INFO("Initialized TDoA Anchor - DevID: 0x%08X", dev_id);
 
     // Init the tdoa anchor algorithm
     uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device); 

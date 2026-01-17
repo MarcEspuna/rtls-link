@@ -36,6 +36,10 @@ struct WifiParams {
     uint8_t enableDebugSocket;      // Enable the debug socket (Used for 3D position data visualization)
     uint8_t enableDiscovery = 1;    // Enable UDP discovery service (default: enabled)
     uint16_t discoveryPort = 3333;  // UDP port for discovery service
+    // Logging parameters
+    uint16_t logUdpPort = 3334;     // UDP port for debug log streaming
+    uint8_t logSerialEnabled = 1;   // Runtime: enable Serial log output (default: on)
+    uint8_t logUdpEnabled = 0;      // Runtime: enable UDP log streaming (default: off)
 }ULS_PACKED;
 
 

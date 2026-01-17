@@ -1,10 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
-This is an ESP32/ESP32S3 firmware project for real-time localization systems (RTLS) using Ultra-Wideband (UWB) technology. The firmware implements Time Difference of Arrival (TDoA) algorithms for 2D/3D positioning and provides MAVLink integration for drone applications.
+This is an ESP32/ESP32S3 firmware project for real-time localization systems (RTLS) using Ultra-Wideband (UWB) technology. The firmware implements Time Difference of Arrival (TDoA) algorithms for 2D/3D positioning and provides MAVLink integration for drone applications. In addition to that, it has a desktop application ( `tools/rtls-link-manager` , which is a git submodule with it's corresponding repository ) that it's used for configuring, monitoring and debugging this devices. 
 
 ## Build System
 
@@ -32,73 +30,26 @@ This project uses PlatformIO for build management with multiple environments:
 - Both targets must build without errors before any git push operation
 - This prevents broken builds from being introduced to the codebase
 
-## Development Environment
+## Desktop Application (rtls-link-manager)
 
-### Docker Setup
-The project includes a containerized development environment:
-```bash
-cd docker
-docker-compose up -d
-docker exec -it platformio-development bash
-```
+The desktop application is located in `tools/rtls-link-manager` and is a Tauri app (Rust backend + React frontend).
+
+### Build Commands
+- `cd tools/rtls-link-manager && npm run tauri build` - Build production release
+- `cd tools/rtls-link-manager && npm run dev` - Run in development mode
+- `cd tools/rtls-link-manager && cargo check --manifest-path src-tauri/Cargo.toml` - Quick Rust type check (faster than full build)
+
+### Compilation Testing Requirements
+**CRITICAL**: When modifying code in `tools/rtls-link-manager`, ALWAYS verify compilation before pushing:
+- `cd tools/rtls-link-manager && cargo check --manifest-path src-tauri/Cargo.toml` - Rust backend must compile
+- `cd tools/rtls-link-manager && npm run build` - Frontend must build successfully
+- Both checks must pass before any git push operation to the rtls-link-manager repository
 
 ### Board Support
 - **ESP32 (Makerfabs)**: `MAKERFABS_ESP32_BOARD` flag
 - **ESP32S3 (Konex UWB)**: `ESP32S3_UWB_BOARD` flag
 
-## Architecture
-
-### Core Components
-
-1. **Task Scheduler** (`src/scheduler.hpp`):
-   - FreeRTOS-based task management
-   - Static and dynamic task creation with ETL delegates
-   - Periodic and continuous task types
-
-2. **Frontend/Backend Pattern**:
-   - **UWB Frontend** (`src/uwb/uwb_frontend.hpp`): High-level UWB interface
-   - **UWB Backend** (`src/uwb/uwb_backend.hpp`): Hardware abstraction layer
-   - **WiFi Frontend/Backend**: Network communication management
-
-3. **Application Core** (`src/app.hpp`):
-   - Main application logic
-   - MAVLink position sensor integration
-   - Coordinate transformation with NED frame orientation
-
-4. **Parameter System** (`src/front.hpp`):
-   - EEPROM-based parameter storage
-   - Type-safe parameter access
-   - ASCII string-based parameter interface
-
-### UWB Implementation
-
-The UWB subsystem supports multiple modes:
-- **TWR (Two-Way Ranging)**: Anchor/Tag modes
-- **TDoA (Time Difference of Arrival)**: Anchor/Tag modes
-- **Calibration**: Antenna delay calibration
-
-Key libraries:
-- `DW1000_mf`: DW1000 chip driver
-- `Trilat`: Trilateration algorithms
-- `tdoa_algorithm`: TDoA positioning
-- `tdoa_estimator`: Position estimation
-
-### MAVLink Integration
-
-The system integrates with ArduPilot via MAVLink:
-- Local position sensor messages
-- UART communication interface
-- Configurable system/component IDs
-- Automatic origin coordinate transmission
-
-## Key Configuration
-
-### Coordinate System
-- Uses NED (North-East-Down) coordinate frame
-- Configurable rotation offset: 40 degrees (hardcoded)
-- Origin coordinates: Barcelona area (hardcoded)
-
-### Task Configuration
+### Main internal FreeRTOS tasks
 Main tasks run at different frequencies:
 - Application task: 10Hz
 - WiFi task: 50Hz
@@ -112,29 +63,7 @@ ESP32 environments use:
 - Eigen for matrix operations
 - AsyncTCP/ESPAsyncWebServer for web interface
 - SimpleCLI for command parsing
-- SimpleKalmanFilter for filtering
-- ArduinoLog for logging
-
-## Board-Specific Notes
-
-### ESP32S3 Configuration
-- Uses `huge_app.csv` partition table
-- Eigen stack allocation limited due to memory constraints
-- USB serial communication specifics
-
-### ESP32 Configuration
-- Standard ESP-WROVER-KIT board
-- Makerfabs-specific board definitions
-
-## Testing Strategy
-
-The project includes unit tests for:
-- 2D/3D trilateration algorithms
-- TDoA estimation
-- Eigen matrix operations
-- Direct 3D positioning
-
-Test data and plotting utilities are available in the `test/` directory.
+- Many others ...
 
 ## Important Files
 
@@ -144,4 +73,12 @@ Test data and plotting utilities are available in the `test/` directory.
 - `src/uwb/`: UWB-related implementations
 - `src/wifi/`: WiFi and web server implementations
 - `scripts/`: Python utilities for testing and parameter management
+- `tools/` : Tools like the `rtls-link-manager` desktop application for configuring and interacting with the system 
 - `platformio.ini`: Build configuration
+
+# Important notes
+
+- When adding new features to the code base, make sure to wrap it into a macro preprocessor feature switch (see features.hpp and user_defines.txt ). If there are any dependencies that need to be made ( like maybe feature X needs of feature Y, make sure to update the feature_validation.hpp ).
+- When adding a new functionality from scratch. Always create a new branch called `feature/<title>` before starting to write the code.
+- Always when adding a new feature to the firmware ( basically src folder ) you need to maintain in "sync" compatibility with the new feature of the desktop app that you can find inside `tools/rtls-link-manager`. The rtls-link-manager is a git submodule with it's own repository. You should create there the same corresponding branch. When opening the PRs, on the rtls-link repository, you should add a link with the matching feature PR of the `rtls-link-manager`. 
+- The repo has a special features file called `user_defines.txt` where it introduces all the feature flags included on the build. When adding a new feature make sure to add it to the `user_defines.txt`. All features should be there, if disables it should simply be commented out.

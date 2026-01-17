@@ -3,6 +3,7 @@
 #ifdef USE_WIFI_TCP_LOGGING
 
 #include "wifi_tcp_server.hpp"
+#include "logging/logging.hpp"
 
 
 WifiTcpServer::WifiTcpServer(uint16_t port)
@@ -56,11 +57,10 @@ void WifiTcpServer::AddForSending(const char *data)
 
 void WifiTcpServer::OnClientConnected(AsyncClient *client)
 {
-    // Print the client's IP address
-    Serial.printf("New Client: %s\n", client->remoteIP().toString().c_str());
+    LOG_DEBUG("TCP client connected: %s", client->remoteIP().toString().c_str());
 
     if (m_Clients.size() >= 5) {
-        Serial.println("Too many clients connected");
+        LOG_WARN("Too many TCP clients");
         client->write("Too many clients connected\n");
         delete client;
         return;
@@ -73,7 +73,7 @@ void WifiTcpServer::OnClientConnected(AsyncClient *client)
 
     // Handle client disconnection
     client->onDisconnect([this](void* unused, AsyncClient* c){
-        Serial.printf("Client Disconnected: %s\n", c->remoteIP().toString().c_str());
+        LOG_DEBUG("TCP client disconnected: %s", c->remoteIP().toString().c_str());
         xSemaphoreTake(mutex, portMAX_DELAY);
         m_Clients.erase(std::remove(m_Clients.begin(), m_Clients.end(), c), m_Clients.end());
         xSemaphoreGive(mutex);

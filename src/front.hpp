@@ -8,6 +8,7 @@
 #include <etl/vector.h>
 
 #include "utils/utils.hpp"
+#include "logging/logging.hpp"
 
 #include "param.hpp"
 
@@ -50,7 +51,7 @@ class Frontend : public IFrontend {
 public:
     Frontend(const char* eepromUniqueName) : m_EEPROM(eepromUniqueName) {
         Front::AddFrontend(this);
-        printf("----- Frontend %s created -----\n", eepromUniqueName);
+        LOG_DEBUG("Frontend '%s' created", eepromUniqueName);
     }
 
     // TODO: Fix this. Should be direct call to EEPROM member instead of Read or Write function calls
@@ -126,7 +127,7 @@ public:
 protected:
     void InitEeprom() {
         if (!m_EEPROM.begin(sizeof(TParams))) {
-            printf("Failed to initialize EEPROM: %s, %d\n", sizeof(TParams));
+            LOG_ERROR("EEPROM init failed: %d bytes", sizeof(TParams));
         }
     }
 

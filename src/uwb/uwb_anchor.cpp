@@ -2,6 +2,8 @@
 
 #ifdef USE_UWB_MODE_TWR_ANCHOR
 
+#include "logging/logging.hpp"
+
 #include <DW1000Ranging.h>
 #include <DW1000.h>
 #include <DW1000Time.h>
@@ -35,9 +37,9 @@ UWBAnchor::UWBAnchor(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBS
     }();
 
     //start the module as an anchor, do not assign random short address
-    DW1000Ranging.startAsAnchor(longAddr, DW1000.MODE_SHORTDATA_FAST_ACCURACY, false);    
-    
-    printf("------- UWB Anchor Initialized -------\n");
+    DW1000Ranging.startAsAnchor(longAddr, DW1000.MODE_SHORTDATA_FAST_ACCURACY, false);
+
+    LOG_INFO("UWB Anchor initialized");
 }
 
 void UWBAnchor::Update()
@@ -47,29 +49,23 @@ void UWBAnchor::Update()
 
 static void newRange()
 {
-  // Serial.print("from: ");
-  Serial.print(DW1000Ranging.getDistantDevice()->getShortAddress(), HEX);
-  Serial.print(", ");
-
 #define NUMBER_OF_DISTANCES 1
   float dist = 0.0;
   for (int i = 0; i < NUMBER_OF_DISTANCES; i++) {
     dist += DW1000Ranging.getDistantDevice()->getRange();
   }
   dist = dist/NUMBER_OF_DISTANCES;
-  Serial.println(dist);
+  LOG_DEBUG("Range from 0x%X: %.2f m", DW1000Ranging.getDistantDevice()->getShortAddress(), dist);
 }
 
 static void newDevice(DW1000Device *device)
 {
-  Serial.print("Device added: ");
-  Serial.println(device->getShortAddress(), HEX);
+  LOG_DEBUG("Device added: 0x%X", device->getShortAddress());
 }
 
 static void inactiveDevice(DW1000Device *device)
 {
-  Serial.print("Delete inactive device: ");
-  Serial.println(device->getShortAddress(), HEX);
+  LOG_DEBUG("Device removed: 0x%X", device->getShortAddress());
 }
 
 #endif // USE_UWB_MODE_TWR_ANCHOR

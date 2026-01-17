@@ -2,7 +2,7 @@
 
 /**
  * @brief Scheduler class
- * 
+ *
  * @defgroup scheduler
 */
 
@@ -12,6 +12,8 @@
 
 #include <etl/vector.h>
 #include <etl/delegate.h>
+
+#include "logging/logging.hpp"
 
 enum class TaskType {
   PERIODIC,
@@ -152,7 +154,7 @@ public:
     );
 
     if (err != pdPASS) {
-      printf("Failed to create task: %s\n", task.name);
+      LOG_ERROR("Failed to create task: %s", task.name);
     } else {
       xSemaphoreTake(task.taskReadySemaphore, portMAX_DELAY);
     }

@@ -1,5 +1,6 @@
 #include "config_manager.hpp"
 #include "front.hpp"
+#include "logging/logging.hpp"
 
 // Static member definitions
 etl::string<ConfigManager::MAX_NAME_LENGTH> ConfigManager::s_ActiveConfig;
@@ -12,26 +13,26 @@ bool ConfigManager::Init() {
     }
 
     if (!LittleFS.begin(true)) {
-        printf("ConfigManager: Failed to initialize LittleFS\n");
+        LOG_ERROR("ConfigManager: Failed to initialize LittleFS");
         return false;
     }
 
     if (!EnsureConfigDir()) {
-        printf("ConfigManager: Failed to create config directory\n");
+        LOG_ERROR("ConfigManager: Failed to create config directory");
         return false;
     }
 
     LoadMetadata();
     s_Initialized = true;
-    printf("ConfigManager: Initialized with %d configs, active: %s\n",
-           s_Configs.size(), s_ActiveConfig.empty() ? "none" : s_ActiveConfig.c_str());
+    LOG_INFO("ConfigManager: Initialized with %d configs, active: %s",
+             s_Configs.size(), s_ActiveConfig.empty() ? "none" : s_ActiveConfig.c_str());
     return true;
 }
 
 bool ConfigManager::EnsureConfigDir() {
     if (!LittleFS.exists(CONFIG_DIR)) {
         if (!LittleFS.mkdir(CONFIG_DIR)) {
-            printf("ConfigManager: Failed to create directory %s\n", CONFIG_DIR);
+            LOG_ERROR("ConfigManager: Failed to create directory %s", CONFIG_DIR);
             return false;
         }
     }
@@ -44,7 +45,7 @@ bool ConfigManager::LoadMetadata() {
 
     File file = LittleFS.open(METADATA_FILE, "r");
     if (!file) {
-        printf("ConfigManager: No metadata file found, starting fresh\n");
+        LOG_INFO("ConfigManager: No metadata file found, starting fresh");
         return true;
     }
 
@@ -96,7 +97,7 @@ bool ConfigManager::LoadMetadata() {
 bool ConfigManager::SaveMetadata() {
     File file = LittleFS.open(METADATA_FILE, "w");
     if (!file) {
-        printf("ConfigManager: Failed to open metadata file for writing\n");
+        LOG_ERROR("ConfigManager: Failed to open metadata file for writing");
         return false;
     }
 
@@ -144,13 +145,13 @@ String ConfigManager::GetConfigPath(const char* name) {
 bool ConfigManager::CopyFile(const char* src, const char* dst) {
     File srcFile = LittleFS.open(src, "r");
     if (!srcFile) {
-        printf("ConfigManager: Failed to open source file %s\n", src);
+        LOG_ERROR("ConfigManager: Failed to open source file %s", src);
         return false;
     }
 
     File dstFile = LittleFS.open(dst, "w");
     if (!dstFile) {
-        printf("ConfigManager: Failed to open destination file %s\n", dst);
+        LOG_ERROR("ConfigManager: Failed to open destination file %s", dst);
         srcFile.close();
         return false;
     }
@@ -162,8 +163,8 @@ bool ConfigManager::CopyFile(const char* src, const char* dst) {
         size_t bytesRead = srcFile.read(buffer, sizeof(buffer));
         size_t bytesWritten = dstFile.write(buffer, bytesRead);
         if (bytesWritten != bytesRead) {
-            printf("ConfigManager: Write error copying file (wrote %d of %d bytes)\n",
-                   bytesWritten, bytesRead);
+            LOG_ERROR("ConfigManager: Write error copying file (wrote %d of %d bytes)",
+                      bytesWritten, bytesRead);
             success = false;
             break;
         }
@@ -216,7 +217,7 @@ ConfigError ConfigManager::SaveConfigAs(const char* name) {
     // First, save current parameters to /params.txt
     ErrorParam saveResult = Front::SaveAllParams();
     if (saveResult != ErrorParam::OK) {
-        printf("ConfigManager: Failed to save current params before creating config\n");
+        LOG_ERROR("ConfigManager: Failed to save current params before creating config");
         return ConfigError::FILE_SYSTEM_ERROR;
     }
 
@@ -255,7 +256,7 @@ ConfigError ConfigManager::SaveConfigAs(const char* name) {
         return ConfigError::FILE_SYSTEM_ERROR;
     }
 
-    printf("ConfigManager: Saved config '%s'\n", name);
+    LOG_INFO("ConfigManager: Saved config '%s'", name);
     return ConfigError::OK;
 }
 
@@ -298,11 +299,11 @@ ConfigError ConfigManager::LoadConfigNamed(const char* name) {
     // Reload all parameters and check for errors
     ErrorParam loadResult = Front::LoadAllParams();
     if (loadResult != ErrorParam::OK && loadResult != ErrorParam::FILE_NOT_FOUND) {
-        printf("ConfigManager: Warning - failed to reload parameters after loading config\n");
+        LOG_WARN("ConfigManager: Failed to reload parameters after loading config");
         return ConfigError::FILE_SYSTEM_ERROR;
     }
 
-    printf("ConfigManager: Loaded config '%s'\n", name);
+    LOG_INFO("ConfigManager: Loaded config '%s'", name);
     return ConfigError::OK;
 }
 
@@ -343,7 +344,7 @@ ConfigError ConfigManager::DeleteConfig(const char* name) {
     // Save metadata
     SaveMetadata();
 
-    printf("ConfigManager: Deleted config '%s'\n", name);
+    LOG_INFO("ConfigManager: Deleted config '%s'", name);
     return ConfigError::OK;
 }
 

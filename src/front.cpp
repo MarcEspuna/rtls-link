@@ -1,4 +1,5 @@
 #include "front.hpp"
+#include "logging/logging.hpp"
 
 etl::vector<IFrontend*, Front::MAX_FRONTENDS>& Get();
 
@@ -9,14 +10,14 @@ void Front::AddFrontend(IFrontend* frontend)
 
 void Front::InitFrontends()
 {
-    printf("------ Initializing the frontends ------\n");
+    LOG_INFO("Initializing frontends");
     etl::vector<IFrontend*, Front::MAX_FRONTENDS>& frontends = Get();
     for (size_t i = 0; i < frontends.size(); i++)
     {
         IFrontend* frontend = frontends[i];
         frontend->Init();
     }
-    printf("------ Frontends initialized ------\n");
+    LOG_INFO("Frontends initialized");
 }
 
 ErrorParam Front::WriteGlobalParam(const char *group, const char *name, const void *data, uint32_t len)

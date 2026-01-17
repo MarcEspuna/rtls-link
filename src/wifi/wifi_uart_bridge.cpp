@@ -8,6 +8,7 @@
 #include <ESPAsyncWebServer.h>
 
 #include "wifi_uart_bridge.hpp"
+#include "logging/logging.hpp"
 
 #include "bsp/board.hpp"
 
@@ -21,8 +22,7 @@ WifiUartBridge::WifiUartBridge(HardwareSerial &serial, IPAddress gsc_ip, uint16_
     m_Udp.begin(m_UdpPort);
     m_TargetIp = gsc_ip;
 
-    Serial.printf("[UART-Bridge] Initialized - Target: %s:%d\n",
-                  gsc_ip.toString().c_str(), m_UdpPort);
+    LOG_INFO("UART bridge initialized - Target: %s:%d", gsc_ip.toString().c_str(), m_UdpPort);
 }
 
 /**

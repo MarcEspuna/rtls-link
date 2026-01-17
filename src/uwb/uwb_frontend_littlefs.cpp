@@ -1,6 +1,7 @@
 #include "config/features.hpp"
 
 #include "uwb_frontend_littlefs.hpp"
+#include "logging/logging.hpp"
 
 // Conditional includes based on feature flags
 #ifdef USE_UWB_MODE_TWR_ANCHOR
@@ -25,7 +26,7 @@
 
 void UWBLittleFSFrontend::Init() {
     LittleFSFrontend<UWBParams>::Init();
-    printf("UWBLittleFSFrontend::Init()\n");
+    LOG_INFO("UWB frontend initializing");
 
     auto anchors = GetAnchors();
     switch (m_Params.mode)
@@ -34,43 +35,43 @@ void UWBLittleFSFrontend::Init() {
 #ifdef USE_UWB_MODE_TWR_ANCHOR
         m_Backend = new UWBAnchor(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
 #else
-        printf("WARNING: TWR Anchor mode requested but USE_UWB_MODE_TWR_ANCHOR not compiled\n");
+        LOG_WARN("TWR Anchor mode requested but USE_UWB_MODE_TWR_ANCHOR not compiled");
 #endif
         break;
     case UWBMode::TAG_MODE_TWR:
 #ifdef USE_UWB_MODE_TWR_TAG
         m_Backend = new UWBTag(*this, bsp::kBoardConfig.uwb, anchors);
 #else
-        printf("WARNING: TWR Tag mode requested but USE_UWB_MODE_TWR_TAG not compiled\n");
+        LOG_WARN("TWR Tag mode requested but USE_UWB_MODE_TWR_TAG not compiled");
 #endif
         break;
     case UWBMode::CALIBRATION_MODE:
 #ifdef USE_UWB_CALIBRATION
         m_Backend = new UWBCalibration(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.calDistance);
 #else
-        printf("WARNING: Calibration mode requested but USE_UWB_CALIBRATION not compiled\n");
+        LOG_WARN("Calibration mode requested but USE_UWB_CALIBRATION not compiled");
 #endif
         break;
     case UWBMode::ANCHOR_TDOA:
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
         m_Backend = new UWBAnchorTDoA(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
 #else
-        printf("WARNING: TDoA Anchor mode requested but USE_UWB_MODE_TDOA_ANCHOR not compiled\n");
+        LOG_WARN("TDoA Anchor mode requested but USE_UWB_MODE_TDOA_ANCHOR not compiled");
 #endif
         break;
     case UWBMode::TAG_TDOA:
 #ifdef USE_UWB_MODE_TDOA_TAG
         m_Backend = new UWBTagTDoA(*this, bsp::kBoardConfig.uwb, anchors);
 #else
-        printf("WARNING: TDoA Tag mode requested but USE_UWB_MODE_TDOA_TAG not compiled\n");
+        LOG_WARN("TDoA Tag mode requested but USE_UWB_MODE_TDOA_TAG not compiled");
 #endif
         break;
     default:
-        printf("Unknown UWB mode\n");
+        LOG_ERROR("Unknown UWB mode");
         break;
     }
 
-    printf("------ UWB Frontend Initialized ------\n");
+    LOG_INFO("UWB frontend initialized");
 }
 
 void UWBLittleFSFrontend::Update() {

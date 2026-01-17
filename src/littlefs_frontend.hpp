@@ -11,13 +11,14 @@
 #include "utils/utils.hpp"
 #include "param.hpp"
 #include "front.hpp"
+#include "logging/logging.hpp"
 
 template<typename TParams>
 class LittleFSFrontend : public IFrontend {
 public:
     LittleFSFrontend(const char* groupName) : m_GroupName(groupName) {
         Front::AddFrontend(this);
-        printf("----- LittleFSFrontend %s created -----\n", groupName);
+        LOG_INFO("LittleFS frontend '%s' created", groupName);
     }
 
     void Init() override {
@@ -80,7 +81,7 @@ public:
         static bool initialized = false;
         if (!initialized) {
             if (!LittleFS.begin(true)) {
-                printf("Failed to initialize LittleFS\n");
+                LOG_ERROR("Failed to initialize LittleFS");
                 return ErrorParam::FILE_SYSTEM_ERROR;
             }
             initialized = true;
@@ -88,7 +89,7 @@ public:
 
         File file = LittleFS.open("/params.txt", "r");
         if (!file) {
-            printf("No params.txt file found, using defaults for group %s\n", m_GroupName.data());
+            LOG_INFO("No params.txt - using defaults for %s", m_GroupName.data());
             return ErrorParam::FILE_NOT_FOUND;
         }
 
@@ -143,7 +144,7 @@ public:
         }
         
         file.close();
-        printf("Loaded parameters for group %s\n", m_GroupName.data());
+        LOG_DEBUG("Loaded params for %s", m_GroupName.data());
         return ErrorParam::OK;
     }
 
@@ -151,7 +152,7 @@ public:
         static bool initialized = false;
         if (!initialized) {
             if (!LittleFS.begin()) {
-                printf("Failed to initialize LittleFS\n");
+                LOG_ERROR("Failed to initialize LittleFS");
                 return ErrorParam::FILE_SYSTEM_ERROR;
             }
             initialized = true;
@@ -162,7 +163,7 @@ public:
         File tempFile = LittleFS.open("/params.tmp", "w");
 
         if (!tempFile) {
-            printf("Failed to open temp file for writing\n");
+            LOG_ERROR("Failed to open temp file");
             if (file) file.close();
             return ErrorParam::FILE_SYSTEM_ERROR;
         }
@@ -219,11 +220,11 @@ public:
         // Replace original file with temp file
         LittleFS.remove("/params.txt");
         if (!LittleFS.rename("/params.tmp", "/params.txt")) {
-            printf("Failed to rename temp file to params.txt\n");
+            LOG_ERROR("Failed to rename temp file");
             return ErrorParam::FILE_SYSTEM_ERROR;
         }
 
-        printf("Saved parameters for group %s\n", m_GroupName.data());
+        LOG_DEBUG("Saved params for %s", m_GroupName.data());
         return ErrorParam::OK;
     }
 
