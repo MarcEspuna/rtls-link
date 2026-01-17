@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_UWB_MODE_TDOA_TAG
+
 #include <freertos/FreeRTOS.h>
 
 #include <etl/span.h>
@@ -47,7 +51,7 @@ private:
         .reset = libDw1000::Reset,
     };
 
-    // User data for libdw1000    
+    // User data for libdw1000
     libDw1000::DwData m_DwData = {
         .rst_pin = bsp::kBoardConfig.uwb.pins.reset_pin,
         .cs_pin = bsp::kBoardConfig.uwb.pins.spi_cs_pin,
@@ -62,8 +66,10 @@ private:
 };
 
 
-using TagTDoADispatcher = Dispatcher<libDw1000::IsrFlags, UWBTagTDoA, 
+using TagTDoADispatcher = Dispatcher<libDw1000::IsrFlags, UWBTagTDoA,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_DONE, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::RX_DONE>>,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::TX_DONE, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::TX_DONE>>,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_TIMEOUT, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::RX_TIMEOUT>>,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_FAILED, UWBTagTDoA, &UWBTagTDoA::OnEvent<libDw1000::IsrFlags::RX_FAILED>>>;
+
+#endif // USE_UWB_MODE_TDOA_TAG

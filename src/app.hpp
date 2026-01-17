@@ -77,9 +77,13 @@ public:
     // Helper function to correct for yaw orientation
     static Vector3f correct_for_orient_yaw(float x, float y, float z);
 
-#ifdef USE_MAVLINK
-    // Telemetry getters for heartbeat broadcast
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_POSITION)
+    // Telemetry getter for position broadcast
     static bool IsSendingPositions();  // True if sent to ArduPilot in last 2s
+#endif
+
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_ORIGIN)
+    // Telemetry getter for origin broadcast
     static bool IsOriginSent();        // True if GPS origin sent to ArduPilot
 #endif
 
@@ -101,11 +105,15 @@ private:
 #ifdef USE_MAVLINK
     UartComm uart_comm_;
     LocalPositionSensor local_position_sensor_;
+#ifdef USE_MAVLINK_HEARTBEAT
     uint64_t last_heartbeat_timestamp_ms_ = 0;
     uint64_t last_heartbeat_received_timestamp_ms_ = 0;
+#endif // USE_MAVLINK_HEARTBEAT
+#ifdef USE_MAVLINK_ORIGIN
     bool is_origin_position_sent_ = false;
     bool is_origin_set_ = false;
-#endif
+#endif // USE_MAVLINK_ORIGIN
+#endif // USE_MAVLINK
 
     uint64_t last_sample_timestamp_ms_ = 0;
     uint64_t device_unhealthy_timestamp_ms_ = 0;
@@ -142,12 +150,16 @@ private:
     static constexpr uint64_t kDeviceHealtyMinDurationMs = 100;     // If no packet sent for more than 100ms, consider device as unhealthy
 
 #ifdef USE_MAVLINK
-    static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 16 seconds healthy device, send global origin position
     static constexpr uint8_t kSystemId = 199;
     static constexpr uint8_t kComponentId = MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY;
+#ifdef USE_MAVLINK_HEARTBEAT
     static constexpr uint64_t kHeartbeatIntervalMs = 1000;
     static constexpr uint64_t kHeartbeatRcvTimeoutMs = 3000;
-#endif
+#endif // USE_MAVLINK_HEARTBEAT
+#ifdef USE_MAVLINK_ORIGIN
+    static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 16 seconds healthy device, send global origin position
+#endif // USE_MAVLINK_ORIGIN
+#endif // USE_MAVLINK
 
 #ifdef HAS_RANGEFINDER
     static constexpr uint64_t kRangefinderStaleTimeoutMs = 500;  // Rangefinder data older than this is considered stale

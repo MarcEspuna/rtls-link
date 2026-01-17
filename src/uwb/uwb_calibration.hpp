@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_UWB_CALIBRATION
+
 #include "uwb_backend.hpp"
 
 class UWBCalibration : public UWBBackend {
@@ -11,3 +15,5 @@ public:
 private:
 
 };
+
+#endif // USE_UWB_CALIBRATION

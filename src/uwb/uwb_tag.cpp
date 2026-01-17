@@ -1,5 +1,7 @@
 #include "config/features.hpp"  // MUST be first project include
 
+#ifdef USE_UWB_MODE_TWR_TAG
+
 #include <Eigen.h>
 
 #include <iostream>
@@ -258,3 +260,5 @@ static Trilat::ITrilat& GetTrilat()
 {
   return GetInterface<Trilat::ITrilat>(trilat_storage);
 }
+
+#endif // USE_UWB_MODE_TWR_TAG

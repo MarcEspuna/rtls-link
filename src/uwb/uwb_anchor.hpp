@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_UWB_MODE_TWR_ANCHOR
+
 #include <Arduino.h>
 #include <SPI.h>
 
@@ -16,3 +20,5 @@ public:
 private:
 
 };
+
+#endif // USE_UWB_MODE_TWR_ANCHOR

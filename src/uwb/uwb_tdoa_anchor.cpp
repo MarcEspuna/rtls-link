@@ -1,3 +1,7 @@
+#include "config/features.hpp"
+
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
+
 #include <Arduino.h>
 
 #include "uwb_tdoa_anchor.hpp"
@@ -194,3 +198,5 @@ static void rxFailedCallback(dwDevice_t *dev)
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::RX_FAILED;
 }
+
+#endif // USE_UWB_MODE_TDOA_ANCHOR

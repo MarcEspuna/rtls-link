@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_UWB_MODE_TWR_TAG
+
 #include <etl/span.h>
 #include <etl/variant.h>
 
@@ -17,3 +21,5 @@ public:
 
     bool Start() override;
 };
+
+#endif // USE_UWB_MODE_TWR_TAG

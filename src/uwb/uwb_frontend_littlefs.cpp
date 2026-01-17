@@ -1,12 +1,27 @@
-#include "uwb_frontend_littlefs.hpp"
+#include "config/features.hpp"
 
 #include "uwb_frontend_littlefs.hpp"
 
+// Conditional includes based on feature flags
+#ifdef USE_UWB_MODE_TWR_ANCHOR
 #include "uwb_anchor.hpp"
+#endif
+
+#ifdef USE_UWB_MODE_TWR_TAG
 #include "uwb_tag.hpp"
+#endif
+
+#ifdef USE_UWB_CALIBRATION
 #include "uwb_calibration.hpp"
+#endif
+
+#ifdef USE_UWB_MODE_TDOA_TAG
 #include "uwb_tdoa_tag.hpp"
+#endif
+
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
 #include "uwb_tdoa_anchor.hpp"
+#endif
 
 void UWBLittleFSFrontend::Init() {
     LittleFSFrontend<UWBParams>::Init();
@@ -15,26 +30,41 @@ void UWBLittleFSFrontend::Init() {
     auto anchors = GetAnchors();
     switch (m_Params.mode)
     {
-    case UWBMode::ANCHOR_MODE_TWR: {
+    case UWBMode::ANCHOR_MODE_TWR:
+#ifdef USE_UWB_MODE_TWR_ANCHOR
         m_Backend = new UWBAnchor(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
+#else
+        printf("WARNING: TWR Anchor mode requested but USE_UWB_MODE_TWR_ANCHOR not compiled\n");
+#endif
         break;
-        }
-    case UWBMode::TAG_MODE_TWR:{
+    case UWBMode::TAG_MODE_TWR:
+#ifdef USE_UWB_MODE_TWR_TAG
         m_Backend = new UWBTag(*this, bsp::kBoardConfig.uwb, anchors);
+#else
+        printf("WARNING: TWR Tag mode requested but USE_UWB_MODE_TWR_TAG not compiled\n");
+#endif
         break;
-        }
-    case UWBMode::CALIBRATION_MODE: {
+    case UWBMode::CALIBRATION_MODE:
+#ifdef USE_UWB_CALIBRATION
         m_Backend = new UWBCalibration(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.calDistance);
+#else
+        printf("WARNING: Calibration mode requested but USE_UWB_CALIBRATION not compiled\n");
+#endif
         break;
-    }
-    case UWBMode::ANCHOR_TDOA: {
+    case UWBMode::ANCHOR_TDOA:
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
         m_Backend = new UWBAnchorTDoA(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
+#else
+        printf("WARNING: TDoA Anchor mode requested but USE_UWB_MODE_TDOA_ANCHOR not compiled\n");
+#endif
         break;
-    }
-    case UWBMode::TAG_TDOA: {
+    case UWBMode::TAG_TDOA:
+#ifdef USE_UWB_MODE_TDOA_TAG
         m_Backend = new UWBTagTDoA(*this, bsp::kBoardConfig.uwb, anchors);
+#else
+        printf("WARNING: TDoA Tag mode requested but USE_UWB_MODE_TDOA_TAG not compiled\n");
+#endif
         break;
-    }
     default:
         printf("Unknown UWB mode\n");
         break;

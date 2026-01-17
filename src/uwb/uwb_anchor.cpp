@@ -1,3 +1,7 @@
+#include "config/features.hpp"
+
+#ifdef USE_UWB_MODE_TWR_ANCHOR
+
 #include <DW1000Ranging.h>
 #include <DW1000.h>
 #include <DW1000Time.h>
@@ -67,3 +71,5 @@ static void inactiveDevice(DW1000Device *device)
   Serial.print("Delete inactive device: ");
   Serial.println(device->getShortAddress(), HEX);
 }
+
+#endif // USE_UWB_MODE_TWR_ANCHOR

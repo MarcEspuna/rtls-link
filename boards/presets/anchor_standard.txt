@@ -25,7 +25,6 @@
 -D USE_WIFI_WEBSERVER
 -D USE_WIFI_TCP_LOGGING
 -D USE_WIFI_DISCOVERY
--D USE_WIFI_MDNS
 
 ; Full console with all management features
 -D USE_CONSOLE

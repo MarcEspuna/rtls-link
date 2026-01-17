@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_UART_BRIDGE
+
 #include <Arduino.h>
 #include <IPAddress.h>
 #include <WiFiUdp.h>
@@ -9,11 +13,11 @@
 
 /**
  * @brief It basically needs a Serial port and a UDP port and IP address to forward the communication between the two.
- * 
+ *
  */
 
 class WifiUartBridge : public WifiBackend {
-private: 
+private:
 public:
     WifiUartBridge(HardwareSerial &serial, IPAddress gsc_ip, uint16_t local_udp_port);
 
@@ -38,3 +42,5 @@ private:
     static constexpr uint32_t kTimeThresholdMs = 5;  // Send if older than this
 
 };
+
+#endif // USE_WIFI_UART_BRIDGE

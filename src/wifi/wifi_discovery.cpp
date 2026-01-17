@@ -1,3 +1,7 @@
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_DISCOVERY
+
 #include "wifi_discovery.hpp"
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "version.hpp"
@@ -114,3 +118,5 @@ const char* WifiDiscovery::ModeToRoleString(uint8_t mode) {
         default: return "unknown";
     }
 }
+
+#endif // USE_WIFI_DISCOVERY

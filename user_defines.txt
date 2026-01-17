@@ -23,7 +23,7 @@
 -D USE_WIFI_TCP_LOGGING         ; TCP debug logging server
 -D USE_WIFI_UART_BRIDGE         ; UART-to-UDP bridge
 -D USE_WIFI_DISCOVERY           ; UDP discovery service
--D USE_WIFI_MDNS                ; mDNS service discovery
+; -D USE_WIFI_MDNS              ; mDNS service discovery (NOT IMPLEMENTED)
 
 ; -----------------------------------------------------------------------------
 ; MAVLINK OUTPUT PROTOCOL

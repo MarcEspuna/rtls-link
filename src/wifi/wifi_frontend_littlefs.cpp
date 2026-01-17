@@ -1,10 +1,23 @@
 #include "config/features.hpp"  // MUST be first project include
 
 #include "wifi_frontend_littlefs.hpp"
+
+// Conditional includes based on feature flags
+#ifdef USE_WIFI_WEBSERVER
 #include "wifi_websocket.hpp"
+#endif
+
+#ifdef USE_WIFI_UART_BRIDGE
 #include "wifi_uart_bridge.hpp"
+#endif
+
+#ifdef USE_WIFI_TCP_LOGGING
 #include "wifi_tcp_server.hpp"
+#endif
+
+#ifdef USE_WIFI_DISCOVERY
 #include "wifi_discovery.hpp"
+#endif
 
 #include "command_handler/command_handler.hpp"
 #include <utils/utils.hpp>
@@ -15,6 +28,7 @@
 #include "uwb/uwb_frontend_littlefs.hpp"
 
 // Free function for telemetry callback (ETL delegates require free function or static method)
+#ifdef USE_WIFI_DISCOVERY
 static DeviceTelemetry GetDeviceTelemetry() {
     DeviceTelemetry t;
 
@@ -59,6 +73,7 @@ static DeviceTelemetry GetDeviceTelemetry() {
 
     return t;
 }
+#endif // USE_WIFI_DISCOVERY
 
 // I will define a static FreeRTOS task holder for station connection checks
 static StaticTaskHolder<etl::delegate<void()>, 4096> wifi_connection_task = {
@@ -72,16 +87,20 @@ static StaticTaskHolder<etl::delegate<void()>, 4096> wifi_connection_task = {
 
 void WifiLittleFSFrontend::Init() {
     LittleFSFrontend<WifiParams>::Init();
-    
+
     printf("WifiLittleFSFrontend::Init()\n");
-    
+
     UpdateMode(m_Params.mode);
 
+#ifdef USE_WIFI_TCP_LOGGING
     m_TcpLoggingServer = new WifiTcpServer(m_Params.dbgPort);
-    
+#else
+    m_TcpLoggingServer = nullptr;
+#endif
+
     // Set the delegate after initialization
     wifi_connection_task.taskFunction = etl::delegate<void()>::create<WifiLittleFSFrontend, Front::wifiLittleFSFront, &WifiLittleFSFrontend::StationConnectionThread>();
-    
+
     // Schedule the connection task
     Scheduler::scheduler.CreateStaticTask(wifi_connection_task);
 }
@@ -126,12 +145,17 @@ void WifiLittleFSFrontend::SetupWebServer() {
     ClearBackends();
 
     if (m_Params.enableWebServer) {
+#ifdef USE_WIFI_WEBSERVER
         printf("Setting up WebSocket server\n");
         WifiWebSocket* webSocketServer = new WifiWebSocket("/ws", 80);
         m_Backends.push_back(webSocketServer);
+#else
+        printf("WARNING: WebServer requested but USE_WIFI_WEBSERVER not compiled\n");
+#endif
     }
-    
+
     if (m_Params.enableUartBridge) {
+#ifdef USE_WIFI_UART_BRIDGE
         printf("Setting up UART bridge on port %d\n", m_Params.udpPort);
         IPAddress ip;
         if(ip.fromString(m_Params.gcsIp.data())) {
@@ -141,9 +165,13 @@ void WifiLittleFSFrontend::SetupWebServer() {
         } else {
             printf("Invalid GSC IP address\n");
         }
+#else
+        printf("WARNING: UART bridge requested but USE_WIFI_UART_BRIDGE not compiled\n");
+#endif
     }
 
     if (m_Params.enableDiscovery) {
+#ifdef USE_WIFI_DISCOVERY
         WifiDiscovery* discoveryBackend = new WifiDiscovery(m_Params.discoveryPort, m_Params);
         // Set telemetry callback for heartbeat enrichment
         discoveryBackend->SetTelemetryCallback(
@@ -151,6 +179,9 @@ void WifiLittleFSFrontend::SetupWebServer() {
         );
         m_Backends.push_back(discoveryBackend);
         printf("Discovery service enabled on port %d\n", m_Params.discoveryPort);
+#else
+        printf("WARNING: Discovery requested but USE_WIFI_DISCOVERY not compiled\n");
+#endif
     }
 }
 

@@ -1,3 +1,7 @@
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_UART_BRIDGE
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -23,7 +27,7 @@ WifiUartBridge::WifiUartBridge(HardwareSerial &serial, IPAddress gsc_ip, uint16_
 
 /**
  * @brief Maybe around 50 to 100hz update rate could be ok?
- * 
+ *
  */
 void WifiUartBridge::Update()
 {
@@ -85,3 +89,5 @@ void WifiUartBridge::Update()
         }
     }
 }
+
+#endif // USE_WIFI_UART_BRIDGE

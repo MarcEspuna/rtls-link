@@ -1,9 +1,13 @@
 #pragma once
 
-#include "wifi_backend.hpp" 
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_TCP_LOGGING
+
+#include "wifi_backend.hpp"
 
 #include <Arduino.h>
-#include <WiFi.h>   
+#include <WiFi.h>
 #include <AsyncTCP.h>
 
 
@@ -27,3 +31,5 @@ private:
     char m_Data[100] = {};
     bool m_DataReady = false;
 };
+
+#endif // USE_WIFI_TCP_LOGGING

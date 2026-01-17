@@ -1,5 +1,7 @@
 #include "config/features.hpp"  // MUST be first project include
 
+#ifdef USE_UWB_MODE_TDOA_TAG
+
 #include <Eigen.h>
 
 #include <algorithm>
@@ -577,7 +579,9 @@ static void estimatorProcess() {
             stats_last_log_time_ms = now_ms;
         }
 #endif
-        
+
         xSemaphoreGive(measurements_mtx);
     }
 }
+
+#endif // USE_UWB_MODE_TDOA_TAG
