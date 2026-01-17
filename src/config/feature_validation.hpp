@@ -134,6 +134,22 @@
 #endif
 
 // =============================================================================
+// LOGGING SUBSYSTEM DEPENDENCIES
+// =============================================================================
+
+#if defined(USE_LOGGING_SERIAL) && !defined(USE_LOGGING)
+    #error "USE_LOGGING_SERIAL requires USE_LOGGING to be defined"
+#endif
+
+#if defined(USE_LOGGING_UDP) && !defined(USE_LOGGING)
+    #error "USE_LOGGING_UDP requires USE_LOGGING to be defined"
+#endif
+
+#if defined(USE_LOGGING_UDP) && !defined(USE_WIFI)
+    #error "USE_LOGGING_UDP requires USE_WIFI to be defined"
+#endif
+
+// =============================================================================
 // WARNINGS (non-fatal but potentially unintended configurations)
 // =============================================================================
 

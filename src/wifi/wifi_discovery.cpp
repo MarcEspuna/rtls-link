@@ -5,6 +5,7 @@
 #include "wifi_discovery.hpp"
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "version.hpp"
+#include "logging/logging.hpp"
 
 #include <esp_mac.h>
 
@@ -12,7 +13,7 @@ WifiDiscovery::WifiDiscovery(uint16_t port, const WifiParams& wifiParams)
     : m_Port(port)
     , m_WifiParams(wifiParams)
 {
-    printf("WifiDiscovery: Heartbeat mode on port %d\n", m_Port);
+    LOG_INFO("WifiDiscovery: Heartbeat mode on port %d", m_Port);
 }
 
 void WifiDiscovery::SetTelemetryCallback(TelemetryCallback callback) {
@@ -37,7 +38,7 @@ void WifiDiscovery::SendHeartbeat() {
         return; // No valid GCS IP configured
     }
 
-    char response[384];  // Increased buffer for telemetry fields
+    char response[512];  // Increased buffer for telemetry + logging fields
 
     // Get IP and MAC based on WiFi mode
     bool isAP = (WiFi.getMode() == WIFI_AP);
@@ -70,13 +71,22 @@ void WifiDiscovery::SendHeartbeat() {
         telemetry = m_TelemetryCallback();
     }
 
+    // Get log level from compiled setting
+#ifdef USE_LOGGING
+    uint8_t logLevel = rtls::log::Logger::getCompiledLogLevel();
+#else
+    uint8_t logLevel = 0; // Disabled
+#endif
+
     int written = snprintf(response, sizeof(response),
         "{\"device\":\"%s\",\"id\":\"%s\",\"role\":\"%s\","
         "\"ip\":\"%d.%d.%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
         "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\","
         "\"sending_pos\":%s,\"anchors_seen\":%u,\"origin_sent\":%s,"
         "\"rf_enabled\":%s,\"rf_healthy\":%s,"
-        "\"avg_rate_cHz\":%u,\"min_rate_cHz\":%u,\"max_rate_cHz\":%u}",
+        "\"avg_rate_cHz\":%u,\"min_rate_cHz\":%u,\"max_rate_cHz\":%u,"
+        "\"log_level\":%u,\"log_udp_port\":%u,"
+        "\"log_serial_enabled\":%s,\"log_udp_enabled\":%s}",
         DEVICE_TYPE,
         shortAddrStr,
         ModeToRoleString(static_cast<uint8_t>(uwbParams.mode)),
@@ -92,12 +102,16 @@ void WifiDiscovery::SendHeartbeat() {
         telemetry.rf_healthy ? "true" : "false",
         static_cast<unsigned int>(telemetry.avg_rate_cHz),
         static_cast<unsigned int>(telemetry.min_rate_cHz),
-        static_cast<unsigned int>(telemetry.max_rate_cHz));
+        static_cast<unsigned int>(telemetry.max_rate_cHz),
+        logLevel,
+        m_WifiParams.logUdpPort,
+        m_WifiParams.logSerialEnabled ? "true" : "false",
+        m_WifiParams.logUdpEnabled ? "true" : "false");
 
     // Log truncation warning once
     static bool truncation_warned = false;
     if (written >= static_cast<int>(sizeof(response)) && !truncation_warned) {
-        printf("WifiDiscovery: heartbeat JSON truncated!\n");
+        LOG_WARN("WifiDiscovery: heartbeat JSON truncated!");
         truncation_warned = true;
     }
 

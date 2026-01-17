@@ -80,7 +80,23 @@
 #define USE_STATUS_LED_TASK
 #define USE_RATE_STATISTICS
 
+// --- Logging Subsystem ---
+#define USE_LOGGING
+#define USE_LOGGING_SERIAL
+#define USE_LOGGING_UDP
+
 #endif // RTLS_USE_DEFAULT_FEATURES
+
+// =============================================================================
+// LOGGING CONFIGURATION DEFAULTS
+// =============================================================================
+// These are applied whether or not RTLS_USE_DEFAULT_FEATURES is set
+
+// Default global log level (INFO = 3)
+// Can be overridden in platformio.ini or user_defines.txt
+#ifndef LOG_GLOBAL_LEVEL
+    #define LOG_GLOBAL_LEVEL 3
+#endif
 
 // =============================================================================
 // BOARD-SPECIFIC DEFAULT OVERRIDES

@@ -10,6 +10,7 @@
 #include <etl/queue.h>
 
 #include <utils/utils.hpp>
+#include "logging/logging.hpp"
 
 #include "bsp/board.hpp"
 #include "uwb/uwb_frontend_littlefs.hpp"
@@ -41,7 +42,7 @@ App::App()
 // to avoid transmition before the copter is ready
 void App::Init()
 {
-  printf("------ Initializing the application ------\n");
+  LOG_INFO("------ Initializing the application ------");
 
 #ifdef USE_BEACON_PROTOCOL
   bcn_konex::BeaconProtocol::Init();
@@ -64,7 +65,7 @@ void App::Init()
   rate_stats_mutex_ = xSemaphoreCreateMutex();
 
 #if defined(USE_STATUS_LED_TASK) && defined(BOARD_HAS_LED)
-  printf("------ Status task enabled ------\n");
+  LOG_INFO("Status task enabled");
   pinMode(bsp::kBoardConfig.led_pin, OUTPUT);
   digitalWrite(bsp::kBoardConfig.led_pin, LOW);
 #endif
@@ -102,7 +103,7 @@ void App::Init()
                 if (!success) {
                     rf_forward_fail_count_++;
                     if (rf_forward_fail_count_ == kRfForwardFailLogThreshold) {
-                        printf("[Rangefinder] Forward failed %lu consecutive times\n",
+                        LOG_WARN("Rangefinder forward failed %lu consecutive times",
                                static_cast<unsigned long>(rf_forward_fail_count_));
                     }
                 } else {
@@ -112,7 +113,7 @@ void App::Init()
 
             // Time-limited logging (once per second max)
             if (timestamp_ms - last_rangefinder_log_ms_ >= kRangefinderLogIntervalMs) {
-                printf("[Rangefinder] Distance: %u cm (%.2f m) [fwd=%d]\n",
+                LOG_DEBUG("Rangefinder: %u cm (%.2f m) [fwd=%d]",
                        distance_msg.current_distance,
                        static_cast<float>(distance_msg.current_distance) / 100.0f,
                        params.rfForwardEnable ? 1 : 0);
@@ -121,11 +122,11 @@ void App::Init()
         }
     );
 
-    printf("[App] Rangefinder sensor initialized\n");
+    LOG_INFO("Rangefinder sensor initialized");
   }
 #endif // HAS_RANGEFINDER
 
-  printf("------ Application initialized ------\n");
+  LOG_INFO("------ Application initialized ------");
 }
 
 
@@ -171,7 +172,7 @@ void App::Update()
         && !is_origin_position_sent_
         && time_since_rcv_heartbeat < kHeartbeatRcvTimeoutMs) {
       uint8_t target_system_id = Front::uwbLittleFSFront.GetParams().mavlinkTargetSystemId;
-      printf("Sending origin position to system %d\n", target_system_id);
+      LOG_INFO("Sending origin position to system %d", target_system_id);
       local_position_sensor_.send_set_gps_global_origin(
           Front::uwbLittleFSFront.GetParams().originLat,
           Front::uwbLittleFSFront.GetParams().originLon,
@@ -188,7 +189,7 @@ void App::Update()
   if (now_ms - app_stats_last_log_ms >= APP_STATS_LOG_INTERVAL_MS) {
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
     uint64_t time_since_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
-    printf("[App Stats] H:%u U:%u | OriginSent:%d UnhealthyAge:%llums HB_Age:%llums\n",
+    LOG_DEBUG("H:%u U:%u | OriginSent:%d UnhealthyAge:%llums HB_Age:%llums",
            app_stats_healthy_cycles, app_stats_unhealthy_cycles,
            is_origin_position_sent_ ? 1 : 0,
            time_since_unhealthy, time_since_heartbeat);
