@@ -30,6 +30,21 @@ This project uses PlatformIO for build management with multiple environments:
 - Both targets must build without errors before any git push operation
 - This prevents broken builds from being introduced to the codebase
 
+## Desktop Application (rtls-link-manager)
+
+The desktop application is located in `tools/rtls-link-manager` and is a Tauri app (Rust backend + React frontend).
+
+### Build Commands
+- `cd tools/rtls-link-manager && npm run tauri build` - Build production release
+- `cd tools/rtls-link-manager && npm run dev` - Run in development mode
+- `cd tools/rtls-link-manager && cargo check --manifest-path src-tauri/Cargo.toml` - Quick Rust type check (faster than full build)
+
+### Compilation Testing Requirements
+**CRITICAL**: When modifying code in `tools/rtls-link-manager`, ALWAYS verify compilation before pushing:
+- `cd tools/rtls-link-manager && cargo check --manifest-path src-tauri/Cargo.toml` - Rust backend must compile
+- `cd tools/rtls-link-manager && npm run build` - Frontend must build successfully
+- Both checks must pass before any git push operation to the rtls-link-manager repository
+
 ### Board Support
 - **ESP32 (Makerfabs)**: `MAKERFABS_ESP32_BOARD` flag
 - **ESP32S3 (Konex UWB)**: `ESP32S3_UWB_BOARD` flag
