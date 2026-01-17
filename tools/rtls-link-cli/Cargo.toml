@@ -1,0 +1,59 @@
+[package]
+name = "rtls-link-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["RTLS-Link Team"]
+description = "Command-line interface for RTLS-Link device management"
+license = "MIT"
+repository = "https://github.com/your-org/rtls-link"
+keywords = ["uwb", "rtls", "positioning", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# CLI framework
+clap = { version = "4", features = ["derive", "env", "color"] }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "fs", "io-util", "signal"] }
+
+# WebSocket client
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+
+# HTTP client for OTA
+reqwest = { version = "0.11", default-features = false, features = ["multipart", "stream", "rustls-tls"] }
+
+# UDP socket with reuse options
+socket2 = "0.5"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Table formatting
+comfy-table = "7"
+colored = "2"
+
+# Progress bars
+indicatif = "0.17"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Local storage directories
+directories = "5"
+
+# Pattern matching
+regex = "1"
+glob = "0.3"
+
+# Futures utilities
+futures = "0.3"
+
+[[bin]]
+name = "rtls-link-cli"
+path = "src/main.rs"
