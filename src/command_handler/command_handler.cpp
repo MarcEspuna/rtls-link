@@ -10,6 +10,7 @@
 
 #include "front.hpp"
 #include "scheduler.hpp"
+#include "version.hpp"
 
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "app/app_frontend_littlefs.hpp"
@@ -176,6 +177,22 @@ void CommandHandler::Init()
     // Reboot command: reboot (always available)
     Command rebootCmd = simpleCLI.addCommand("reboot", [](cmd* c) {
         ESP.restart();
+    });
+
+    // Firmware info command: firmware-info (always available)
+    // Returns JSON with device info, version, board type, and build date/time
+    Command firmwareInfoCmd = simpleCLI.addCommand("firmware-info", [](cmd* c) {
+        commandResult = "{\"device\":\"";
+        commandResult += DEVICE_TYPE;
+        commandResult += "\",\"version\":\"";
+        commandResult += FIRMWARE_VERSION;
+        commandResult += "\",\"board\":\"";
+        commandResult += BOARD_TYPE;
+        commandResult += "\",\"buildDate\":\"";
+        commandResult += BUILD_DATE;
+        commandResult += "\",\"buildTime\":\"";
+        commandResult += BUILD_TIME;
+        commandResult += "\"}";
     });
 
 #ifdef USE_CONSOLE_UWB_CONTROL

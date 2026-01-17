@@ -9,8 +9,20 @@
 
 #include <Update.h>
 #include <Arduino.h>
+#include "version.hpp"
+#include "freertos/FreeRTOS.h"
+#include "freertos/timers.h"
 
 namespace ota {
+
+// Safety timeout for reboot (10 seconds)
+static constexpr uint32_t REBOOT_SAFETY_TIMEOUT_MS = 10000;
+static TimerHandle_t rebootTimer = nullptr;
+
+static void rebootTimerCallback(TimerHandle_t timer) {
+    printf("[OTA] Safety timeout reached, rebooting...\n");
+    ESP.restart();
+}
 
 // HTML page for firmware upload
 static const char* UPDATE_PAGE_HTML = R"rawliteral(
@@ -234,19 +246,55 @@ void initOtaRoutes(AsyncWebServer& server) {
         // Response handler (called after upload completes)
         [](AsyncWebServerRequest* request) {
             bool success = !Update.hasError();
+
+            // Build JSON response with firmware version
+            String jsonResponse;
+            if (success) {
+                jsonResponse = "{\"success\":true,\"message\":\"Update complete\",\"version\":\"";
+                jsonResponse += FIRMWARE_VERSION;
+                jsonResponse += "\",\"rebooting\":true}";
+            } else {
+                jsonResponse = "{\"success\":false,\"message\":\"Update failed: ";
+                jsonResponse += Update.errorString();
+                jsonResponse += "\",\"rebooting\":false}";
+            }
+
             AsyncWebServerResponse* response = request->beginResponse(
                 success ? 200 : 500,
-                "text/plain",
-                success ? "Update successful. Rebooting..." : "Update failed"
+                "application/json",
+                jsonResponse
             );
             response->addHeader("Access-Control-Allow-Origin", "*");
             response->addHeader("Connection", "close");
             request->send(response);
 
             if (success) {
-                // Schedule reboot
-                delay(500);
-                ESP.restart();
+                // Register onDisconnect callback to reboot after client receives response
+                request->onDisconnect([]() {
+                    printf("[OTA] Client disconnected, rebooting...\n");
+                    // Cancel safety timer if still running
+                    if (rebootTimer != nullptr) {
+                        xTimerStop(rebootTimer, 0);
+                        xTimerDelete(rebootTimer, 0);
+                        rebootTimer = nullptr;
+                    }
+                    ESP.restart();
+                });
+
+                // Start safety timer in case client doesn't disconnect
+                if (rebootTimer == nullptr) {
+                    rebootTimer = xTimerCreate(
+                        "rebootTimer",
+                        pdMS_TO_TICKS(REBOOT_SAFETY_TIMEOUT_MS),
+                        pdFALSE,  // one-shot
+                        nullptr,
+                        rebootTimerCallback
+                    );
+                }
+                if (rebootTimer != nullptr) {
+                    xTimerStart(rebootTimer, 0);
+                    printf("[OTA] Update complete, waiting for client disconnect (timeout: %lums)\n", REBOOT_SAFETY_TIMEOUT_MS);
+                }
             }
         },
         // File upload handler (called for each chunk)
