@@ -213,9 +213,20 @@ const char* getUpdatePageHtml() {
 }
 
 void initOtaRoutes(AsyncWebServer& server) {
+    // Handle CORS preflight for /update
+    server.on("/update", HTTP_OPTIONS, [](AsyncWebServerRequest* request) {
+        AsyncWebServerResponse* response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+
     // GET /update - Serve the upload page
     server.on("/update", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "text/html", UPDATE_PAGE_HTML);
+        AsyncWebServerResponse* response = request->beginResponse(200, "text/html", UPDATE_PAGE_HTML);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(response);
     });
 
     // POST /update - Handle firmware upload
@@ -228,6 +239,7 @@ void initOtaRoutes(AsyncWebServer& server) {
                 "text/plain",
                 success ? "Update successful. Rebooting..." : "Update failed"
             );
+            response->addHeader("Access-Control-Allow-Origin", "*");
             response->addHeader("Connection", "close");
             request->send(response);
 
