@@ -29,7 +29,8 @@
     !defined(USE_UWB_MODE_TWR_TAG) && \
     !defined(USE_UWB_MODE_TDOA_ANCHOR) && \
     !defined(USE_UWB_MODE_TDOA_TAG) && \
-    !defined(USE_UWB_CALIBRATION)
+    !defined(USE_UWB_CALIBRATION) && \
+    !defined(USE_OTA)
     #define RTLS_USE_DEFAULT_FEATURES
 #endif
 
@@ -70,6 +71,10 @@
 #define USE_UWB_MODE_TDOA_ANCHOR
 #define USE_UWB_MODE_TDOA_TAG
 #define USE_UWB_CALIBRATION
+
+// --- OTA Update Subsystem ---
+#define USE_OTA                       // Master OTA toggle
+#define USE_OTA_WEB                   // Web-based OTA upload via webserver
 
 // --- Miscellaneous ---
 #define USE_STATUS_LED_TASK
