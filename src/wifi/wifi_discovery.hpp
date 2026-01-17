@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_DISCOVERY
+
 #include <Arduino.h>
 #include <IPAddress.h>
 #include <WiFiUdp.h>
@@ -63,3 +67,5 @@ private:
     uint32_t m_LastHeartbeat = 0;
     TelemetryCallback m_TelemetryCallback;
 };
+
+#endif // USE_WIFI_DISCOVERY

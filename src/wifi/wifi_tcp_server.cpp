@@ -1,3 +1,7 @@
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_TCP_LOGGING
+
 #include "wifi_tcp_server.hpp"
 
 
@@ -6,7 +10,7 @@ WifiTcpServer::WifiTcpServer(uint16_t port)
 {
     // Create a mutex to protect the clients vector
     mutex = xSemaphoreCreateMutex();
-    
+
     m_Server.onClient( [this](void* unused, AsyncClient* client){
         // Call the function to handle the new client
         OnClientConnected(client);
@@ -46,7 +50,7 @@ void WifiTcpServer::AddForSending(const char *data)
 {
     xSemaphoreTake(mutex, portMAX_DELAY);
     strncpy(m_Data, data, sizeof(m_Data));
-    m_DataReady = true;   
+    m_DataReady = true;
     xSemaphoreGive(mutex);
 }
 
@@ -61,7 +65,7 @@ void WifiTcpServer::OnClientConnected(AsyncClient *client)
         delete client;
         return;
     }
-    
+
     // Protect the clients vector with a mutex
     xSemaphoreTake(mutex, portMAX_DELAY);
     m_Clients.push_back(client);
@@ -76,3 +80,5 @@ void WifiTcpServer::OnClientConnected(AsyncClient *client)
         delete c;
     }, NULL);
 }
+
+#endif // USE_WIFI_TCP_LOGGING

@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_WEBSERVER
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -22,3 +26,5 @@ private:
     AsyncWebSocket m_Ws;
     bool initialized = false;
 };
+
+#endif // USE_WIFI_WEBSERVER

@@ -1,3 +1,7 @@
+#include "config/features.hpp"
+
+#ifdef USE_WIFI_WEBSERVER
+
 #include "command_handler/command_handler.hpp"
 #include "wifi_websocket.hpp"
 
@@ -51,3 +55,5 @@ static void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEve
             break;
     }
 }
+
+#endif // USE_WIFI_WEBSERVER

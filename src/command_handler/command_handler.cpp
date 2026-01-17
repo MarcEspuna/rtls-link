@@ -1,3 +1,5 @@
+#include "config/features.hpp"
+
 #include <Arduino.h>
 #include <SimpleCLI.h>
 
@@ -11,19 +13,29 @@
 
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "app/app_frontend_littlefs.hpp"
+#ifdef USE_CONSOLE_CONFIG_MGMT
 #include "config_manager/config_manager.hpp"
+#endif
 
 static constexpr int COMMAND_QUEUE_SIZE = 4;
 static SimpleCLI simpleCLI(COMMAND_QUEUE_SIZE, COMMAND_QUEUE_SIZE);
 static SemaphoreHandle_t commandQueueMutex;
 static String commandResult;
-    
+
+static void errorCallback(cmd_error* c);
+
+#ifdef USE_CONSOLE_PARAM_RW
 static void readCallback(cmd* c);
 static void readAllCallback(cmd* c);
 static void writeCallback(cmd* c);
-static void errorCallback(cmd_error* c);
+#endif
+
+#ifdef USE_CONSOLE_UWB_CONTROL
 static void startCallback(cmd* c);
 static void calibrateCallback(cmd* c);
+#endif
+
+#ifdef USE_CONSOLE_CONFIG_MGMT
 static void loadConfigCallback(cmd* c);
 static void saveConfigCallback(cmd* c);
 static void backupConfigCallback(cmd* c);
@@ -34,11 +46,16 @@ static void saveConfigAsCallback(cmd* c);
 static void loadConfigNamedCallback(cmd* c);
 static void readConfigNamedCallback(cmd* c);
 static void deleteConfigCallback(cmd* c);
+#endif
 
+#ifdef USE_CONSOLE_LED_CONTROL
 // LED 2 control callbacks
 static void toggleLed2Callback(cmd* c);
 static void getLed2StateCallback(cmd* c);
+#endif
 
+// Helper functions for parameter read/write (used by PARAM_RW and CONFIG_MGMT)
+#if defined(USE_CONSOLE_PARAM_RW) || defined(USE_CONSOLE_CONFIG_MGMT)
 static bool IsUwbShortAddrName(const char* name) {
     if (strcmp(name, "devShortAddr") == 0) {
         return true;
@@ -77,7 +94,9 @@ static String UwbShortAddrToString(const UWBShortAddr& addr) {
     buf[len] = '\0';
     return String(buf);
 }
+#endif // USE_CONSOLE_PARAM_RW || USE_CONSOLE_CONFIG_MGMT
 
+#ifdef USE_CONSOLE_PARAM_RW
 static bool IsDigitChar(char c) {
     return c >= '0' && c <= '9';
 }
@@ -109,7 +128,9 @@ static void TrimQuotedString(String& value) {
         value = value.substring(1, value.length() - 1);
     }
 }
+#endif // USE_CONSOLE_PARAM_RW
 
+#ifdef USE_CONSOLE_CONFIG_MGMT
 static String escapeJsonString(const String& str) {
     String escaped;
     for (int i = 0; i < str.length(); i++) {
@@ -125,6 +146,7 @@ static String escapeJsonString(const String& str) {
     }
     return escaped;
 }
+#endif // USE_CONSOLE_CONFIG_MGMT
 
 void CommandHandler::Init()
 {
@@ -134,30 +156,34 @@ void CommandHandler::Init()
     {
         printf("Failed to create command queue mutex\n");
     }
+
+#ifdef USE_CONSOLE_PARAM_RW
     Command readAll = simpleCLI.addCommand("readall", readAllCallback);
     readAll.addPositionalArgument("group", "all");
 
-    // Read parameter: read --group <group parameter name> --name <parameter name> 
+    // Read parameter: read --group <group parameter name> --name <parameter name>
     Command readCmd = simpleCLI.addCommand("read", readCallback);
     readCmd.addArgument("group");
     readCmd.addArgument("name");
-
 
     // Write command: write --group <group parameter name> --name <parameter name> --data <string to write>
     Command writeCmd = simpleCLI.addCommand("write", writeCallback);
     writeCmd.addArgument("group");
     writeCmd.addArgument("name");
     writeCmd.addArgument("data");
+#endif // USE_CONSOLE_PARAM_RW
 
-    // Reboot command: reboot
+    // Reboot command: reboot (always available)
     Command rebootCmd = simpleCLI.addCommand("reboot", [](cmd* c) {
         ESP.restart();
     });
 
+#ifdef USE_CONSOLE_UWB_CONTROL
     Command startCmd = simpleCLI.addCommand("start", startCallback);
-
     Command calibrateCmd = simpleCLI.addCommand("calibrate", calibrateCallback);
-    
+#endif // USE_CONSOLE_UWB_CONTROL
+
+#ifdef USE_CONSOLE_CONFIG_MGMT
     // LittleFS parameter management commands
     Command loadConfigCmd = simpleCLI.addCommand("load-config", loadConfigCallback);
     Command saveConfigCmd = simpleCLI.addCommand("save-config", saveConfigCallback);
@@ -177,10 +203,13 @@ void CommandHandler::Init()
 
     Command deleteConfigCmd = simpleCLI.addCommand("delete-config", deleteConfigCallback);
     deleteConfigCmd.addArgument("name");
+#endif // USE_CONSOLE_CONFIG_MGMT
 
+#ifdef USE_CONSOLE_LED_CONTROL
     // LED 2 control commands
     Command toggleLed2Cmd = simpleCLI.addCommand("toggle-led2", toggleLed2Callback);
     Command getLed2StateCmd = simpleCLI.addCommand("get-led2-state", getLed2StateCallback);
+#endif // USE_CONSOLE_LED_CONTROL
 
     simpleCLI.setOnError(errorCallback);
 }
@@ -198,6 +227,8 @@ String CommandHandler::ExecuteCommand(const char* command)
 }
 
 // ********** Command Callbacks **********
+
+#ifdef USE_CONSOLE_PARAM_RW
 static void readCallback(cmd* c)
 {
     Command cmd(c);
@@ -384,7 +415,9 @@ static void readAllCallback(cmd* c)
         }
     }
 }
+#endif // USE_CONSOLE_PARAM_RW
 
+#ifdef USE_CONSOLE_UWB_CONTROL
 static void startCallback(cmd* c)
 {
     if (Front::uwbLittleFSFront.StartTag())
@@ -401,6 +434,7 @@ static void calibrateCallback(cmd* c)
 {
     Front::uwbLittleFSFront.PerformAnchorCalibration();
 }
+#endif // USE_CONSOLE_UWB_CONTROL
 
 static void errorCallback(cmd_error* c)
 {
@@ -415,6 +449,7 @@ static void errorCallback(cmd_error* c)
     }
 }
 
+#ifdef USE_CONSOLE_CONFIG_MGMT
 static void loadConfigCallback(cmd* c)
 {
     ErrorParam result = Front::LoadAllParams();
@@ -608,9 +643,11 @@ static void deleteConfigCallback(cmd* c)
             break;
     }
 }
+#endif // USE_CONSOLE_CONFIG_MGMT
 
 // ********** LED 2 Control Callbacks **********
 
+#ifdef USE_CONSOLE_LED_CONTROL
 static void toggleLed2Callback(cmd* c)
 {
     if (!Front::appLittleFSFront.IsLed2Configured()) {
@@ -633,3 +670,4 @@ static void getLed2StateCallback(cmd* c)
     bool state = Front::appLittleFSFront.GetLed2State();
     commandResult = "{\"configured\":true,\"state\":" + String(state ? "true" : "false") + "}";
 }
+#endif // USE_CONSOLE_LED_CONTROL

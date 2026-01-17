@@ -1,3 +1,7 @@
+#include "config/features.hpp"
+
+#ifdef USE_UWB_CALIBRATION
+
 #include <Arduino.h>
 #include <DW1000Ranging.h>
 #include <DW1000.h>
@@ -116,3 +120,5 @@ static void inactiveDevice(DW1000Device *device)
   Serial.print("Delete inactive device: ");
   Serial.println(device->getShortAddress(), HEX);
 }
+
+#endif // USE_UWB_CALIBRATION

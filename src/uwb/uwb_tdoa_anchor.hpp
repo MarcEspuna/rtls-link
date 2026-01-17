@@ -1,5 +1,8 @@
 #pragma once
 
+#include "config/features.hpp"
+
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -42,7 +45,7 @@ private:
         .reset = libDw1000::Reset,
     };
 
-    // User data for libdw1000    
+    // User data for libdw1000
     libDw1000::DwData m_DwData = {
         .rst_pin = bsp::kBoardConfig.uwb.pins.reset_pin,
         .cs_pin = bsp::kBoardConfig.uwb.pins.spi_cs_pin,
@@ -68,8 +71,10 @@ private:
 };
 
 
-using AnchorTDoADispatcher = Dispatcher<libDw1000::IsrFlags, UWBAnchorTDoA, 
+using AnchorTDoADispatcher = Dispatcher<libDw1000::IsrFlags, UWBAnchorTDoA,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_DONE, UWBAnchorTDoA, &UWBAnchorTDoA::OnEvent<libDw1000::IsrFlags::RX_DONE>>,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::TX_DONE, UWBAnchorTDoA, &UWBAnchorTDoA::OnEvent<libDw1000::IsrFlags::TX_DONE>>,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_TIMEOUT, UWBAnchorTDoA, &UWBAnchorTDoA::OnEvent<libDw1000::IsrFlags::RX_TIMEOUT>>,
         DispatchEntry<libDw1000::IsrFlags, libDw1000::IsrFlags::RX_FAILED, UWBAnchorTDoA, &UWBAnchorTDoA::OnEvent<libDw1000::IsrFlags::RX_FAILED>>>;
+
+#endif // USE_UWB_MODE_TDOA_ANCHOR

@@ -50,10 +50,12 @@ void App::Init()
 #ifdef USE_MAVLINK
   Serial1.begin(921600, SERIAL_8N1, bsp::kBoardConfig.uwb_data_uart.rx_pin, bsp::kBoardConfig.uwb_data_uart.tx_pin);
 
+#ifdef USE_MAVLINK_HEARTBEAT
   local_position_sensor_.set_heartbeat_callback([this](uint8_t system_id, uint8_t component_id) {
     last_heartbeat_received_timestamp_ms_ = millis();
   });
-#endif
+#endif // USE_MAVLINK_HEARTBEAT
+#endif // USE_MAVLINK
 
   // Initialize timestamp
   device_unhealthy_timestamp_ms_ = millis();
@@ -142,11 +144,13 @@ void App::Update()
 
   // ********** SENDING **********
 
+#ifdef USE_MAVLINK_HEARTBEAT
   // Listen and send heartbeat
   if (now_ms - last_heartbeat_timestamp_ms_ > kHeartbeatIntervalMs) {
     local_position_sensor_.send_heartbeat();
     last_heartbeat_timestamp_ms_ = now_ms;
   }
+#endif // USE_MAVLINK_HEARTBEAT
 
   // Check if device is healthy
   if (now_ms - last_sample_timestamp_ms_ > kDeviceHealtyMinDurationMs) {
@@ -156,8 +160,13 @@ void App::Update()
   } else {
     // Device is healthy
     app_stats_healthy_cycles++;
+#ifdef USE_MAVLINK_ORIGIN
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
+#ifdef USE_MAVLINK_HEARTBEAT
     uint64_t time_since_rcv_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
+#else
+    uint64_t time_since_rcv_heartbeat = 0;  // Always send if no heartbeat checking
+#endif
     if (time_since_unhealthy > kSendOriginPositionAfterMs
         && !is_origin_position_sent_
         && time_since_rcv_heartbeat < kHeartbeatRcvTimeoutMs) {
@@ -172,6 +181,7 @@ void App::Update()
       time_since_unhealthy = now_ms;
       is_origin_position_sent_ = true;
     }
+#endif // USE_MAVLINK_ORIGIN
   }
 
   // Periodic App health log (every 1 second)
@@ -313,7 +323,7 @@ bool App::IsRangefinderHealthy() {
 }
 #endif // HAS_RANGEFINDER
 
-#ifdef USE_MAVLINK
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_POSITION)
 bool App::IsSendingPositions() {
   // Guard for initial boot (last_sample_timestamp_ms_ starts at 0)
   if (app.last_sample_timestamp_ms_ == 0) {
@@ -322,11 +332,13 @@ bool App::IsSendingPositions() {
   // Use 2s window to match heartbeat interval (avoids flapping)
   return (millis() - app.last_sample_timestamp_ms_) < 2000;
 }
+#endif // USE_MAVLINK && USE_MAVLINK_POSITION
 
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_ORIGIN)
 bool App::IsOriginSent() {
   return app.is_origin_position_sent_;
 }
-#endif // USE_MAVLINK
+#endif // USE_MAVLINK && USE_MAVLINK_ORIGIN
 
 #ifdef USE_RATE_STATISTICS
 // --- Update rate tracking ---
@@ -473,7 +485,7 @@ uint16_t App::GetMaxRateCHz() {
 }
 #endif // USE_RATE_STATISTICS
 
-#ifdef USE_MAVLINK
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_COVARIANCE)
 /**
  * @brief Rotates a 3x3 position covariance matrix by yaw angle
  *
@@ -563,7 +575,7 @@ static std::array<float, VISION_POSITION_COVARIANCE_SIZE> mapToMAVLinkCovariance
 
   return mavCov;
 }
-#endif // USE_MAVLINK (covariance helper functions)
+#endif // USE_MAVLINK && USE_MAVLINK_COVARIANCE
 
 #ifdef HAS_POSITION_OUTPUT
 void App::SendSample(float x_m, float y_m, float z_m,
@@ -574,7 +586,7 @@ void App::SendSample(float x_m, float y_m, float z_m,
   bcn_konex::BeaconProtocol::SendSample(x_m, y_m, z_m, 0);
 #endif
 
-#ifdef USE_MAVLINK
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_POSITION)
   // Determine Z coordinate based on zCalcMode parameter
   ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
   float final_z;
@@ -593,7 +605,14 @@ void App::SendSample(float x_m, float y_m, float z_m,
   Vector3f rotated_vector = correct_for_orient_yaw(x_m, y_m, final_z);
 
   // Check if we have received a heartbeat recently
-  if (millis() - app.last_heartbeat_received_timestamp_ms_ < kHeartbeatRcvTimeoutMs) {
+#ifdef USE_MAVLINK_HEARTBEAT
+  bool heartbeatOk = (millis() - app.last_heartbeat_received_timestamp_ms_ < kHeartbeatRcvTimeoutMs);
+#else
+  bool heartbeatOk = true;  // Always send if no heartbeat checking
+#endif
+
+  if (heartbeatOk) {
+#ifdef USE_MAVLINK_COVARIANCE
     // Defense in depth: also check enableCovMatrix parameter here
     bool sendCovMatrix = positionCovariance.has_value() &&
                          Front::uwbLittleFSFront.GetParams().enableCovMatrix != 0;
@@ -610,7 +629,9 @@ void App::SendSample(float x_m, float y_m, float z_m,
           rotated_vector.x, rotated_vector.y, rotated_vector.z,
           0, 0, 0,  // No orientation from UWB
           &mavCov);
-    } else {
+    } else
+#endif // USE_MAVLINK_COVARIANCE
+    {
       // No covariance - send with nullptr (will use NaN)
       app.local_position_sensor_.send_vision_position_estimate(
           rotated_vector.x, rotated_vector.y, rotated_vector.z,
@@ -621,7 +642,7 @@ void App::SendSample(float x_m, float y_m, float z_m,
     app.RecordSampleTimestamp();  // Track for rate statistics
 #endif
   }
-#endif // USE_MAVLINK
+#endif // USE_MAVLINK && USE_MAVLINK_POSITION
 }
 #endif // HAS_POSITION_OUTPUT
 
