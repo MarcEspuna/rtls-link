@@ -76,6 +76,18 @@
 #endif
 
 // =============================================================================
+// OTA SUBSYSTEM DEPENDENCIES
+// =============================================================================
+
+#if defined(USE_OTA_WEB) && !defined(USE_WIFI_WEBSERVER)
+    #error "USE_OTA_WEB requires USE_WIFI_WEBSERVER to be defined"
+#endif
+
+#if defined(USE_OTA_WEB) && !defined(USE_OTA)
+    #error "USE_OTA_WEB requires USE_OTA to be defined"
+#endif
+
+// =============================================================================
 // CONSOLE SUBSYSTEM DEPENDENCIES
 // =============================================================================
 

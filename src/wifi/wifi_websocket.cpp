@@ -5,6 +5,10 @@
 #include "command_handler/command_handler.hpp"
 #include "wifi_websocket.hpp"
 
+#ifdef USE_OTA_WEB
+#include "ota/ota_handler.hpp"
+#endif
+
 static void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
             void *arg, uint8_t *data, size_t len);
 
@@ -14,6 +18,11 @@ WifiWebSocket::WifiWebSocket(const char* wsPath, uint16_t port)
     // Setup WebSocket handler
     m_Ws.onEvent(onEvent);
     m_Server.addHandler(&m_Ws);
+
+#ifdef USE_OTA_WEB
+    // Register OTA update routes
+    ota::initOtaRoutes(m_Server);
+#endif
 
     // Start server
     m_Server.begin();

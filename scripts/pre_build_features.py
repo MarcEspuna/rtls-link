@@ -158,6 +158,12 @@ def validate_features(flags):
         if feat in flag_set and 'USE_CONSOLE' not in flag_set:
             errors.append(f"{feat} requires USE_CONSOLE")
 
+    # === OTA DEPENDENCIES ===
+    if 'USE_OTA_WEB' in flag_set and 'USE_OTA' not in flag_set:
+        errors.append("USE_OTA_WEB requires USE_OTA")
+    if 'USE_OTA_WEB' in flag_set and 'USE_WIFI_WEBSERVER' not in flag_set:
+        errors.append("USE_OTA_WEB requires USE_WIFI_WEBSERVER")
+
     # === TAG MODE REQUIRES OUTPUT ===
     tag_modes = ['USE_UWB_MODE_TWR_TAG', 'USE_UWB_MODE_TDOA_TAG']
     has_tag_mode = any(m in flag_set for m in tag_modes)
@@ -195,6 +201,7 @@ def print_feature_summary(flags):
         'MAVLink': [],
         'Console': [],
         'UWB': [],
+        'OTA': [],
         'Other': []
     }
 
@@ -208,6 +215,8 @@ def print_feature_summary(flags):
             categories['Console'].append(name)
         elif name.startswith('USE_UWB'):
             categories['UWB'].append(name)
+        elif name.startswith('USE_OTA'):
+            categories['OTA'].append(name)
         else:
             categories['Other'].append(name)
 

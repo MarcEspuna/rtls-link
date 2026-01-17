@@ -64,6 +64,13 @@
 -D USE_CONSOLE_LED_CONTROL      ; LED control commands (if board supports)
 
 ; -----------------------------------------------------------------------------
+; OTA UPDATE SUBSYSTEM
+; Web-based firmware updates via the web interface
+; -----------------------------------------------------------------------------
+-D USE_OTA
+-D USE_OTA_WEB                  ; Web-based OTA upload at /update
+
+; -----------------------------------------------------------------------------
 ; MISCELLANEOUS FEATURES
 ; -----------------------------------------------------------------------------
 -D USE_STATUS_LED_TASK          ; Status LED blink task (board-dependent)
