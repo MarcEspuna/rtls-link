@@ -51,4 +51,11 @@ typedef struct {
 
 void lpsTdoa2TagSetOptions(lpsTdoa2AlgoOptions_t* newOptions);
 
+// Callback type for inter-anchor distance updates (for dynamic anchor positioning)
+// Parameters: fromAnchorId, toAnchorId, distance (in DW1000 timestamp units)
+typedef void (*InterAnchorDistanceCallback)(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits);
+
+// Register a callback to receive inter-anchor distance updates
+void uwbTdoa2TagSetDistanceCallback(InterAnchorDistanceCallback callback);
+
 extern uwbAlgorithm_t uwbTdoa2TagAlgorithm;

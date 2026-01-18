@@ -93,7 +93,12 @@ public:
         PARAM_DEF(UWBParams, channel),
         PARAM_DEF(UWBParams, dwMode),
         PARAM_DEF(UWBParams, txPowerLevel),
-        PARAM_DEF(UWBParams, smartPowerEnable)
+        PARAM_DEF(UWBParams, smartPowerEnable),
+        PARAM_DEF(UWBParams, dynamicAnchorPosEnabled),
+        PARAM_DEF(UWBParams, anchorLayout),
+        PARAM_DEF(UWBParams, anchorHeight),
+        PARAM_DEF(UWBParams, anchorPosLocked),
+        PARAM_DEF(UWBParams, distanceAvgSamples)
     };
 };
 

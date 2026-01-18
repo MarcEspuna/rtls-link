@@ -19,6 +19,10 @@ extern "C" {
 
 #include "utils/dispatcher.hpp"
 
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+#include "tag/dynamicAnchorPositions.hpp"
+#endif
+
 #define MAX_ANCHORS 6
 
 class UWBTagTDoA : public UWBBackend {
@@ -63,6 +67,19 @@ private:
         uint8_t anchor_a_id;
         uint8_t anchor_b_id;
     };
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    // Dynamic anchor position calculation
+    static DynamicAnchorPositionCalculator s_dynamicCalc;
+    static bool s_useDynamicPositions;
+    static uint32_t s_lastPositionUpdate;
+
+    // Callback for inter-anchor distance updates from tdoa_tag_algorithm
+    static void onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits);
+
+    // Check and apply dynamic position updates
+    void maybeUpdateDynamicPositions();
+#endif
 };
 
 

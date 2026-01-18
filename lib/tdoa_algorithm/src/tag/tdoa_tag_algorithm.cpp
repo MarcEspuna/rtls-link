@@ -90,6 +90,13 @@ static float stdDev = TDOA_ENGINE_MEASUREMENT_NOISE_STD;
 static EstimatorCallback estimator_callback = nullptr;
 static void* callback_arg = nullptr;
 
+// Callback for inter-anchor distance updates (used for dynamic anchor positioning)
+static InterAnchorDistanceCallback distance_callback = nullptr;
+
+void uwbTdoa2TagSetDistanceCallback(InterAnchorDistanceCallback callback) {
+  distance_callback = callback;
+}
+
 // The default receive time in the anchors for messages from other anchors is 0
 // and is overwritten with the actual receive time when a packet arrives.
 // That is, if no message was received the rx time will be 0.
@@ -121,6 +128,11 @@ static void updateRemoteData(tdoaAnchorContext_t* anchorCtx, const rangePacket2_
 
           if (isConsecutiveIds(previousAnchor, anchorId)) {
             logAnchorDistance[anchorId] = packet->distances[previousAnchor];
+          }
+
+          // Report inter-anchor distance for dynamic positioning
+          if (distance_callback) {
+            distance_callback(anchorId, remoteId, packet->distances[i]);
           }
         }
       }
