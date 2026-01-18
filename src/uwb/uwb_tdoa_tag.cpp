@@ -4,6 +4,10 @@
 
 #include "logging/logging.hpp"
 
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+#include "tag/dynamicAnchorPositions.hpp"
+#endif
+
 #include <Eigen.h>
 
 #include <algorithm>
@@ -108,6 +112,16 @@ static constexpr uint64_t STATS_LOG_INTERVAL_MS = 1000;
 static uint64_t position_last_log_time_ms = 0;
 static constexpr uint64_t POSITION_LOG_INTERVAL_MS = 500;  // Log position every 500ms
 
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+// Static member definitions for dynamic anchor positioning
+DynamicAnchorPositionCalculator UWBTagTDoA::s_dynamicCalc;
+bool UWBTagTDoA::s_useDynamicPositions = false;
+uint32_t UWBTagTDoA::s_lastPositionUpdate = 0;
+
+// Interval for dynamic position updates (ms)
+static constexpr uint32_t DYNAMIC_POS_UPDATE_INTERVAL_MS = 200;
+#endif
+
 static StaticTaskHolder<etl::delegate<void()>, 16384> pos_estimator_task = {
   "PosEstimatorTask",
   150,              // 150Hz
@@ -199,7 +213,29 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
 
     // Init the tdoa anchor algorithm
-    uwbTdoa2TagAlgorithm.init(&m_Device, estimatorCallback); 
+    uwbTdoa2TagAlgorithm.init(&m_Device, estimatorCallback);
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    // Initialize dynamic anchor positioning if enabled
+    s_useDynamicPositions = (uwbParams.dynamicAnchorPosEnabled != 0);
+    if (s_useDynamicPositions) {
+        DynamicAnchorConfig dynamicConfig = {
+            .layout = uwbParams.anchorLayout,
+            .anchorCount = 4,  // Rectangular layout uses 4 anchors
+            .anchorHeight = uwbParams.anchorHeight,
+            .avgSampleCount = uwbParams.distanceAvgSamples,
+            .lockedMask = uwbParams.anchorPosLocked
+        };
+        s_dynamicCalc.init(dynamicConfig);
+        s_lastPositionUpdate = 0;
+
+        // Register callback to receive inter-anchor distances
+        uwbTdoa2TagSetDistanceCallback(&UWBTagTDoA::onInterAnchorDistance);
+
+        LOG_INFO("Dynamic anchor positioning enabled (layout=%d, height=%.2f, samples=%d)",
+                 uwbParams.anchorLayout, uwbParams.anchorHeight, uwbParams.distanceAvgSamples);
+    }
+#endif
 
     attachInterrupt(digitalPinToInterrupt(uwb_config.pins.int_pin), 
     [this]() { 
@@ -217,7 +253,7 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
 }
 
 
-void UWBTagTDoA::Update() 
+void UWBTagTDoA::Update()
 {
     if (isr_flag) {
         dwHandleInterrupt(&m_Device);
@@ -227,6 +263,11 @@ void UWBTagTDoA::Update()
     // Call libdw1000 loop
     TagTDoADispatcher dispatcher(this);
     dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    // Periodically update anchor positions from dynamic calculation
+    maybeUpdateDynamicPositions();
+#endif
 }
 
 uint8_t UWBTagTDoA::GetAnchorsSeenCount()
@@ -583,5 +624,95 @@ static void estimatorProcess() {
         xSemaphoreGive(measurements_mtx);
     }
 }
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+// Include for DynamicAnchorTelemetry definition
+#include "wifi/wifi_discovery.hpp"
+
+bool UWBTagTDoA::IsDynamicPositioningEnabled() {
+    return s_useDynamicPositions;
+}
+
+uint8_t UWBTagTDoA::GetDynamicAnchorPositions(DynamicAnchorTelemetry* out, uint8_t maxCount) {
+    if (!s_useDynamicPositions || out == nullptr || maxCount == 0) {
+        return 0;
+    }
+
+    // Try to acquire mutex with short timeout (10ms) to avoid blocking discovery
+    if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return 0;  // Mutex unavailable, skip this update
+    }
+
+    // Copy positions from anchor_positions array
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < 4 && count < maxCount; i++) {
+        out[count].id = i;
+        out[count].x = anchor_positions[i].x;
+        out[count].y = anchor_positions[i].y;
+        out[count].z = anchor_positions[i].z;
+        count++;
+    }
+
+    xSemaphoreGive(measurements_mtx);
+    return count;
+}
+
+void UWBTagTDoA::onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits) {
+    if (!s_useDynamicPositions) {
+        return;
+    }
+
+    // Convert from DW1000 timestamp units to meters
+    float distanceMeters = static_cast<float>(distanceTimestampUnits) * DW1000_TIME_TO_METERS;
+
+    // Update the calculator with the new distance measurement
+    s_dynamicCalc.updateDistance(fromAnchor, toAnchor, distanceMeters);
+}
+
+void UWBTagTDoA::maybeUpdateDynamicPositions() {
+    if (!s_useDynamicPositions) {
+        return;
+    }
+
+    // Throttle updates to avoid excessive computation
+    uint32_t now = millis();
+    if ((now - s_lastPositionUpdate) < DYNAMIC_POS_UPDATE_INTERVAL_MS) {
+        return;
+    }
+
+    // Check if we have enough data to calculate positions
+    if (!s_dynamicCalc.canCalculate()) {
+        return;
+    }
+
+    // Calculate new positions
+    point_t newPositions[4];
+    if (s_dynamicCalc.calculatePositions(newPositions, 4)) {
+        // CRITICAL: Lock mutex before updating shared anchor_positions
+        // This prevents race conditions with estimatorProcess() which reads these values
+        if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
+            for (int i = 0; i < 4; i++) {
+                anchor_positions[i].x = newPositions[i].x;
+                anchor_positions[i].y = newPositions[i].y;
+                anchor_positions[i].z = newPositions[i].z;
+            }
+            xSemaphoreGive(measurements_mtx);
+        }
+
+        s_lastPositionUpdate = now;
+
+        // Log the updated positions periodically
+        static uint32_t lastLogTime = 0;
+        if ((now - lastLogTime) >= 2000) {  // Log every 2 seconds
+            LOG_DEBUG("Dynamic Anchors: A0(%.2f,%.2f) A1(%.2f,%.2f) A2(%.2f,%.2f) A3(%.2f,%.2f)",
+                      anchor_positions[0].x, anchor_positions[0].y,
+                      anchor_positions[1].x, anchor_positions[1].y,
+                      anchor_positions[2].x, anchor_positions[2].y,
+                      anchor_positions[3].x, anchor_positions[3].y);
+            lastLogTime = now;
+        }
+    }
+}
+#endif // USE_DYNAMIC_ANCHOR_POSITIONS
 
 #endif // USE_UWB_MODE_TDOA_TAG

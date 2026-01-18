@@ -73,6 +73,22 @@ static DeviceTelemetry GetDeviceTelemetry() {
     t.max_rate_cHz = 0;
 #endif
 
+    // Dynamic anchor positions (for TDoA tag mode with dynamic positioning enabled)
+#if defined(USE_DYNAMIC_ANCHOR_POSITIONS) && defined(USE_UWB_MODE_TDOA_TAG)
+    if (Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA) {
+        t.dynamic_anchors_enabled = UWBTagTDoA::IsDynamicPositioningEnabled();
+        if (t.dynamic_anchors_enabled) {
+            t.dynamic_anchor_count = UWBTagTDoA::GetDynamicAnchorPositions(
+                t.dynamic_anchors, 4);
+        } else {
+            t.dynamic_anchor_count = 0;
+        }
+    } else {
+        t.dynamic_anchors_enabled = false;
+        t.dynamic_anchor_count = 0;
+    }
+#endif
+
     return t;
 }
 #endif // USE_WIFI_DISCOVERY

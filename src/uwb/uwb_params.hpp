@@ -21,6 +21,15 @@ enum class ZCalcMode : uint8_t {
     UWB = 2          // Reserved for future UWB-based Z calculation
 };
 
+// Anchor layout configurations for dynamic position calculation
+enum class AnchorLayout : uint8_t {
+    RECTANGULAR_0_ORIGIN = 0,  // A0 at origin (default)
+    RECTANGULAR_1_ORIGIN = 1,  // A1 at origin
+    RECTANGULAR_2_ORIGIN = 2,  // A2 at origin
+    RECTANGULAR_3_ORIGIN = 3,  // A3 at origin
+    CUSTOM = 255               // Reserved for future custom layouts
+};
+
 using UWBShortAddr = etl::array<char, 2>;
 
 /**
@@ -84,6 +93,13 @@ struct UWBParams {
     uint8_t dwMode = 0;             // DW1000 mode index (0=SHORTDATA_FAST_ACCURACY, see getModeByIndex)
     uint8_t txPowerLevel = 3;       // TX power level (0=low, 1=med-low, 2=med-high, 3=high/large)
     uint8_t smartPowerEnable = 0;   // Smart power (0=disabled, 1=enabled)
+
+    // Dynamic anchor positioning (TDoA tags)
+    uint8_t dynamicAnchorPosEnabled = 0;  // 0=static (use configured positions), 1=dynamic (calculate from inter-anchor distances)
+    uint8_t anchorLayout = 0;             // AnchorLayout enum value (0=RECTANGULAR_0_ORIGIN)
+    float anchorHeight = 0.0f;            // Height for Z calculation (NED: Z = -height)
+    uint8_t anchorPosLocked = 0;          // Bitmask: bit N = anchor N position locked
+    uint16_t distanceAvgSamples = 50;     // Number of samples to average before calculating (default: 50)
 
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 6;

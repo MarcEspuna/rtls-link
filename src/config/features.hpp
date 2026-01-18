@@ -72,6 +72,10 @@
 #define USE_UWB_MODE_TDOA_TAG
 #define USE_UWB_CALIBRATION
 
+// --- Dynamic anchor position calculation (TDoA tags) ---
+// Enables automatic calculation of anchor positions from inter-anchor distances
+// #define USE_DYNAMIC_ANCHOR_POSITIONS
+
 // --- OTA Update Subsystem ---
 #define USE_OTA                       // Master OTA toggle
 #define USE_OTA_WEB                   // Web-based OTA upload via webserver

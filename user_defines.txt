@@ -54,6 +54,13 @@
 -D USE_UWB_CALIBRATION          ; Antenna delay calibration mode
 
 ; -----------------------------------------------------------------------------
+; DYNAMIC ANCHOR POSITIONING (TDoA Tags)
+; Calculate anchor positions from inter-anchor TWR measurements
+; Requires: USE_UWB_MODE_TDOA_TAG
+; -----------------------------------------------------------------------------
+; -D USE_DYNAMIC_ANCHOR_POSITIONS
+
+; -----------------------------------------------------------------------------
 ; CONSOLE / CLI
 ; Serial command interface for configuration and debugging
 ; -----------------------------------------------------------------------------

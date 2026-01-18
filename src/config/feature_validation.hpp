@@ -121,6 +121,14 @@
 #endif
 
 // =============================================================================
+// DYNAMIC ANCHOR POSITION DEPENDENCIES
+// =============================================================================
+
+#if defined(USE_DYNAMIC_ANCHOR_POSITIONS) && !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "USE_DYNAMIC_ANCHOR_POSITIONS requires USE_UWB_MODE_TDOA_TAG to be defined"
+#endif
+
+// =============================================================================
 // MINIMUM VIABLE CONFIGURATION
 // =============================================================================
 // At least one UWB mode must be enabled for the firmware to be useful

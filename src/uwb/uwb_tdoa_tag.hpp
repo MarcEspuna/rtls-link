@@ -19,6 +19,12 @@ extern "C" {
 
 #include "utils/dispatcher.hpp"
 
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+#include "tag/dynamicAnchorPositions.hpp"
+// Forward declaration for telemetry struct (defined in wifi_discovery.hpp)
+struct DynamicAnchorTelemetry;
+#endif
+
 #define MAX_ANCHORS 6
 
 class UWBTagTDoA : public UWBBackend {
@@ -38,6 +44,23 @@ public:
      * @return Number of unique anchor IDs (0-16)
      */
     static uint8_t GetAnchorsSeenCount();
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    /**
+     * @brief Check if dynamic anchor positioning is enabled.
+     * @return true if enabled
+     */
+    static bool IsDynamicPositioningEnabled();
+
+    /**
+     * @brief Get the calculated dynamic anchor positions.
+     * Thread-safe - uses mutex with short timeout to avoid blocking discovery.
+     * @param out Output array for anchor positions
+     * @param maxCount Maximum number of positions to retrieve
+     * @return Number of positions written to out array
+     */
+    static uint8_t GetDynamicAnchorPositions(DynamicAnchorTelemetry* out, uint8_t maxCount);
+#endif
 
     void InterruptHandler();
 private:
@@ -63,6 +86,19 @@ private:
         uint8_t anchor_a_id;
         uint8_t anchor_b_id;
     };
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    // Dynamic anchor position calculation
+    static DynamicAnchorPositionCalculator s_dynamicCalc;
+    static bool s_useDynamicPositions;
+    static uint32_t s_lastPositionUpdate;
+
+    // Callback for inter-anchor distance updates from tdoa_tag_algorithm
+    static void onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits);
+
+    // Check and apply dynamic position updates
+    void maybeUpdateDynamicPositions();
+#endif
 };
 
 

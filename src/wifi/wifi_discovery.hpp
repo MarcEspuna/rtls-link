@@ -14,6 +14,14 @@
 #include "wifi_params.hpp"
 
 /**
+ * @brief Dynamic anchor position telemetry (for discovery heartbeat)
+ */
+struct DynamicAnchorTelemetry {
+    uint8_t id;
+    float x, y, z;
+};
+
+/**
  * @brief Telemetry data for device status reporting.
  */
 struct DeviceTelemetry {
@@ -26,6 +34,12 @@ struct DeviceTelemetry {
     uint16_t avg_rate_cHz = 0;  // Average update rate in centi-Hz (e.g., 1000 = 10.0 Hz)
     uint16_t min_rate_cHz = 0;  // Min rate in last 5s window
     uint16_t max_rate_cHz = 0;  // Max rate in last 5s window
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    bool dynamic_anchors_enabled = false;
+    DynamicAnchorTelemetry dynamic_anchors[4];
+    uint8_t dynamic_anchor_count = 0;
+#endif
 };
 
 using TelemetryCallback = etl::delegate<DeviceTelemetry()>;

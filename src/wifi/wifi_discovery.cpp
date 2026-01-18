@@ -38,7 +38,7 @@ void WifiDiscovery::SendHeartbeat() {
         return; // No valid GCS IP configured
     }
 
-    char response[512];  // Increased buffer for telemetry + logging fields
+    char response[768];  // Increased buffer for telemetry + logging + dynamic anchors
 
     // Get IP and MAC based on WiFi mode
     bool isAP = (WiFi.getMode() == WIFI_AP);
@@ -78,6 +78,7 @@ void WifiDiscovery::SendHeartbeat() {
     uint8_t logLevel = 0; // Disabled
 #endif
 
+    // Build main JSON (without closing brace, so we can append dynamic anchors)
     int written = snprintf(response, sizeof(response),
         "{\"device\":\"%s\",\"id\":\"%s\",\"role\":\"%s\","
         "\"ip\":\"%d.%d.%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
@@ -86,7 +87,7 @@ void WifiDiscovery::SendHeartbeat() {
         "\"rf_enabled\":%s,\"rf_healthy\":%s,"
         "\"avg_rate_cHz\":%u,\"min_rate_cHz\":%u,\"max_rate_cHz\":%u,"
         "\"log_level\":%u,\"log_udp_port\":%u,"
-        "\"log_serial_enabled\":%s,\"log_udp_enabled\":%s}",
+        "\"log_serial_enabled\":%s,\"log_udp_enabled\":%s",
         DEVICE_TYPE,
         shortAddrStr,
         ModeToRoleString(static_cast<uint8_t>(uwbParams.mode)),
@@ -107,6 +108,37 @@ void WifiDiscovery::SendHeartbeat() {
         m_WifiParams.logUdpPort,
         m_WifiParams.logSerialEnabled ? "true" : "false",
         m_WifiParams.logUdpEnabled ? "true" : "false");
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    // Append dynamic anchor positions if enabled and available
+    if (telemetry.dynamic_anchors_enabled && telemetry.dynamic_anchor_count > 0) {
+        int remaining = sizeof(response) - written;
+        int added = snprintf(response + written, remaining, ",\"dyn_anchors\":[");
+        written += added;
+
+        for (uint8_t i = 0; i < telemetry.dynamic_anchor_count && written < static_cast<int>(sizeof(response) - 50); i++) {
+            remaining = sizeof(response) - written;
+            added = snprintf(response + written, remaining,
+                "%s{\"id\":%u,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}",
+                i > 0 ? "," : "",
+                telemetry.dynamic_anchors[i].id,
+                telemetry.dynamic_anchors[i].x,
+                telemetry.dynamic_anchors[i].y,
+                telemetry.dynamic_anchors[i].z);
+            written += added;
+        }
+
+        remaining = sizeof(response) - written;
+        added = snprintf(response + written, remaining, "]");
+        written += added;
+    }
+#endif
+
+    // Close the JSON object
+    if (written < static_cast<int>(sizeof(response) - 1)) {
+        response[written++] = '}';
+        response[written] = '\0';
+    }
 
     // Log truncation warning once
     static bool truncation_warned = false;
