@@ -21,6 +21,8 @@ extern "C" {
 
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
 #include "tag/dynamicAnchorPositions.hpp"
+// Forward declaration for telemetry struct (defined in wifi_discovery.hpp)
+struct DynamicAnchorTelemetry;
 #endif
 
 #define MAX_ANCHORS 6
@@ -42,6 +44,23 @@ public:
      * @return Number of unique anchor IDs (0-16)
      */
     static uint8_t GetAnchorsSeenCount();
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    /**
+     * @brief Check if dynamic anchor positioning is enabled.
+     * @return true if enabled
+     */
+    static bool IsDynamicPositioningEnabled();
+
+    /**
+     * @brief Get the calculated dynamic anchor positions.
+     * Thread-safe - uses mutex with short timeout to avoid blocking discovery.
+     * @param out Output array for anchor positions
+     * @param maxCount Maximum number of positions to retrieve
+     * @return Number of positions written to out array
+     */
+    static uint8_t GetDynamicAnchorPositions(DynamicAnchorTelemetry* out, uint8_t maxCount);
+#endif
 
     void InterruptHandler();
 private:

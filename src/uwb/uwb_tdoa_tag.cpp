@@ -626,6 +626,37 @@ static void estimatorProcess() {
 }
 
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+// Include for DynamicAnchorTelemetry definition
+#include "wifi/wifi_discovery.hpp"
+
+bool UWBTagTDoA::IsDynamicPositioningEnabled() {
+    return s_useDynamicPositions;
+}
+
+uint8_t UWBTagTDoA::GetDynamicAnchorPositions(DynamicAnchorTelemetry* out, uint8_t maxCount) {
+    if (!s_useDynamicPositions || out == nullptr || maxCount == 0) {
+        return 0;
+    }
+
+    // Try to acquire mutex with short timeout (10ms) to avoid blocking discovery
+    if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return 0;  // Mutex unavailable, skip this update
+    }
+
+    // Copy positions from anchor_positions array
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < 4 && count < maxCount; i++) {
+        out[count].id = i;
+        out[count].x = anchor_positions[i].x;
+        out[count].y = anchor_positions[i].y;
+        out[count].z = anchor_positions[i].z;
+        count++;
+    }
+
+    xSemaphoreGive(measurements_mtx);
+    return count;
+}
+
 void UWBTagTDoA::onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits) {
     if (!s_useDynamicPositions) {
         return;
