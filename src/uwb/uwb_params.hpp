@@ -94,6 +94,11 @@ struct UWBParams {
     uint8_t txPowerLevel = 3;       // TX power level (0=low, 1=med-low, 2=med-high, 3=high/large)
     uint8_t smartPowerEnable = 0;   // Smart power (0=disabled, 1=enabled)
 
+    // TDoA TDMA schedule (anchors)
+    // NOTE: 0 values keep legacy behavior (8 slots, ~2ms slot length).
+    uint8_t tdoaSlotCount = 0;          // Active TDMA slots per frame (2-8), 0=legacy (8)
+    uint16_t tdoaSlotDurationUs = 0;    // Slot duration in microseconds, 0=legacy (~2ms)
+
     // Dynamic anchor positioning (TDoA tags)
     uint8_t dynamicAnchorPosEnabled = 0;  // 0=static (use configured positions), 1=dynamic (calculate from inter-anchor distances)
     uint8_t anchorLayout = 0;             // AnchorLayout enum value (0=RECTANGULAR_0_ORIGIN)

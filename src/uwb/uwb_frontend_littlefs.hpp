@@ -94,6 +94,8 @@ public:
         PARAM_DEF(UWBParams, dwMode),
         PARAM_DEF(UWBParams, txPowerLevel),
         PARAM_DEF(UWBParams, smartPowerEnable),
+        PARAM_DEF(UWBParams, tdoaSlotCount),
+        PARAM_DEF(UWBParams, tdoaSlotDurationUs),
         PARAM_DEF(UWBParams, dynamicAnchorPosEnabled),
         PARAM_DEF(UWBParams, anchorLayout),
         PARAM_DEF(UWBParams, anchorHeight),

@@ -104,6 +104,10 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
 
     // Get UWB radio settings from parameters
     const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
+    // TDMA schedule (handled by TDoA anchor algorithm)
+    m_UwbConfig.tdoaSlotCount = uwbParams.tdoaSlotCount;
+    m_UwbConfig.tdoaSlotDurationUs = uwbParams.tdoaSlotDurationUs;
+
     const uint8_t* dwMode = getDwModeByIndex(uwbParams.dwMode);
     dwEnableMode(&m_Device, dwMode);
     dwSetChannel(&m_Device, uwbParams.channel);
@@ -126,6 +130,10 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
     LOG_INFO("  Radio: mode=%u, ch=%u, txPower=%u, smartPwr=%s",
              uwbParams.dwMode, uwbParams.channel, uwbParams.txPowerLevel,
              uwbParams.smartPowerEnable ? "on" : "off");
+    LOG_INFO("  TDMA: slots=%u, slotUs=%u%s",
+             (uwbParams.tdoaSlotCount == 0) ? 8 : uwbParams.tdoaSlotCount,
+             uwbParams.tdoaSlotDurationUs,
+             (uwbParams.tdoaSlotDurationUs == 0) ? " (legacy)" : "");
     LOG_INFO("  Antenna delay: %u", antennaDelay);
 
     // Init the tdoa anchor algorithm
