@@ -411,18 +411,23 @@ static uint32_t slotStep(dwDevice_t *dev, uwbEvent_t event)
     case slotTxDone:
     // We try to receive an LPP packet after sending our packet.
     // After this is done, we setup the next receive.
-      if (event == eventPacketReceived || event == eventReceiveTimeout || event == eventReceiveFailed) {
-        if (event == eventPacketReceived) {
-          debug("Received service packet!\r\n");
-          handleServicePacket(dev);
-          // The service packet handling time desynchronized us, lets resynch
-          ctx.state = syncTdmaState;
-          return 0;
-        }
-        setupRx(dev);
-        ctx.slotState = slotRxDone;
-        updateSlot();
+      if (event == eventPacketSent) {
+        // TX complete; radio auto-switches to RX (dwWaitForResponse).
+        // Wait for the subsequent RX event.
+        break;
       }
+      if (event == eventPacketReceived) {
+        debug("Received service packet!\r\n");
+        handleServicePacket(dev);
+        // The service packet handling time desynchronized us, lets resynch
+        ctx.state = syncTdmaState;
+        return 0;
+      }
+      // eventReceiveTimeout, eventReceiveFailed, or eventTimeout:
+      // proceed to next slot
+      setupRx(dev);
+      ctx.slotState = slotRxDone;
+      updateSlot();
       break;
   }
 
