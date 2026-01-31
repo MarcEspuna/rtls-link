@@ -66,7 +66,11 @@ private:
         .txPower = 0x1F1F1F1Ful, // Using defaults, unused for now
 
         .lowBitrate = true,     // Unused for now
-        .longPreamble = false   // Unused for now
+        .longPreamble = false,  // Unused for now
+
+        // TDMA schedule (TDoA anchors)
+        .tdoaSlotCount = 0,
+        .tdoaSlotDurationUs = 0,
     };
 };
 

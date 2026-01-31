@@ -49,6 +49,11 @@ typedef struct uwbConfig_s {
 
   bool lowBitrate;
   bool longPreamble;
+
+  // TDMA schedule configuration (TDoA anchors)
+  // NOTE: 0 values keep legacy behavior (8 slots, ~2ms slot length).
+  uint8_t tdoaSlotCount;       // Active TDMA slots per frame (2-8), 0=legacy (8)
+  uint16_t tdoaSlotDurationUs; // Slot duration in microseconds, 0=legacy (~2ms)
 } uwbConfig_t;
 
 #define MODE_ANCHOR 0

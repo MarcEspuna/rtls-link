@@ -27,9 +27,12 @@
 /* uwb_tdoa2.c: Uwb TDOA anchor, version with anchor-computed distances */
 
 /*
- * This anchor algorithm is using TDMA to divide frames in 8 timeslots. Each
- * anchor is sending a packet in one timeslot, anchor n sends its packet in
- * timeslot n. The slot time is of 2ms.
+ * This anchor algorithm uses TDMA to divide frames into timeslots. Each
+ * anchor sends a packet in one timeslot, anchor n sends its packet in
+ * timeslot n.
+ *
+ * The number of active slots per frame and the slot duration are configurable
+ * (legacy behavior: 8 slots of ~2ms).
  *
  * Each packet contains (assuming the packet is sent by anchor n):
  *   - A list of 8 IDs that contains the sequence number of the packets
@@ -67,14 +70,27 @@ extern "C" {
 // TODO: If A0 is the TDMA master it could transmit slots parameters and frame
 //       start so that we would not be limited to modulo 2 anymore
 #define NSLOTS 8
-#define TDMA_SLOT_BITS 26 // 26: 2ms timeslot
-#define TDMA_NSLOT_BITS 3
 
-#define TDMA_FRAME_BITS (TDMA_SLOT_BITS + TDMA_NSLOT_BITS)
-#define TDMA_SLOT_LEN (1ull<<(TDMA_SLOT_BITS+1))
-#define TDMA_FRAME_LEN (1ull<<(TDMA_FRAME_BITS+1))
+static constexpr uint8_t kLegacySlotCount = NSLOTS;
+static constexpr uint64_t kLegacySlotLenTicks = (1ull << (26 + 1)); // Legacy ~2ms timeslot
 
-#define TDMA_LAST_FRAME(NOW) ( NOW & ~(TDMA_FRAME_LEN-1) )
+// DW1000 delayed TX/RX requires time aligned to 512 ticks (9 LSB = 0).
+static constexpr uint64_t kDelayedTxRxAlignMask = (1ull << 9) - 1;
+
+// DW1000 timestamp ticks per microsecond: 499.2 MHz * 128 / 1e6 = 63897.6
+// Represented as a rational to avoid floating point: 63897.6 = 638976 / 10
+static constexpr uint64_t kDwTicksPerUsNum = 638976;
+static constexpr uint64_t kDwTicksPerUsDen = 10;
+
+static uint64_t usToDwTicks(uint32_t us)
+{
+  return (static_cast<uint64_t>(us) * kDwTicksPerUsNum + (kDwTicksPerUsDen / 2)) / kDwTicksPerUsDen;
+}
+
+static uint64_t alignDwTicks512(uint64_t ticks)
+{
+  return (ticks + kDelayedTxRxAlignMask) & ~kDelayedTxRxAlignMask;
+}
 
 // Time length of the preamble
 #define PREAMBLE_LENGTH_S ( 128 * 1017.63e-9 )
@@ -123,6 +139,12 @@ static struct ctx_s {
   // TDMA start of frame in local clock
   dwTime_t tdmaFrameStart;
 
+  // TDMA schedule parameters
+  uint8_t activeSlots; // 2..NSLOTS
+  uint64_t slotLen;    // DW1000 ticks
+  uint64_t frameLen;   // DW1000 ticks
+  bool txEnabled;      // false if anchorId >= activeSlots
+
   // list of timestamps and ids for last frame.
   uint8_t packetIds[NSLOTS];
   uint32_t rxTimestamps[NSLOTS];
@@ -130,6 +152,14 @@ static struct ctx_s {
 
   uint16_t distances[NSLOTS];
 } ctx;
+
+static uint64_t tdmaLastFrame(uint64_t now)
+{
+  if (ctx.frameLen == 0) {
+    return 0;
+  }
+  return now - (now % ctx.frameLen);
+}
 
 // Packet formats
 #define PACKET_TYPE_TDOA2 0x22
@@ -161,7 +191,7 @@ static dwTime_t transmitTimeForSlot(int slot)
   dwTime_t transmitTime = { .full = 0 };
 
   // Calculate start of the slot
-  transmitTime.full = ctx.tdmaFrameStart.full + slot*TDMA_SLOT_LEN;
+  transmitTime.full = ctx.tdmaFrameStart.full + static_cast<uint64_t>(slot) * ctx.slotLen;
   // Add guard and preamble time
   transmitTime.full += TDMA_GUARD_LENGTH;
   transmitTime.full += PREAMBLE_LENGTH;
@@ -236,7 +266,7 @@ static void handleRxPacket(dwDevice_t *dev)
     // Resync local frame start to packet from anchor 0
     dwTime_t pkTxTime = { .full = 0 };
     memcpy(&pkTxTime, rangePacket->timestamps[ctx.slot], TS_TX_SIZE);
-    ctx.tdmaFrameStart.full = rxTime.full - (pkTxTime.full - TDMA_LAST_FRAME(pkTxTime.full));
+    ctx.tdmaFrameStart.full = rxTime.full - (pkTxTime.full - tdmaLastFrame(pkTxTime.full));
 
     //TODO: Save relevant data to calculate masterTime
   }
@@ -261,7 +291,8 @@ static void setupRx(dwDevice_t *dev)
   dwTime_t receiveTime = { .full = 0 };
 
   // Calculate start of the slot
-  receiveTime.full = ctx.tdmaFrameStart.full + ctx.nextSlot*TDMA_SLOT_LEN;
+  receiveTime.full = ctx.tdmaFrameStart.full + static_cast<uint64_t>(ctx.nextSlot) * ctx.slotLen;
+  adjustTxRxTime(&receiveTime);
 
   dwSetReceiveWaitTimeout(dev, RECEIVE_TIMEOUT);
   dwWriteSystemConfigurationRegister(dev);
@@ -343,13 +374,13 @@ static void updateSlot()
 {
   ctx.slot = ctx.nextSlot;
   ctx.nextSlot = ctx.nextSlot + 1;
-  if (ctx.nextSlot >= NSLOTS) {
+  if (ctx.nextSlot >= ctx.activeSlots) {
     ctx.nextSlot = 0;
   }
 
   // If the next slot is 0, the next schedule has to be in the next frame!
   if (ctx.nextSlot == 0) {
-    ctx.tdmaFrameStart.full += TDMA_FRAME_LEN;
+    ctx.tdmaFrameStart.full += ctx.frameLen;
   }
 }
 
@@ -366,7 +397,7 @@ static uint32_t slotStep(dwDevice_t *dev, uwbEvent_t event)
       }
 
       // Quickly setup transfer to next slot
-      if (ctx.nextSlot == ctx.anchorId) {
+      if (ctx.txEnabled && ctx.nextSlot == ctx.anchorId) {
         setupTx(dev);
         ctx.slotState = slotTxDone;
         updateSlot();
@@ -402,8 +433,52 @@ static uint32_t slotStep(dwDevice_t *dev, uwbEvent_t event)
 static void tdoa2Init(uwbConfig_t * config, dwDevice_t *dev)
 {
   ctx.anchorId = config->address[0];
+
+  // TDMA schedule configuration
+  uint8_t slotCount = config->tdoaSlotCount;
+  if (slotCount == 0) {
+    slotCount = kLegacySlotCount;
+  }
+  if (slotCount < 2) {
+    slotCount = 2;
+  }
+  if (slotCount > NSLOTS) {
+    slotCount = NSLOTS;
+  }
+  ctx.activeSlots = slotCount;
+  ctx.txEnabled = (ctx.anchorId < ctx.activeSlots);
+
+  uint64_t slotLen = 0;
+  if (config->tdoaSlotDurationUs == 0) {
+    slotLen = kLegacySlotLenTicks;
+  } else {
+    slotLen = alignDwTicks512(usToDwTicks(config->tdoaSlotDurationUs));
+    if (slotLen < (1ull << 9)) {
+      slotLen = (1ull << 9);
+    }
+  }
+
+  uint64_t frameLen = slotLen * ctx.activeSlots;
+  if (frameLen >= (1ull << 32)) {
+    // The protocol only carries 32-bit timestamps; keep the frame length below
+    // the wrap-around period to avoid sync issues.
+    uint64_t maxSlotLen = ((1ull << 32) - 1) / ctx.activeSlots;
+    maxSlotLen &= ~kDelayedTxRxAlignMask;
+    if (maxSlotLen < (1ull << 9)) {
+      maxSlotLen = (1ull << 9);
+    }
+    if (slotLen > maxSlotLen) {
+      slotLen = maxSlotLen;
+      frameLen = slotLen * ctx.activeSlots;
+      debug("TDMA slot duration too long, clamped (slots=%u)\r\n", ctx.activeSlots);
+    }
+  }
+
+  ctx.slotLen = slotLen;
+  ctx.frameLen = frameLen;
+
   ctx.state = syncTdmaState;
-  ctx.slot = NSLOTS-1;
+  ctx.slot = ctx.activeSlots - 1;
   ctx.nextSlot = 0;
   memset(ctx.txTimestamps, 0, sizeof(ctx.txTimestamps));
   memset(ctx.rxTimestamps, 0, sizeof(ctx.rxTimestamps));
@@ -417,7 +492,7 @@ static uint32_t tdoa2UwbEvent(dwDevice_t *dev, uwbEvent_t event)
   } else {
     if (ctx.anchorId == 0) {
       printf("anchorid = 0\n");
-      ctx.tdmaFrameStart.full = TDMA_LAST_FRAME(ctx.tdmaFrameStart.full) + 2*TDMA_FRAME_LEN;
+      ctx.tdmaFrameStart.full = tdmaLastFrame(ctx.tdmaFrameStart.full) + 2 * ctx.frameLen;
       ctx.state = synchronizedState;
       setupTx(dev);
 
@@ -427,25 +502,17 @@ static uint32_t tdoa2UwbEvent(dwDevice_t *dev, uwbEvent_t event)
       switch (event) {
         case eventPacketReceived: {
             static packet_t rxPacket;
-            dwTime_t rxTime = { .full = 0 };
-            dwGetReceiveTimestamp(dev, &rxTime);
             int dataLength = dwGetDataLength(dev);
             dwGetData(dev, (uint8_t*)&rxPacket, dataLength);
 
             if (rxPacket.sourceAddress[0] == 0 && rxPacket.payload[0] == PACKET_TYPE_TDOA2) {
-              rangePacket_t * rangePacket = (rangePacket_t *)rxPacket.payload;
-
-              // Resync local frame start to packet from anchor 0
-              dwTime_t pkTxTime = { .full = 0 };
-              memcpy(&pkTxTime, rangePacket->timestamps[0], TS_TX_SIZE);
-              ctx.tdmaFrameStart.full = rxTime.full - (pkTxTime.full - TDMA_LAST_FRAME(pkTxTime.full));
-
-              ctx.tdmaFrameStart.full += TDMA_FRAME_LEN;
-
-              setupTx(dev);
+              // Treat this as slot 0 in a synchronized frame and let the normal
+              // state machine schedule the next slot.
+              ctx.slot = 0;
+              ctx.nextSlot = 1;
               ctx.slotState = slotRxDone;
               ctx.state = synchronizedState;
-              updateSlot();
+              return slotStep(dev, eventPacketReceived);
             } else {
               // Start the receiver waiting for a packet from anchor 0
               dwIdle(dev);

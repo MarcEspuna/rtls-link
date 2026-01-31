@@ -12,11 +12,25 @@ void Front::InitFrontends()
 {
     LOG_INFO("Initializing frontends");
     etl::vector<IFrontend*, Front::MAX_FRONTENDS>& frontends = Get();
+
+    // Initialize WiFi frontend first so UDP logging is available for other frontends
     for (size_t i = 0; i < frontends.size(); i++)
     {
-        IFrontend* frontend = frontends[i];
-        frontend->Init();
+        if (frontends[i]->GetParamGroup() == "wifi")
+        {
+            frontends[i]->Init();
+        }
     }
+
+    // Initialize remaining frontends
+    for (size_t i = 0; i < frontends.size(); i++)
+    {
+        if (frontends[i]->GetParamGroup() != "wifi")
+        {
+            frontends[i]->Init();
+        }
+    }
+
     LOG_INFO("Frontends initialized");
 }
 
