@@ -129,6 +129,7 @@ static struct ctx_s {
   uint32_t txTimestamps[NSLOTS];
 
   uint16_t distances[NSLOTS];
+  uint16_t antennaDelay;
 } ctx;
 
 // Packet formats
@@ -139,6 +140,7 @@ typedef struct rangePacket_s {
   uint8_t pid[NSLOTS];  // Packet id of the timestamps
   uint8_t timestamps[NSLOTS][TS_TX_SIZE];  // Relevant time for anchors
   uint16_t distances[NSLOTS];
+  uint16_t antennaDelay;  // This anchor's configured antenna delay (DW1000 ticks)
 } __attribute__((packed)) rangePacket_t;
 
 #define LPP_HEADER (sizeof(rangePacket_t))
@@ -314,6 +316,7 @@ static void setTxData(dwDevice_t *dev)
   }
   memcpy(rangePacket->timestamps[ctx.anchorId], &ctx.txTimestamps[ctx.anchorId], TS_TX_SIZE);
   memcpy(rangePacket->distances, ctx.distances, sizeof(ctx.distances));
+  rangePacket->antennaDelay = ctx.antennaDelay;
 
   dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH + sizeof(rangePacket_t) + lppLength);
 }
@@ -405,6 +408,7 @@ static void tdoa2Init(uwbConfig_t * config, dwDevice_t *dev)
   ctx.state = syncTdmaState;
   ctx.slot = NSLOTS-1;
   ctx.nextSlot = 0;
+  ctx.antennaDelay = config->antennaDelay;
   memset(ctx.txTimestamps, 0, sizeof(ctx.txTimestamps));
   memset(ctx.rxTimestamps, 0, sizeof(ctx.rxTimestamps));
 }

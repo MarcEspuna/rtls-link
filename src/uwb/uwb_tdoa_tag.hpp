@@ -94,7 +94,7 @@ private:
     static uint32_t s_lastPositionUpdate;
 
     // Callback for inter-anchor distance updates from tdoa_tag_algorithm
-    static void onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits);
+    static void onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits, uint16_t fromAntennaDelay);
 
     // Check and apply dynamic position updates
     void maybeUpdateDynamicPositions();

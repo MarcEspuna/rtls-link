@@ -49,6 +49,8 @@ typedef struct uwbConfig_s {
 
   bool lowBitrate;
   bool longPreamble;
+
+  uint16_t antennaDelay;  // DW1000 antenna delay ticks for this anchor
 } uwbConfig_t;
 
 #define MODE_ANCHOR 0
