@@ -380,7 +380,7 @@ static uint32_t slotStep(dwDevice_t *dev, uwbEvent_t event)
     case slotTxDone:
     // We try to receive an LPP packet after sending our packet.
     // After this is done, we setup the next receive.
-      if (event == eventPacketReceived || event == eventReceiveTimeout) {
+      if (event == eventPacketReceived || event == eventReceiveTimeout || event == eventReceiveFailed) {
         if (event == eventPacketReceived) {
           debug("Received service packet!\r\n");
           handleServicePacket(dev);
