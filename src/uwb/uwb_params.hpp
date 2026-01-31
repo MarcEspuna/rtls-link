@@ -22,12 +22,14 @@ enum class ZCalcMode : uint8_t {
 };
 
 // Anchor layout configurations for dynamic position calculation
+// A0 is always at origin. The layout number determines which anchors
+// define the +X and +Y axes.
 enum class AnchorLayout : uint8_t {
-    RECTANGULAR_0_ORIGIN = 0,  // A0 at origin (default)
-    RECTANGULAR_1_ORIGIN = 1,  // A1 at origin
-    RECTANGULAR_2_ORIGIN = 2,  // A2 at origin
-    RECTANGULAR_3_ORIGIN = 3,  // A3 at origin
-    CUSTOM = 255               // Reserved for future custom layouts
+    RECTANGULAR_A1X_A3Y = 0,  // +X=A1, +Y=A3 (default)
+    RECTANGULAR_A1X_A2Y = 1,  // +X=A1, +Y=A2
+    RECTANGULAR_A3X_A1Y = 2,  // +X=A3, +Y=A1
+    RECTANGULAR_A2X_A3Y = 3,  // +X=A2, +Y=A3
+    CUSTOM = 255              // Reserved for future custom layouts
 };
 
 using UWBShortAddr = etl::array<char, 2>;

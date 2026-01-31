@@ -66,7 +66,9 @@ private:
         .txPower = 0x1F1F1F1Ful, // Using defaults, unused for now
 
         .lowBitrate = true,     // Unused for now
-        .longPreamble = false   // Unused for now
+        .longPreamble = false,  // Unused for now
+
+        .antennaDelay = 0
     };
 };
 
