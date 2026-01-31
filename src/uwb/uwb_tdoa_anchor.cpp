@@ -164,9 +164,13 @@ void UWBAnchorTDoA::Update()
     // Force idle and trigger resync.
     uint32_t now = millis();
     if (m_lastEventTimeMs != 0 && (now - m_lastEventTimeMs) > STALL_TIMEOUT_MS) {
-        LOG_WARN("UWB stall detected (%lu ms without interrupt), forcing resync",
+        LOG_WARN("UWB stall detected (%lu ms without interrupt), reinitializing",
                  (unsigned long)(now - m_lastEventTimeMs));
         dwIdle(&m_Device);
+        // Full reinit: resets FSM to syncTdmaState and clears stale
+        // timestamps so the resync path computes timing from the current
+        // DW1000 system clock (not the stale TDMA frame start).
+        uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device);
         uwbTdoa2Algorithm.onEvent(&m_Device, uwbEvent_t::eventTimeout);
         m_lastEventTimeMs = now;
     }

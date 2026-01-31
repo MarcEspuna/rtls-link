@@ -496,8 +496,14 @@ static uint32_t tdoa2UwbEvent(dwDevice_t *dev, uwbEvent_t event)
     return slotStep(dev, event);
   } else {
     if (ctx.anchorId == 0) {
-      printf("anchorid = 0\n");
-      ctx.tdmaFrameStart.full = tdmaLastFrame(ctx.tdmaFrameStart.full) + 2 * ctx.frameLen;
+      // Compute next frame start from the CURRENT DW1000 system time so that
+      // delayed TX is always scheduled in the future.  Using the stale
+      // ctx.tdmaFrameStart would produce a past time after a prolonged stall
+      // (e.g. watchdog recovery), causing the DW1000 to silently reject the
+      // delayed TX and stalling the master anchor permanently.
+      dwTime_t sysTime = { .full = 0 };
+      dwGetSystemTimestamp(dev, &sysTime);
+      ctx.tdmaFrameStart.full = tdmaLastFrame(sysTime.full) + 2 * ctx.frameLen;
       ctx.state = synchronizedState;
       setupTx(dev);
 
