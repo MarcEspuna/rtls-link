@@ -411,18 +411,23 @@ static uint32_t slotStep(dwDevice_t *dev, uwbEvent_t event)
     case slotTxDone:
     // We try to receive an LPP packet after sending our packet.
     // After this is done, we setup the next receive.
-      if (event == eventPacketReceived || event == eventReceiveTimeout || event == eventReceiveFailed) {
-        if (event == eventPacketReceived) {
-          debug("Received service packet!\r\n");
-          handleServicePacket(dev);
-          // The service packet handling time desynchronized us, lets resynch
-          ctx.state = syncTdmaState;
-          return 0;
-        }
-        setupRx(dev);
-        ctx.slotState = slotRxDone;
-        updateSlot();
+      if (event == eventPacketSent) {
+        // TX complete; radio auto-switches to RX (dwWaitForResponse).
+        // Wait for the subsequent RX event.
+        break;
       }
+      if (event == eventPacketReceived) {
+        debug("Received service packet!\r\n");
+        handleServicePacket(dev);
+        // The service packet handling time desynchronized us, lets resynch
+        ctx.state = syncTdmaState;
+        return 0;
+      }
+      // eventReceiveTimeout, eventReceiveFailed, or eventTimeout:
+      // proceed to next slot
+      setupRx(dev);
+      ctx.slotState = slotRxDone;
+      updateSlot();
       break;
   }
 
@@ -491,8 +496,14 @@ static uint32_t tdoa2UwbEvent(dwDevice_t *dev, uwbEvent_t event)
     return slotStep(dev, event);
   } else {
     if (ctx.anchorId == 0) {
-      printf("anchorid = 0\n");
-      ctx.tdmaFrameStart.full = tdmaLastFrame(ctx.tdmaFrameStart.full) + 2 * ctx.frameLen;
+      // Compute next frame start from the CURRENT DW1000 system time so that
+      // delayed TX is always scheduled in the future.  Using the stale
+      // ctx.tdmaFrameStart would produce a past time after a prolonged stall
+      // (e.g. watchdog recovery), causing the DW1000 to silently reject the
+      // delayed TX and stalling the master anchor permanently.
+      dwTime_t sysTime = { .full = 0 };
+      dwGetSystemTimestamp(dev, &sysTime);
+      ctx.tdmaFrameStart.full = tdmaLastFrame(sysTime.full) + 2 * ctx.frameLen;
       ctx.state = synchronizedState;
       setupTx(dev);
 

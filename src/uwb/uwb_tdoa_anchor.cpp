@@ -151,16 +151,30 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
 }
 
 
-void UWBAnchorTDoA::Update() 
+void UWBAnchorTDoA::Update()
 {
     if (isr_flag) {
         dwHandleInterrupt(&m_Device);
         isr_flag = false;
+        m_lastEventTimeMs = millis();
     }
 
-    // static uint64_t last_time = millis();
-    // static uint32_t sent = 0;
-    // Call libdw1000 loop
+    // Stall watchdog: if no DW1000 interrupt for longer than several TDMA
+    // frame periods, the radio is stuck (e.g. failed delayed TX/RX).
+    // Force idle and trigger resync.
+    uint32_t now = millis();
+    if (m_lastEventTimeMs != 0 && (now - m_lastEventTimeMs) > STALL_TIMEOUT_MS) {
+        LOG_WARN("UWB stall detected (%lu ms without interrupt), reinitializing",
+                 (unsigned long)(now - m_lastEventTimeMs));
+        dwIdle(&m_Device);
+        // Full reinit: resets FSM to syncTdmaState and clears stale
+        // timestamps so the resync path computes timing from the current
+        // DW1000 system clock (not the stale TDMA frame start).
+        uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device);
+        uwbTdoa2Algorithm.onEvent(&m_Device, uwbEvent_t::eventTimeout);
+        m_lastEventTimeMs = now;
+    }
+
     AnchorTDoADispatcher dispatcher(this);
     dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
 }

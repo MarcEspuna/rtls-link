@@ -34,7 +34,11 @@ public:
     void Update() override;
 
     void InterruptHandler();
+
+    static constexpr uint32_t STALL_TIMEOUT_MS = 150;
+
 private:
+    uint32_t m_lastEventTimeMs = 0;
     // Libdw1000 device
     dwDevice_t m_Device;
     dwOps_t m_Ops = {
