@@ -95,7 +95,7 @@ struct DistanceAccumulator {
  * @code
  * DynamicAnchorPositionCalculator calc;
  * DynamicAnchorConfig config = {
- *     .layout = 0,  // RECTANGULAR_0_ORIGIN
+ *     .layout = 0,  // RECTANGULAR_A1X_A3Y (A0 at origin, +X=A1, +Y=A3)
  *     .anchorCount = 4,
  *     .anchorHeight = 2.0f,  // 2 meters high
  *     .avgSampleCount = 50,
@@ -236,13 +236,12 @@ private:
 
     /**
      * @brief Validate that distances form a valid rectangular layout
-     * @param d01 Distance A0-A1 (side)
-     * @param d03 Distance A0-A3 (side)
-     * @param d02 Distance A0-A2 (diagonal)
-     * @param d13 Distance A1-A3 (diagonal)
+     * @param dX Distance from A0 to the +X axis anchor
+     * @param dY Distance from A0 to the +Y axis anchor
+     * @param dDiag Distance from A0 to the diagonal corner anchor
      * @return true if distances are geometrically valid
      */
-    bool validateRectangular(float d01, float d03, float d02, float d13);
+    bool validateRectangular(float dX, float dY, float dDiag);
 
     /**
      * @brief Finalize averages when accumulator is ready

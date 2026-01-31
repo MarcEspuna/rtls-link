@@ -93,8 +93,16 @@ static void* callback_arg = nullptr;
 // Callback for inter-anchor distance updates (used for dynamic anchor positioning)
 static InterAnchorDistanceCallback distance_callback = nullptr;
 
+// Per-anchor antenna delays received from anchor packets
+static uint16_t s_anchorAntennaDelays[LOCODECK_NR_OF_TDOA2_ANCHORS] = {0};
+
 void uwbTdoa2TagSetDistanceCallback(InterAnchorDistanceCallback callback) {
   distance_callback = callback;
+}
+
+uint16_t uwbTdoa2TagGetAnchorAntennaDelay(uint8_t anchorId) {
+  if (anchorId >= LOCODECK_NR_OF_TDOA2_ANCHORS) return 0;
+  return s_anchorAntennaDelays[anchorId];
 }
 
 // The default receive time in the anchors for messages from other anchors is 0
@@ -110,6 +118,12 @@ static bool isConsecutiveIds(const uint8_t previousAnchor, const uint8_t current
 
 static void updateRemoteData(tdoaAnchorContext_t* anchorCtx, const rangePacket2_t* packet) {
   const uint8_t anchorId = tdoaStorageGetId(anchorCtx);
+
+  // Store this anchor's reported antenna delay
+  if (anchorId < LOCODECK_NR_OF_TDOA2_ANCHORS) {
+    s_anchorAntennaDelays[anchorId] = packet->antennaDelay;
+  }
+
   for (uint8_t i = 0; i < LOCODECK_NR_OF_TDOA2_ANCHORS; i++) {
     if (anchorId != i) {
       uint8_t remoteId = i;
@@ -132,7 +146,7 @@ static void updateRemoteData(tdoaAnchorContext_t* anchorCtx, const rangePacket2_
 
           // Report inter-anchor distance for dynamic positioning
           if (distance_callback) {
-            distance_callback(anchorId, remoteId, packet->distances[i]);
+            distance_callback(anchorId, remoteId, packet->distances[i], packet->antennaDelay);
           }
         }
       }

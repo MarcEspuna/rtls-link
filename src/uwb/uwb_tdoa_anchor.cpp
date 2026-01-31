@@ -136,8 +136,11 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
              (uwbParams.tdoaSlotDurationUs == 0) ? " (legacy)" : "");
     LOG_INFO("  Antenna delay: %u", antennaDelay);
 
+    // Pass antenna delay to algorithm so it's broadcast in TX packets
+    m_UwbConfig.antennaDelay = antennaDelay;
+
     // Init the tdoa anchor algorithm
-    uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device); 
+    uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device);
 
     attachInterrupt(digitalPinToInterrupt(uwb_config.pins.int_pin), 
     [this]() { 

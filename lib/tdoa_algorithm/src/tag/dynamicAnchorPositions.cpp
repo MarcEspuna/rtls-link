@@ -93,37 +93,43 @@ void DynamicAnchorPositionCalculator::updateDistance(uint8_t fromAnchor, uint8_t
 }
 
 bool DynamicAnchorPositionCalculator::canCalculate() const {
-    // For rectangular layout with 4 anchors, we need:
-    // - d01 (A0-A1)
-    // - d03 (A0-A3)
-    // - d02 or d13 (diagonal - for validation)
-    // Minimum: need at least the two perpendicular sides
-
     if (m_config.anchorCount < 4) {
         return false;
     }
 
-    // Check if we have the essential distances for rectangular layout
-    // Need at least d01 and d03 (the two sides from origin)
-    bool hasD01 = (m_validDistanceMask[0] & (1 << 1)) != 0;
-    bool hasD03 = (m_validDistanceMask[0] & (1 << 3)) != 0;
+    // Determine required distance pairs based on layout.
+    // A0 is always at origin. Layout determines which anchors are on +X and +Y axes.
+    // Layout 0: +X=A1, +Y=A3 -> need d01, d03
+    // Layout 1: +X=A1, +Y=A2 -> need d01, d02
+    // Layout 2: +X=A3, +Y=A1 -> need d03, d01
+    // Layout 3: +X=A2, +Y=A3 -> need d02, d03
+    uint8_t xAnchor, yAnchor;
+    switch (m_config.layout) {
+        case 0: xAnchor = 1; yAnchor = 3; break;
+        case 1: xAnchor = 1; yAnchor = 2; break;
+        case 2: xAnchor = 3; yAnchor = 1; break;
+        case 3: xAnchor = 2; yAnchor = 3; break;
+        default: return false;
+    }
 
-    if (!hasD01 || !hasD03) {
+    bool hasDx = (m_validDistanceMask[0] & (1 << xAnchor)) != 0;
+    bool hasDy = (m_validDistanceMask[0] & (1 << yAnchor)) != 0;
+
+    if (!hasDx || !hasDy) {
         return false;
     }
 
 #ifdef ESP_PLATFORM
-    // Check for stale data and warn (but don't reset - per user preference)
     uint32_t now = xTaskGetTickCount();
     static uint32_t lastStaleWarning = 0;
 
-    // Check essential pairs for staleness
-    bool d01Stale = m_accumulators[0][1].isStale(now, STALENESS_TIMEOUT_TICKS);
-    bool d03Stale = m_accumulators[0][3].isStale(now, STALENESS_TIMEOUT_TICKS);
+    bool dxStale = m_accumulators[0][xAnchor].isStale(now, STALENESS_TIMEOUT_TICKS);
+    bool dyStale = m_accumulators[0][yAnchor].isStale(now, STALENESS_TIMEOUT_TICKS);
 
-    if ((d01Stale || d03Stale) && (now - lastStaleWarning) > 5000) {
-        ESP_LOGW(TAG, "Dynamic anchor data stale: d01=%s d03=%s (no updates in 5s)",
-                 d01Stale ? "STALE" : "ok", d03Stale ? "STALE" : "ok");
+    if ((dxStale || dyStale) && (now - lastStaleWarning) > 5000) {
+        ESP_LOGW(TAG, "Dynamic anchor data stale: d0%d=%s d0%d=%s (no updates in 5s)",
+                 xAnchor, dxStale ? "STALE" : "ok",
+                 yAnchor, dyStale ? "STALE" : "ok");
         lastStaleWarning = now;
     }
 #endif
@@ -143,10 +149,10 @@ bool DynamicAnchorPositionCalculator::calculatePositions(point_t* positions, uin
     bool success = false;
 
     switch (m_config.layout) {
-        case 0:  // RECTANGULAR_0_ORIGIN
-        case 1:  // RECTANGULAR_1_ORIGIN
-        case 2:  // RECTANGULAR_2_ORIGIN
-        case 3:  // RECTANGULAR_3_ORIGIN
+        case 0:  // RECTANGULAR_A1X_A3Y
+        case 1:  // RECTANGULAR_A1X_A2Y
+        case 2:  // RECTANGULAR_A3X_A1Y
+        case 3:  // RECTANGULAR_A2X_A3Y
             success = calculateRectangular(newPositions, count);
             break;
         default:
@@ -176,20 +182,31 @@ bool DynamicAnchorPositionCalculator::calculateRectangular(point_t* positions, u
         return false;
     }
 
-    // Get the essential distances
-    float d01 = m_averagedDistances[0][1];  // A0 to A1 (North side in RECTANGULAR_0_ORIGIN)
-    float d03 = m_averagedDistances[0][3];  // A0 to A3 (East side in RECTANGULAR_0_ORIGIN)
+    // A0 is always at origin. Layout determines which anchors are on +X and +Y axes.
+    // Layout 0: +X=A1, +Y=A3 -> dX=d01, dY=d03, corner(dX,dY)=A2
+    // Layout 1: +X=A1, +Y=A2 -> dX=d01, dY=d02, corner(dX,dY)=A3
+    // Layout 2: +X=A3, +Y=A1 -> dX=d03, dY=d01, corner(dX,dY)=A2
+    // Layout 3: +X=A2, +Y=A3 -> dX=d02, dY=d03, corner(dX,dY)=A1
+    uint8_t xAnchor, yAnchor, cornerAnchor;
+    switch (m_config.layout) {
+        case 0: xAnchor = 1; yAnchor = 3; cornerAnchor = 2; break;
+        case 1: xAnchor = 1; yAnchor = 2; cornerAnchor = 3; break;
+        case 2: xAnchor = 3; yAnchor = 1; cornerAnchor = 2; break;
+        case 3: xAnchor = 2; yAnchor = 3; cornerAnchor = 1; break;
+        default: return false;
+    }
 
-    // Validate we have positive distances
-    if (d01 <= 0.0f || d03 <= 0.0f) {
+    float dX = m_averagedDistances[0][xAnchor];
+    float dY = m_averagedDistances[0][yAnchor];
+
+    if (dX <= 0.0f || dY <= 0.0f) {
         return false;
     }
 
-    // Optional: validate with diagonal if available
-    float d02 = m_averagedDistances[0][2];  // Diagonal A0-A2
-    float d13 = m_averagedDistances[1][3];  // Diagonal A1-A3
-    if (d02 > 0.0f && d13 > 0.0f) {
-        if (!validateRectangular(d01, d03, d02, d13)) {
+    // Optional: validate with diagonal (A0 to corner anchor at (dX,dY))
+    float dDiag = m_averagedDistances[0][cornerAnchor];
+    if (dDiag > 0.0f) {
+        if (!validateRectangular(dX, dY, dDiag)) {
             // Geometry doesn't match rectangular layout - continue anyway but could warn
         }
     }
@@ -197,82 +214,35 @@ bool DynamicAnchorPositionCalculator::calculateRectangular(point_t* positions, u
     // Calculate Z coordinate (NED convention: Z = -height)
     float z = -m_config.anchorHeight;
 
-    // Calculate positions based on layout origin
-    // All layouts are rectangular with 4 anchors at corners
-    // The origin anchor and axis orientation changes based on layout
+    // A0 always at origin
+    positions[0] = {0, 0.0f, 0.0f, z};
 
-    switch (m_config.layout) {
-        case 0:  // RECTANGULAR_0_ORIGIN: A0 at origin
-            // A0 = (0, 0, Z)       - Origin
-            // A1 = (d01, 0, Z)     - North (+X)
-            // A3 = (0, d03, Z)     - East (+Y)
-            // A2 = (d01, d03, Z)   - Northeast corner
-            positions[0] = {0, 0.0f, 0.0f, z};
-            positions[1] = {0, d01, 0.0f, z};
-            positions[2] = {0, d01, d03, z};
-            positions[3] = {0, 0.0f, d03, z};
-            break;
-
-        case 1:  // RECTANGULAR_1_ORIGIN: A1 at origin
-            // A1 = (0, 0, Z)       - Origin
-            // A0 = (-d01, 0, Z)    - South (-X)
-            // A2 = (0, d03, Z)     - East (+Y)
-            // A3 = (-d01, d03, Z)  - Southeast corner
-            positions[0] = {0, -d01, 0.0f, z};
-            positions[1] = {0, 0.0f, 0.0f, z};
-            positions[2] = {0, 0.0f, d03, z};
-            positions[3] = {0, -d01, d03, z};
-            break;
-
-        case 2:  // RECTANGULAR_2_ORIGIN: A2 at origin
-            // A2 = (0, 0, Z)       - Origin
-            // A1 = (-d01, 0, Z)    - South (-X)
-            // A3 = (0, -d03, Z)    - West (-Y)
-            // A0 = (-d01, -d03, Z) - Southwest corner
-            positions[0] = {0, -d01, -d03, z};
-            positions[1] = {0, 0.0f, -d03, z};
-            positions[2] = {0, 0.0f, 0.0f, z};
-            positions[3] = {0, -d01, 0.0f, z};
-            break;
-
-        case 3:  // RECTANGULAR_3_ORIGIN: A3 at origin
-            // A3 = (0, 0, Z)       - Origin
-            // A0 = (d01, 0, Z)     - North (+X)
-            // A2 = (0, d03, Z)     - East (+Y)
-            // A1 = (d01, d03, Z)   - Northeast corner
-            positions[0] = {0, d01, 0.0f, z};
-            positions[1] = {0, d01, d03, z};
-            positions[2] = {0, 0.0f, d03, z};
-            positions[3] = {0, 0.0f, 0.0f, z};
-            break;
-
-        default:
-            return false;
+    // Place each anchor based on its role
+    // +X anchor at (dX, 0, Z)
+    // +Y anchor at (0, dY, Z)
+    // Corner anchor at (dX, dY, Z)
+    for (uint8_t i = 1; i < 4; i++) {
+        if (i == xAnchor) {
+            positions[i] = {0, dX, 0.0f, z};
+        } else if (i == yAnchor) {
+            positions[i] = {0, 0.0f, dY, z};
+        } else if (i == cornerAnchor) {
+            positions[i] = {0, dX, dY, z};
+        }
     }
 
     return true;
 }
 
-bool DynamicAnchorPositionCalculator::validateRectangular(float d01, float d03, float d02, float d13) {
-    // For a rectangle:
-    // - Diagonals should be equal (d02 == d13)
-    // - Diagonal should equal sqrt(d01^2 + d03^2) (Pythagorean theorem)
-
-    // Calculate expected diagonal
-    float expectedDiagonal = std::sqrt(d01 * d01 + d03 * d03);
+bool DynamicAnchorPositionCalculator::validateRectangular(float dX, float dY, float dDiag) {
+    // For a rectangle, the diagonal from A0 to the corner at (dX, dY) should
+    // equal sqrt(dX^2 + dY^2) by the Pythagorean theorem.
+    float expectedDiagonal = std::sqrt(dX * dX + dY * dY);
 
     // Allow 10% tolerance for measurement noise
     float tolerance = 0.1f;
 
-    // Check if diagonals are roughly equal to each other
-    float diagDiff = std::abs(d02 - d13);
-    float diagAvg = (d02 + d13) / 2.0f;
-    if (diagAvg > 0.0f && (diagDiff / diagAvg) > tolerance) {
-        return false;
-    }
-
-    // Check if diagonal matches Pythagorean expectation
-    float diagError = std::abs(diagAvg - expectedDiagonal);
+    float diagError = std::abs(dDiag - expectedDiagonal);
     if (expectedDiagonal > 0.0f && (diagError / expectedDiagonal) > tolerance) {
         return false;
     }

@@ -75,6 +75,8 @@ private:
         // TDMA schedule (TDoA anchors)
         .tdoaSlotCount = 0,
         .tdoaSlotDurationUs = 0,
+
+        .antennaDelay = 0
     };
 };
 

@@ -54,6 +54,8 @@ typedef struct uwbConfig_s {
   // NOTE: 0 values keep legacy behavior (8 slots, ~2ms slot length).
   uint8_t tdoaSlotCount;       // Active TDMA slots per frame (2-8), 0=legacy (8)
   uint16_t tdoaSlotDurationUs; // Slot duration in microseconds, 0=legacy (~2ms)
+
+  uint16_t antennaDelay;  // DW1000 antenna delay ticks for this anchor
 } uwbConfig_t;
 
 #define MODE_ANCHOR 0

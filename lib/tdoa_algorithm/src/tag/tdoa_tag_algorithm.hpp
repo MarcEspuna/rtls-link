@@ -31,6 +31,7 @@ typedef struct {
   uint8_t sequenceNrs[LOCODECK_NR_OF_TDOA2_ANCHORS];
   uint32_t timestamps[LOCODECK_NR_OF_TDOA2_ANCHORS];
   uint16_t distances[LOCODECK_NR_OF_TDOA2_ANCHORS];
+  uint16_t antennaDelay;  // Sending anchor's configured antenna delay (DW1000 ticks)
 } __attribute__((packed)) rangePacket2_t;
 
 // Protocol version
@@ -52,10 +53,13 @@ typedef struct {
 void lpsTdoa2TagSetOptions(lpsTdoa2AlgoOptions_t* newOptions);
 
 // Callback type for inter-anchor distance updates (for dynamic anchor positioning)
-// Parameters: fromAnchorId, toAnchorId, distance (in DW1000 timestamp units)
-typedef void (*InterAnchorDistanceCallback)(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits);
+// Parameters: fromAnchorId, toAnchorId, distance (in DW1000 timestamp units), fromAnchor's antenna delay (DW1000 ticks)
+typedef void (*InterAnchorDistanceCallback)(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits, uint16_t fromAntennaDelay);
 
 // Register a callback to receive inter-anchor distance updates
 void uwbTdoa2TagSetDistanceCallback(InterAnchorDistanceCallback callback);
+
+// Get the last reported antenna delay for a specific anchor (DW1000 ticks)
+uint16_t uwbTdoa2TagGetAnchorAntennaDelay(uint8_t anchorId);
 
 extern uwbAlgorithm_t uwbTdoa2TagAlgorithm;
