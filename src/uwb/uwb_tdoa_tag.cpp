@@ -657,15 +657,26 @@ uint8_t UWBTagTDoA::GetDynamicAnchorPositions(DynamicAnchorTelemetry* out, uint8
     return count;
 }
 
-void UWBTagTDoA::onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits) {
+void UWBTagTDoA::onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uint16_t distanceTimestampUnits, uint16_t fromAntennaDelay) {
     if (!s_useDynamicPositions) {
         return;
     }
 
-    // Convert from DW1000 timestamp units to meters
-    float distanceMeters = static_cast<float>(distanceTimestampUnits) * DW1000_TIME_TO_METERS;
+    // Look up the "to" anchor's antenna delay from previously received packets
+    uint16_t toAntennaDelay = uwbTdoa2TagGetAnchorAntennaDelay(toAnchor);
 
-    // Update the calculator with the new distance measurement
+    // Correct TWR distance: subtract both endpoints' antenna delays
+    // The raw TWR distance includes uncorrected antenna delays from both anchors
+    // because TDoA anchors set dwSetAntenaDelay(0) in the DW1000
+    int32_t corrected = static_cast<int32_t>(distanceTimestampUnits)
+                      - static_cast<int32_t>(fromAntennaDelay)
+                      - static_cast<int32_t>(toAntennaDelay);
+    if (corrected < 0) corrected = 0;
+
+    // Convert corrected DW1000 timestamp units to meters
+    float distanceMeters = static_cast<float>(corrected) * DW1000_TIME_TO_METERS;
+
+    // Update the calculator with the corrected distance measurement
     s_dynamicCalc.updateDistance(fromAnchor, toAnchor, distanceMeters);
 }
 
