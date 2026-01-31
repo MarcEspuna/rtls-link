@@ -74,6 +74,8 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
     // NOTE: Look into short data fast accuracy...
     // Using a lambda to attach the class method as an interrupt handler
 
+    LOG_INFO("--- UWB Anchor TDOA Mode ---");
+
     m_UwbConfig.address[1] = shortAddr[1] - '0';
     m_UwbConfig.address[0] = shortAddr[0] - '0';
 
@@ -120,7 +122,11 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
     dwCommitConfiguration(&m_Device);
 
     uint32_t dev_id = dwGetDeviceId(&m_Device);
-    LOG_INFO("Initialized TDoA Anchor - DevID: 0x%08X", dev_id);
+    LOG_INFO("Initialized TDoA Anchor - DevID: 0x%08X, Addr: %c%c", dev_id, shortAddr[0], shortAddr[1]);
+    LOG_INFO("  Radio: mode=%u, ch=%u, txPower=%u, smartPwr=%s",
+             uwbParams.dwMode, uwbParams.channel, uwbParams.txPowerLevel,
+             uwbParams.smartPowerEnable ? "on" : "off");
+    LOG_INFO("  Antenna delay: %u", antennaDelay);
 
     // Init the tdoa anchor algorithm
     uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device); 
