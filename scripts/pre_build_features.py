@@ -100,15 +100,34 @@ def extract_flag_name(flag_str):
     return name.strip()
 
 
-def validate_features(flags):
+def get_board_define(env):
     """
-    Validate feature dependencies and conflicts.
+    Detect the board define from the environment's build flags.
+
+    Returns:
+        Board define string (e.g., 'MAKERFABS_ESP32_BOARD', 'ESP32S3_UWB_BOARD')
+        or None if not detected.
+    """
+    build_flags = env.get('BUILD_FLAGS', [])
+    for flag in build_flags:
+        flag_str = str(flag)
+        if 'MAKERFABS_ESP32_BOARD' in flag_str:
+            return 'MAKERFABS_ESP32_BOARD'
+        if 'ESP32S3_UWB_BOARD' in flag_str:
+            return 'ESP32S3_UWB_BOARD'
+    return None
+
+
+def validate_features(flags, board_define=None):
+    """
+    Validate feature dependencies, conflicts, and board compatibility.
 
     This provides early error detection before compilation starts.
     The C++ headers also validate, but this gives cleaner error messages.
 
     Args:
         flags: List of -D flag strings
+        board_define: Board define string (e.g., 'ESP32S3_UWB_BOARD') or None
 
     Returns:
         Tuple of (errors list, warnings list)
@@ -184,16 +203,30 @@ def validate_features(flags):
         # Only error if user explicitly defined features but forgot UWB modes
         warnings.append("No UWB mode enabled - at least one USE_UWB_MODE_* is recommended")
 
+    # === BOARD-SPECIFIC COMPATIBILITY ===
+    if board_define is not None:
+        if 'USE_MAVLINK_RANGEFINDER' in flag_set and board_define != 'ESP32S3_UWB_BOARD':
+            errors.append(
+                f"USE_MAVLINK_RANGEFINDER is only supported on ESP32S3_UWB_BOARD "
+                f"(current board: {board_define})"
+            )
+
+        if 'USE_DYNAMIC_ANCHOR_POSITIONS' in flag_set and board_define == 'MAKERFABS_ESP32_BOARD':
+            errors.append(
+                f"USE_DYNAMIC_ANCHOR_POSITIONS is not supported on {board_define} "
+                f"(insufficient DRAM for Eigen-based position calculator)"
+            )
+
     return errors, warnings
 
 
-def print_feature_summary(flags):
+def print_feature_summary(flags, source_file="user_defines.txt"):
     """Print a summary of enabled features."""
     if not flags:
         print("[FEATURES] Configuration: Using defaults (all features)")
         return
 
-    print(f"[FEATURES] Configuration: {len(flags)} features from user_defines.txt")
+    print(f"[FEATURES] Configuration: {len(flags)} features from {source_file}")
 
     # Group by category for cleaner output
     categories = {
@@ -230,13 +263,20 @@ def print_feature_summary(flags):
 # =============================================================================
 
 project_dir = env.get('PROJECT_DIR', os.getcwd())
-user_defines_path = os.path.join(project_dir, 'user_defines.txt')
+
+# Read per-board user_defines path from platformio.ini (custom_user_defines option).
+# Falls back to root user_defines.txt for backward compatibility.
+user_defines_file = env.GetProjectOption("custom_user_defines", "user_defines.txt")
+user_defines_path = os.path.join(project_dir, user_defines_file)
 
 # Parse user defines
 user_flags = parse_user_defines(user_defines_path)
 
-# Validate configuration
-errors, warnings = validate_features(user_flags)
+# Detect board define for board-specific validation
+board_define = get_board_define(env)
+
+# Validate configuration (including board compatibility)
+errors, warnings = validate_features(user_flags, board_define)
 
 # Print warnings (non-fatal)
 for warn in warnings:
@@ -247,11 +287,11 @@ if errors:
     print("[FEATURES] Configuration errors detected:")
     for err in errors:
         print(f"[FEATURES]   ERROR: {err}")
-    print("[FEATURES] Please fix user_defines.txt and rebuild")
+    print(f"[FEATURES] Please fix {user_defines_file} and rebuild")
     sys.exit(1)
 
 # Print feature summary
-print_feature_summary(user_flags)
+print_feature_summary(user_flags, user_defines_file)
 
 # Inject flags into build environment
 if user_flags:

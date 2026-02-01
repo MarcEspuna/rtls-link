@@ -3,6 +3,7 @@
 #include "app.hpp"
 
 #include <Arduino.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -342,13 +343,13 @@ bool App::IsOriginSent() {
 #endif // USE_MAVLINK && USE_MAVLINK_ORIGIN
 
 #ifdef USE_RATE_STATISTICS
-// --- Update rate tracking ---
+// --- Update rate tracking (microsecond-precision via esp_timer) ---
 void App::RecordSampleTimestamp() {
   if (rate_stats_mutex_ == nullptr) return;
 
   if (xSemaphoreTake(rate_stats_mutex_, pdMS_TO_TICKS(1)) == pdTRUE) {
-    uint64_t now = millis();
-    sample_timestamps_[sample_timestamps_index_] = now;
+    uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+    sample_timestamps_[sample_timestamps_index_] = now_us;
     sample_timestamps_index_ = (sample_timestamps_index_ + 1) % kRateWindowSize;
     if (sample_timestamps_count_ < kRateWindowSize) {
       sample_timestamps_count_++;
@@ -360,10 +361,10 @@ void App::RecordSampleTimestamp() {
 void App::CalculateRateStatistics() {
   if (rate_stats_mutex_ == nullptr) return;
 
-  uint64_t now = millis();
+  uint64_t now_ms = millis();
 
   // Only recalculate every 500ms to reduce overhead
-  if (now - last_rate_calc_ms_ < 500) {
+  if (now_ms - last_rate_calc_ms_ < 500) {
     return;
   }
 
@@ -373,7 +374,7 @@ void App::CalculateRateStatistics() {
   }
 
   // Update throttle timestamp only after successful mutex acquisition
-  last_rate_calc_ms_ = now;
+  last_rate_calc_ms_ = now_ms;
 
   // Need at least 2 samples to calculate rate
   if (sample_timestamps_count_ < 2) {
@@ -384,18 +385,20 @@ void App::CalculateRateStatistics() {
     return;
   }
 
-  // Collect timestamps within the 5-second window
-  uint64_t window_start = (now > kRateWindowDurationMs) ? (now - kRateWindowDurationMs) : 0;
+  uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+
+  // Collect timestamps within the 5-second window (microseconds)
+  uint64_t window_start = (now_us > kRateWindowDurationUs) ? (now_us - kRateWindowDurationUs) : 0;
 
   // Count samples in window and find time range
   uint32_t samples_in_window = 0;
-  uint64_t oldest_in_window = now;
+  uint64_t oldest_in_window = now_us;
   uint64_t newest_in_window = 0;
 
   // Iterate through all stored timestamps
   for (size_t i = 0; i < sample_timestamps_count_; i++) {
     uint64_t ts = sample_timestamps_[i];
-    if (ts >= window_start && ts <= now) {
+    if (ts >= window_start && ts <= now_us) {
       samples_in_window++;
       if (ts < oldest_in_window) oldest_in_window = ts;
       if (ts > newest_in_window) newest_in_window = ts;
@@ -408,11 +411,10 @@ void App::CalculateRateStatistics() {
   uint16_t new_max_rate = 0;
 
   // Calculate average rate with overflow protection
+  // rate_cHz = (samples - 1) * 100_000_000 / duration_us
   if (samples_in_window >= 2 && newest_in_window > oldest_in_window) {
-    uint64_t duration_ms = newest_in_window - oldest_in_window;
-    // rate = (samples - 1) / duration_seconds
-    // rate_cHz = (samples - 1) * 100000 / duration_ms
-    uint64_t rate = ((samples_in_window - 1) * 100000ULL) / duration_ms;
+    uint64_t duration_us = newest_in_window - oldest_in_window;
+    uint64_t rate = ((samples_in_window - 1) * 100000000ULL) / duration_us;
     new_avg_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
   }
 
@@ -421,7 +423,7 @@ void App::CalculateRateStatistics() {
   size_t sorted_count = 0;
   for (size_t i = 0; i < sample_timestamps_count_; i++) {
     uint64_t ts = sample_timestamps_[i];
-    if (ts >= window_start && ts <= now) {
+    if (ts >= window_start && ts <= now_us) {
       sorted_ts[sorted_count++] = ts;
     }
   }
@@ -440,26 +442,27 @@ void App::CalculateRateStatistics() {
     sorted_ts[j + 1] = key;
   }
 
-  // Compute min/max intervals
-  uint64_t min_interval_ms = UINT64_MAX;
-  uint64_t max_interval_ms = 0;
+  // Compute min/max intervals (microseconds)
+  uint64_t min_interval_us = UINT64_MAX;
+  uint64_t max_interval_us = 0;
   if (sorted_count >= 2) {
     for (size_t i = 1; i < sorted_count; i++) {
       uint64_t interval = sorted_ts[i] - sorted_ts[i - 1];
       if (interval > 0) {
-        if (interval < min_interval_ms) min_interval_ms = interval;
-        if (interval > max_interval_ms) max_interval_ms = interval;
+        if (interval < min_interval_us) min_interval_us = interval;
+        if (interval > max_interval_us) max_interval_us = interval;
       }
     }
 
     // Convert intervals to rates (rate = 1/interval) with overflow protection
+    // rate_cHz = 100_000_000 / interval_us
     // min_interval -> max_rate, max_interval -> min_rate
-    if (min_interval_ms > 0 && min_interval_ms < UINT64_MAX) {
-      uint64_t rate = 100000ULL / min_interval_ms;
+    if (min_interval_us > 0 && min_interval_us < UINT64_MAX) {
+      uint64_t rate = 100000000ULL / min_interval_us;
       new_max_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
     }
-    if (max_interval_ms > 0) {
-      uint64_t rate = 100000ULL / max_interval_ms;
+    if (max_interval_us > 0) {
+      uint64_t rate = 100000000ULL / max_interval_us;
       new_min_rate = (rate > kMaxRateCHz) ? kMaxRateCHz : static_cast<uint16_t>(rate);
     }
   }

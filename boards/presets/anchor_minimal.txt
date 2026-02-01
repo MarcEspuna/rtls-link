@@ -18,7 +18,7 @@
 ;   - Rate statistics
 ;   - Status LED task
 ;
-; To use: Copy contents to user_defines.txt and rebuild
+; To use: Copy contents to boards/esp32_user_defines.txt and rebuild
 ; =============================================================================
 
 ; WiFi for configuration only

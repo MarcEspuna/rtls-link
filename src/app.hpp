@@ -129,9 +129,9 @@ private:
 #endif
 
 #ifdef USE_RATE_STATISTICS
-    // Update rate tracking
+    // Update rate tracking (microsecond-precision timestamps via esp_timer)
     static constexpr size_t kRateWindowSize = 50;  // Store last N timestamps for rate calculation
-    static constexpr uint64_t kRateWindowDurationMs = 5000;  // 5 second window
+    static constexpr uint64_t kRateWindowDurationUs = 5000000;  // 5 second window (microseconds)
     static constexpr uint16_t kMaxRateCHz = 65535;  // Max value for uint16_t centi-Hz
     uint64_t sample_timestamps_[kRateWindowSize] = {0};
     size_t sample_timestamps_index_ = 0;

@@ -128,6 +128,10 @@
     #error "USE_DYNAMIC_ANCHOR_POSITIONS requires USE_UWB_MODE_TDOA_TAG to be defined"
 #endif
 
+#if defined(USE_DYNAMIC_ANCHOR_POSITIONS) && defined(MAKERFABS_ESP32_BOARD)
+    #error "USE_DYNAMIC_ANCHOR_POSITIONS is not supported on MAKERFABS_ESP32_BOARD (insufficient DRAM)"
+#endif
+
 // =============================================================================
 // MINIMUM VIABLE CONFIGURATION
 // =============================================================================
