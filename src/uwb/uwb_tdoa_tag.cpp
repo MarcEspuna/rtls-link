@@ -258,14 +258,18 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
 
 void UWBTagTDoA::Update()
 {
-    if (isr_flag) {
-        dwHandleInterrupt(&m_Device);
+    while (isr_flag) {
+        // Clear the flag before handling the interrupt to avoid losing a new
+        // interrupt that arrives during dwHandleInterrupt().
         isr_flag = false;
+        dwHandleInterrupt(&m_Device);
     }
 
     // Call libdw1000 loop
-    TagTDoADispatcher dispatcher(this);
-    dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
+    if (m_DwData.interrupt_flags != 0) {
+        TagTDoADispatcher dispatcher(this);
+        dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
+    }
 
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     // Periodically update anchor positions from dynamic calculation
