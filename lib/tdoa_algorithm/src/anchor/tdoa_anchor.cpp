@@ -1,4 +1,5 @@
 #include "tdoa_anchor.hpp"
+#include "tdoa_anchor_api.h"
 
 /*
  *    ||          ____  _ __
@@ -153,6 +154,8 @@ static struct ctx_s {
   uint16_t distances[NSLOTS];
   uint16_t antennaDelay;
 } ctx;
+
+static bool s_initialized = false;
 
 static uint64_t tdmaLastFrame(uint64_t now)
 {
@@ -491,6 +494,8 @@ static void tdoa2Init(uwbConfig_t * config, dwDevice_t *dev)
   ctx.antennaDelay = config->antennaDelay;
   memset(ctx.txTimestamps, 0, sizeof(ctx.txTimestamps));
   memset(ctx.rxTimestamps, 0, sizeof(ctx.rxTimestamps));
+
+  s_initialized = true;
 }
 
 // Called for each DW radio event
@@ -561,3 +566,48 @@ uwbAlgorithm_t uwbTdoa2Algorithm = {
   .init = tdoa2Init,
   .onEvent = tdoa2UwbEvent,
 };
+
+// -----------------------------------------------------------------------------
+// Public API (C-linkage) for diagnostics / calibration tooling
+// -----------------------------------------------------------------------------
+
+extern "C" bool uwbTdoa2AnchorGetDistances(uint16_t* out_distances, uint8_t max_len)
+{
+  if (!s_initialized || out_distances == nullptr || max_len == 0) {
+    return false;
+  }
+
+  uint8_t count = max_len;
+  if (count > NSLOTS) {
+    count = NSLOTS;
+  }
+
+  for (uint8_t i = 0; i < count; i++) {
+    out_distances[i] = ctx.distances[i];
+  }
+  return true;
+}
+
+extern "C" uint8_t uwbTdoa2AnchorGetAnchorId(void)
+{
+  if (!s_initialized) {
+    return 0;
+  }
+  return static_cast<uint8_t>(ctx.anchorId);
+}
+
+extern "C" uint16_t uwbTdoa2AnchorGetAntennaDelay(void)
+{
+  if (!s_initialized) {
+    return 0;
+  }
+  return ctx.antennaDelay;
+}
+
+extern "C" void uwbTdoa2AnchorSetAntennaDelay(uint16_t delay)
+{
+  if (!s_initialized) {
+    return;
+  }
+  ctx.antennaDelay = delay;
+}

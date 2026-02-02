@@ -48,3 +48,9 @@ The CI automatically runs on:
 - Push to `main` or `develop` branches
 - Pull requests targeting `main` or `develop`
 - Manual workflow dispatch
+
+## Anchor Antenna-Delay Calibration (TDoA)
+
+TDoA anchors can report inter-anchor ToF (raw DW1000 ticks) via the console/websocket command `tdoa-distances`. The `rtls-link-cli` tool can use these measurements plus externally measured anchor distances (e.g., a rectangle layout) to solve per-anchor antenna delays and write them back to `uwb.ADelay` at runtime.
+
+See `tools/rtls-link-cli/README.md` for usage (`rtls-link-cli calibrate anchors --x <m> --y <m>`).

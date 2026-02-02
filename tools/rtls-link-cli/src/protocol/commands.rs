@@ -13,6 +13,7 @@ pub const JSON_COMMANDS: &[&str] = &[
     "toggle-led2",
     "get-led2-state",
     "firmware-info",
+    "tdoa-distances",
 ];
 
 /// Check if a command is expected to return JSON
@@ -109,6 +110,11 @@ impl Commands {
     /// Start positioning
     pub fn start() -> &'static str {
         "start"
+    }
+
+    /// Get latest inter-anchor ToF distances (raw ticks) from a TDoA anchor (returns JSON)
+    pub fn tdoa_distances() -> &'static str {
+        "tdoa-distances"
     }
 
     // ==================== System info commands ====================

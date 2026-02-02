@@ -15,6 +15,9 @@
 
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "app/app_frontend_littlefs.hpp"
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
+#include "anchor/tdoa_anchor_api.h"
+#endif
 #ifdef USE_CONSOLE_CONFIG_MGMT
 #include "config_manager/config_manager.hpp"
 #endif
@@ -35,6 +38,10 @@ static void writeCallback(cmd* c);
 #ifdef USE_CONSOLE_UWB_CONTROL
 static void startCallback(cmd* c);
 static void calibrateCallback(cmd* c);
+#endif
+
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
+static void tdoaDistancesCallback(cmd* c);
 #endif
 
 #ifdef USE_CONSOLE_CONFIG_MGMT
@@ -195,6 +202,12 @@ void CommandHandler::Init()
         commandResult += BUILD_TIME;
         commandResult += "\"}";
     });
+
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
+    // Diagnostic/calibration helper: get latest inter-anchor ToF distances (raw ticks)
+    // Returns JSON: {"anchorId":0,"antennaDelay":16580,"activeSlots":4,"distances":[...]}
+    simpleCLI.addCommand("tdoa-distances", tdoaDistancesCallback);
+#endif
 
 #ifdef USE_CONSOLE_UWB_CONTROL
     Command startCmd = simpleCLI.addCommand("start", startCallback);
@@ -453,6 +466,44 @@ static void calibrateCallback(cmd* c)
     Front::uwbLittleFSFront.PerformAnchorCalibration();
 }
 #endif // USE_CONSOLE_UWB_CONTROL
+
+#ifdef USE_UWB_MODE_TDOA_ANCHOR
+static void tdoaDistancesCallback(cmd* c)
+{
+    (void)c;
+
+    const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
+    if (uwbParams.mode != UWBMode::ANCHOR_TDOA) {
+        commandResult = "{\"error\":\"Not in ANCHOR_TDOA mode\"}";
+        return;
+    }
+
+    uint16_t distances[8] = {};
+    bool ok = uwbTdoa2AnchorGetDistances(distances, 8);
+    if (!ok) {
+        commandResult = "{\"error\":\"TDoA anchor algorithm not initialized\"}";
+        return;
+    }
+
+    const uint8_t activeSlots = (uwbParams.tdoaSlotCount == 0) ? 8 : uwbParams.tdoaSlotCount;
+    const uint8_t anchorId = uwbTdoa2AnchorGetAnchorId();
+    const uint16_t antennaDelay = uwbTdoa2AnchorGetAntennaDelay();
+
+    commandResult.reserve(256);
+    commandResult = "{\"anchorId\":";
+    commandResult += String(anchorId);
+    commandResult += ",\"antennaDelay\":";
+    commandResult += String(static_cast<unsigned int>(antennaDelay));
+    commandResult += ",\"activeSlots\":";
+    commandResult += String(static_cast<unsigned int>(activeSlots));
+    commandResult += ",\"distances\":[";
+    for (size_t i = 0; i < 8; i++) {
+        if (i > 0) commandResult += ",";
+        commandResult += String(static_cast<unsigned int>(distances[i]));
+    }
+    commandResult += "]}";
+}
+#endif // USE_UWB_MODE_TDOA_ANCHOR
 
 static void errorCallback(cmd_error* c)
 {

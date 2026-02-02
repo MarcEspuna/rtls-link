@@ -53,6 +53,9 @@ pub enum Commands {
 
     /// Bulk device operations
     Bulk(BulkArgs),
+
+    /// Calibrate anchor antenna delays using inter-anchor ToF
+    Calibrate(CalibrateArgs),
 }
 
 // ==================== Discover ====================
@@ -79,6 +82,92 @@ pub enum RoleFilter {
     AnchorTdoa,
     TagTdoa,
     Calibration,
+}
+
+// ==================== Calibrate ====================
+
+#[derive(Args, Debug)]
+pub struct CalibrateArgs {
+    #[command(subcommand)]
+    pub command: CalibrateCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CalibrateCommands {
+    /// Calibrate antenna delays for a 4-anchor rectangular layout (TDoA anchors)
+    Anchors(CalibrateAnchorsArgs),
+}
+
+/// Rectangular 4-anchor layout mapping (matches firmware AnchorLayout enum)
+#[derive(ValueEnum, Clone, Debug)]
+pub enum RectLayout {
+    /// +X=A1, +Y=A3 (default)
+    RectangularA1xA3y,
+    /// +X=A1, +Y=A2
+    RectangularA1xA2y,
+    /// +X=A3, +Y=A1
+    RectangularA3xA1y,
+    /// +X=A2, +Y=A3
+    RectangularA2xA3y,
+}
+
+#[derive(Args, Debug)]
+pub struct CalibrateAnchorsArgs {
+    /// Target X-axis distance in meters (between A0 and +X anchor)
+    #[arg(long)]
+    pub x: f64,
+
+    /// Target Y-axis distance in meters (between A0 and +Y anchor)
+    #[arg(long)]
+    pub y: f64,
+
+    /// Layout mapping (which anchor IDs define +X and +Y axes)
+    #[arg(long, value_enum, default_value = "rectangular-a1x-a3y")]
+    pub layout: RectLayout,
+
+    /// Specific anchor IPs (comma-separated). If omitted, auto-discovers anchor_tdoa devices.
+    #[arg(long)]
+    pub ips: Option<String>,
+
+    /// Discovery duration when auto-discovering (seconds)
+    #[arg(long, default_value = "3")]
+    pub discovery_duration: u64,
+
+    /// Minimum samples per anchor pair before solving (best-effort; stops on timeout)
+    #[arg(long, default_value = "30")]
+    pub min_samples: u32,
+
+    /// Sampling duration per calibration iteration (seconds)
+    #[arg(long, default_value = "8")]
+    pub sample_duration: u64,
+
+    /// Sampling interval (milliseconds)
+    #[arg(long, default_value = "250")]
+    pub sample_interval_ms: u64,
+
+    /// Maximum calibration iterations
+    #[arg(long, default_value = "3")]
+    pub max_iters: u8,
+
+    /// Stop when RMS error <= tolerance (meters)
+    #[arg(long, default_value = "0.05")]
+    pub tolerance_m: f64,
+
+    /// Minimum RMS improvement required to continue iterating (meters)
+    #[arg(long, default_value = "0.005")]
+    pub min_improvement_m: f64,
+
+    /// Regularization strength as sigma in DW1000 ticks (keeps solution near current delays)
+    #[arg(long, default_value = "100")]
+    pub prior_sigma_ticks: f64,
+
+    /// Safety guard: maximum allowed per-anchor antenna delay change in one iteration (DW1000 ticks)
+    #[arg(long, default_value = "500")]
+    pub max_delta_ticks: i32,
+
+    /// Only compute and print results; do not write delays to anchors
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 // ==================== Status ====================
