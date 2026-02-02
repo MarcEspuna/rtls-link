@@ -43,3 +43,6 @@
 
 ; Status LED for diagnostics
 -D USE_STATUS_LED_TASK
+
+; Performance
+-D USE_FAST_CODE

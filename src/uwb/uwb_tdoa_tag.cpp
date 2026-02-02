@@ -22,8 +22,6 @@
 
 #include "tdoa_newton_raphson.hpp"
 
-#include "FunctionalInterrupt.h"
-
 #include "tag/tdoa_tag_algorithm.hpp"
 
 #include "uwb_tdoa_tag.hpp"
@@ -33,10 +31,11 @@
 #include "bsp/board.hpp"
 #include "uwb_frontend_littlefs.hpp"
 
-static void txCallback(dwDevice_t *dev);
-static void rxCallback(dwDevice_t *dev);
-static void rxTimeoutCallback(dwDevice_t *dev);
-static void rxFailedCallback(dwDevice_t *dev);
+static FAST_CODE void tagInterruptISR();
+static FAST_CODE void txCallback(dwDevice_t *dev);
+static FAST_CODE void rxCallback(dwDevice_t *dev);
+static FAST_CODE void rxTimeoutCallback(dwDevice_t *dev);
+static FAST_CODE void rxFailedCallback(dwDevice_t *dev);
 
 // Helper function to get DW1000 mode array by index
 static const uint8_t* getDwModeByIndex(uint8_t idx) {
@@ -83,7 +82,7 @@ static void applyTxPower(dwDevice_t* dev, uint8_t powerLevel, uint8_t smartPower
     }
 }
 
-static void estimatorCallback(tdoaMeasurement_t* tdoa);
+static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa);
 Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
 static void estimatorProcess();
 
@@ -97,7 +96,7 @@ static constexpr uint32_t kNumberMeasurements = 64;     // Preferably to be mult
 // Incremented in estimatorCallback (outside mutex), checked/reset in estimatorProcess (before mutex).
 static std::atomic<uint32_t> new_measurement_count{0};
 
-static bool isr_flag = false;
+static volatile bool isr_flag = false;
 
 // Cache for anchors_seen (used when mutex is unavailable)
 static uint8_t cached_anchors_seen = 0;
@@ -244,11 +243,8 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     }
 #endif
 
-    attachInterrupt(digitalPinToInterrupt(uwb_config.pins.int_pin), 
-    [this]() { 
-        this->InterruptHandler(); 
-        }, 
-    RISING);
+    attachInterrupt(digitalPinToInterrupt(uwb_config.pins.int_pin),
+        tagInterruptISR, RISING);
 
     measurements.reserve(64);
 
@@ -316,40 +312,36 @@ void UWBTagTDoA::OnEvent()
     m_DwData.interrupt_flags &= ~TFlags;  // Clear the specific flag at the end
 }
 
-/* **** libdw1000 **** */
-void UWBTagTDoA::InterruptHandler()
-{
-    // Call libdw1000 interrupt handler
+static FAST_CODE void tagInterruptISR() {
     isr_flag = true;
 }
 
 /* TODO: Move to FreeRTOS notifications */
-static void txCallback(dwDevice_t *dev)
+static FAST_CODE void txCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::TX_DONE;
 }
 
-static void rxCallback(dwDevice_t *dev)
+static FAST_CODE void rxCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::RX_DONE;
 }
 
-static void rxTimeoutCallback(dwDevice_t *dev)
+static FAST_CODE void rxTimeoutCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::RX_TIMEOUT;
 }
 
-static void rxFailedCallback(dwDevice_t *dev)
+static FAST_CODE void rxFailedCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::RX_FAILED;
 }
 
-// TODO: Profile this callback. What's the update rate?
-static void estimatorCallback(tdoaMeasurement_t* tdoa)
+static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
 {
     if (xSemaphoreTake(measurements_mtx, portMAX_DELAY) == pdTRUE) {
         auto it = std::find_if(measurements.begin(), measurements.end(),

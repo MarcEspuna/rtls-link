@@ -36,3 +36,6 @@
 
 ; TDoA anchor mode only
 -D USE_UWB_MODE_TDOA_ANCHOR
+
+; Performance
+-D USE_FAST_CODE

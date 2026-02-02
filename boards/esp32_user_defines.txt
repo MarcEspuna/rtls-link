@@ -84,6 +84,12 @@
 -D USE_RATE_STATISTICS          ; Position update rate tracking
 
 ; -----------------------------------------------------------------------------
+; PERFORMANCE
+; IRAM placement for ISR handlers and UWB hot-path functions
+; -----------------------------------------------------------------------------
+-D USE_FAST_CODE
+
+; -----------------------------------------------------------------------------
 ; LOGGING SUBSYSTEM
 ; Structured logging with Serial and UDP output
 ; -----------------------------------------------------------------------------
