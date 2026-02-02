@@ -14,7 +14,7 @@
 ;
 ; This is the maximum feature build for drone integration.
 ;
-; To use: Copy contents to user_defines.txt and rebuild
+; To use: Copy contents to boards/esp32s3_user_defines.txt and rebuild
 ; =============================================================================
 
 ; Full WiFi stack
@@ -51,3 +51,4 @@
 ; All extras
 -D USE_STATUS_LED_TASK
 -D USE_RATE_STATISTICS
+-D USE_FAST_CODE

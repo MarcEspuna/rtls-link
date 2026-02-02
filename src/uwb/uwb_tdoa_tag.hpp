@@ -62,7 +62,6 @@ public:
     static uint8_t GetDynamicAnchorPositions(DynamicAnchorTelemetry* out, uint8_t maxCount);
 #endif
 
-    void InterruptHandler();
 private:
     // Libdw1000 device
     dwDevice_t m_Device;

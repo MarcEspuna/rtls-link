@@ -8,6 +8,7 @@ extern "C" {
 }
 
 #include "bsp/board.hpp"
+#include "config/fast_code.hpp"
 
 namespace libDw1000 {
 
@@ -33,15 +34,15 @@ namespace libDw1000 {
         uint8_t interrupt_flags;
     };
 
-    DwData* GetUserData(dwDevice_t* dev);
+    FAST_CODE DwData* GetUserData(dwDevice_t* dev);
 
-    void SpiRead(dwDevice_t* dev, const void *header, size_t headerLength, void* data, size_t dataLength);
-
-
-    void SpiWrite(dwDevice_t* dev, const void *header, size_t headerLength, const void* data, size_t dataLength);
+    FAST_CODE void SpiRead(dwDevice_t* dev, const void *header, size_t headerLength, void* data, size_t dataLength);
 
 
-    void SpiSetSpeed(dwDevice_t* dev, dwSpiSpeed_t speed);
+    FAST_CODE void SpiWrite(dwDevice_t* dev, const void *header, size_t headerLength, const void* data, size_t dataLength);
+
+
+    FAST_CODE void SpiSetSpeed(dwDevice_t* dev, dwSpiSpeed_t speed);
 
 
     void DelayMs(dwDevice_t* dev, unsigned int ms);

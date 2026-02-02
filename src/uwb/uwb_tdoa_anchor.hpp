@@ -33,8 +33,6 @@ public:
 
     void Update() override;
 
-    void InterruptHandler();
-
     static constexpr uint32_t STALL_TIMEOUT_MS = 150;
 
 private:

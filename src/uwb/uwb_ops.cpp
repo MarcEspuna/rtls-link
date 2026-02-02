@@ -9,12 +9,12 @@
 
 namespace libDw1000 {
 
-DwData* GetUserData(dwDevice_t* dev)
+FAST_CODE DwData* GetUserData(dwDevice_t* dev)
 {
     return reinterpret_cast<DwData*>(dev->userdata);
 }
 
-void SpiRead(dwDevice_t* dev, const void *header, size_t headerLength, void* data, size_t dataLength)
+FAST_CODE void SpiRead(dwDevice_t* dev, const void *header, size_t headerLength, void* data, size_t dataLength)
 {
     DwData* dw_data = GetUserData(dev);
     SPISettings curr_settings = dw_data->settings[dw_data->current_spi_idx];
@@ -34,7 +34,7 @@ void SpiRead(dwDevice_t* dev, const void *header, size_t headerLength, void* dat
 }
 
 
-void SpiWrite(dwDevice_t* dev, const void *header, size_t headerLength, const void* data, size_t dataLength)
+FAST_CODE void SpiWrite(dwDevice_t* dev, const void *header, size_t headerLength, const void* data, size_t dataLength)
 {
     DwData* dw_data = GetUserData(dev);
     SPISettings curr_settings = dw_data->settings[dw_data->current_spi_idx];
@@ -54,7 +54,7 @@ void SpiWrite(dwDevice_t* dev, const void *header, size_t headerLength, const vo
 }
 
 
-void SpiSetSpeed(dwDevice_t* dev, dwSpiSpeed_t speed)
+FAST_CODE void SpiSetSpeed(dwDevice_t* dev, dwSpiSpeed_t speed)
 {
     DwData* dw_data = GetUserData(dev);
     dw_data->current_spi_idx = static_cast<uint8_t>(speed);

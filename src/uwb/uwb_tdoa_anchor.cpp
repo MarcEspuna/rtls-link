@@ -8,18 +8,17 @@
 #include "uwb_tdoa_anchor.hpp"
 #include "uwb_frontend_littlefs.hpp"
 
-#include "FunctionalInterrupt.h"
-
 #include "SPI.h"
 
 #include <freertos/task.h>
 
 #define DEFAULT_RX_TIMEOUT 10000
 
-static void txCallback(dwDevice_t *dev);
-static void rxCallback(dwDevice_t *dev);
-static void rxTimeoutCallback(dwDevice_t *dev);
-static void rxFailedCallback(dwDevice_t *dev);
+static FAST_CODE void anchorInterruptISR();
+static FAST_CODE void txCallback(dwDevice_t *dev);
+static FAST_CODE void rxCallback(dwDevice_t *dev);
+static FAST_CODE void rxTimeoutCallback(dwDevice_t *dev);
+static FAST_CODE void rxFailedCallback(dwDevice_t *dev);
 
 // Helper function to get DW1000 mode array by index
 static const uint8_t* getDwModeByIndex(uint8_t idx) {
@@ -142,11 +141,8 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
     // Init the tdoa anchor algorithm
     uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device);
 
-    attachInterrupt(digitalPinToInterrupt(uwb_config.pins.int_pin), 
-    [this]() { 
-        this->InterruptHandler(); 
-        }, 
-    RISING);
+    attachInterrupt(digitalPinToInterrupt(uwb_config.pins.int_pin),
+        anchorInterruptISR, RISING);
 
     vTaskDelay(pdMS_TO_TICKS(300));
 
@@ -197,33 +193,30 @@ void UWBAnchorTDoA::OnEvent()
     m_DwData.interrupt_flags &= ~TFlags;  // Clear the specific flag at the end
 }
 
-/* **** libdw1000 **** */
-void UWBAnchorTDoA::InterruptHandler()
-{
-    // Set flag for interrupt handling in main loop (ISR-safe)
+static FAST_CODE void anchorInterruptISR() {
     isr_flag = true;
 }
 
 /* TODO: Move to FreeRTOS notifications */
-static void txCallback(dwDevice_t *dev)
+static FAST_CODE void txCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::TX_DONE;
 }
 
-static void rxCallback(dwDevice_t *dev)
+static FAST_CODE void rxCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::RX_DONE;
 }
 
-static void rxTimeoutCallback(dwDevice_t *dev)
+static FAST_CODE void rxTimeoutCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::RX_TIMEOUT;
 }
 
-static void rxFailedCallback(dwDevice_t *dev)
+static FAST_CODE void rxFailedCallback(dwDevice_t *dev)
 {
     libDw1000::DwData* dw_data = libDw1000::GetUserData(dev);
     dw_data->interrupt_flags |= libDw1000::RX_FAILED;

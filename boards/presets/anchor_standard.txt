@@ -17,7 +17,7 @@
 ;   - All tag modes (TWR/TDoA)
 ;   - Rate statistics (only useful for tags)
 ;
-; To use: Copy contents to user_defines.txt and rebuild
+; To use: Copy contents to the appropriate boards/*_user_defines.txt and rebuild
 ; =============================================================================
 
 ; Full WiFi stack
@@ -43,3 +43,6 @@
 
 ; Status LED for diagnostics
 -D USE_STATUS_LED_TASK
+
+; Performance
+-D USE_FAST_CODE

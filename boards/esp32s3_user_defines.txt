@@ -1,14 +1,13 @@
 ; =============================================================================
-; user_defines.txt - RTLS-Link Feature Configuration
+; esp32s3_user_defines.txt - ESP32S3 (Konex UWB) Feature Configuration
 ; =============================================================================
 ;
-; This file controls which features are compiled into the firmware.
+; This file controls which features are compiled into the ESP32S3 firmware.
 ; Comment out lines with ';' or '#' to disable features.
 ;
-; After making changes, rebuild with: pio run -e <target>
+; After making changes, rebuild with: pio run -e esp32s3_application
 ;
 ; For preset configurations, see boards/presets/
-;   - anchor_minimal.txt   : Minimal ESP32 anchor (WiFi config + TDoA)
 ;   - anchor_standard.txt  : Standard anchor with full management
 ;   - tag_full.txt         : Full-featured TDoA tag
 ;
@@ -35,7 +34,7 @@
 -D USE_MAVLINK_HEARTBEAT        ; Heartbeat send/receive
 -D USE_MAVLINK_ORIGIN           ; SET_GPS_GLOBAL_ORIGIN
 -D USE_MAVLINK_COVARIANCE       ; Position covariance matrix
-; -D USE_MAVLINK_RANGEFINDER    ; Distance sensor forwarding (ESP32S3 only)
+-D USE_MAVLINK_RANGEFINDER      ; Distance sensor forwarding (ESP32S3 only)
 
 ; -----------------------------------------------------------------------------
 ; ALTERNATIVE: BEACON PROTOCOL (Konex proprietary)
@@ -58,7 +57,7 @@
 ; Calculate anchor positions from inter-anchor TWR measurements
 ; Requires: USE_UWB_MODE_TDOA_TAG
 ; -----------------------------------------------------------------------------
-; -D USE_DYNAMIC_ANCHOR_POSITIONS
+-D USE_DYNAMIC_ANCHOR_POSITIONS
 
 ; -----------------------------------------------------------------------------
 ; CONSOLE / CLI
@@ -82,6 +81,12 @@
 ; -----------------------------------------------------------------------------
 -D USE_STATUS_LED_TASK          ; Status LED blink task (board-dependent)
 -D USE_RATE_STATISTICS          ; Position update rate tracking
+
+; -----------------------------------------------------------------------------
+; PERFORMANCE
+; IRAM placement for ISR handlers and UWB hot-path functions
+; -----------------------------------------------------------------------------
+-D USE_FAST_CODE
 
 ; -----------------------------------------------------------------------------
 ; LOGGING SUBSYSTEM

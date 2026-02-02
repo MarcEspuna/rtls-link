@@ -83,6 +83,7 @@
 // --- Miscellaneous ---
 #define USE_STATUS_LED_TASK
 #define USE_RATE_STATISTICS
+#define USE_FAST_CODE                 // IRAM placement for hot-path functions
 
 // --- Logging Subsystem ---
 #define USE_LOGGING
@@ -166,3 +167,6 @@
 // =============================================================================
 
 #include "feature_validation.hpp"
+
+// IRAM placement macro (must be after feature flags are resolved)
+#include "fast_code.hpp"
