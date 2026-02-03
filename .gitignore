@@ -4,5 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 
+tools/rtls-link-cli/target/
+
 AGENTS.md
 GEMINI.md

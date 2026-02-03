@@ -25,6 +25,10 @@ rtls-link-cli config backup 192.168.1.100 -o config.json
 
 # Send a raw command
 rtls-link-cli cmd 192.168.1.100 "version"
+
+# Calibrate 4 TDoA anchors (rectangle) using externally measured distances
+# Example: X=5.2m, Y=2.3m
+rtls-link-cli calibrate anchors --x 5.2 --y 2.3
 ```
 
 ## Commands
@@ -194,6 +198,34 @@ rtls-link-cli bulk start --ips 192.168.1.100,192.168.1.101
 # Send custom command to all devices
 rtls-link-cli bulk cmd "version"
 ```
+
+### calibrate
+
+Calibrate antenna delays for TDoA anchors using **inter-anchor ToF** reported by anchors, and a user-provided **target layout** (externally measured distances).
+
+This requires anchors running in `anchor_tdoa` mode with the firmware command `tdoa-distances` available.
+
+```bash
+# Inspect raw inter-anchor ToF ticks (from a single anchor)
+rtls-link-cli cmd <ANCHOR_IP> "tdoa-distances" --expect-json
+
+# Dry-run: compute suggested antenna delays but do not apply
+rtls-link-cli calibrate anchors --x 5.2 --y 2.3 --dry-run
+
+# Apply calibration to the auto-discovered 4 anchors (IDs 0..3)
+rtls-link-cli calibrate anchors --x 5.2 --y 2.3
+
+# Explicit IP list (recommended when multiple systems are on the LAN)
+rtls-link-cli calibrate anchors --ips 192.168.0.100,192.168.0.101,192.168.0.102,192.168.0.103 --x 5.2 --y 2.3
+
+# If your system has ~10-15cm inherent ToF error, use a looser stop tolerance
+rtls-link-cli calibrate anchors --x 5.2 --y 2.3 --tolerance-m 0.15
+```
+
+Notes:
+- The CLI samples `tdoa-distances` repeatedly (a measurement buffer) and uses a robust average (median/MAD trimming) per anchor-pair for stability.
+- The solver uses robust weighted least-squares (IRLS/Huber) with a prior to keep results near the current `uwb.ADelay`.
+- Safety guards refuse large per-anchor jumps (`--max-delta-ticks`) and skip updates that don’t improve predicted error.
 
 ## Exit Codes
 

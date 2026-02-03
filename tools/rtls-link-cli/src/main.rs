@@ -59,5 +59,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Commands::Bulk(args) => {
             commands::run_bulk(args, cli.timeout, cli.json, cli.strict).await
         }
+        Commands::Calibrate(args) => {
+            commands::run_calibrate(args, cli.timeout, cli.json).await
+        }
     }
 }

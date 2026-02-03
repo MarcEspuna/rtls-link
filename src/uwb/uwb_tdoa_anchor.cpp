@@ -135,6 +135,8 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
              (uwbParams.tdoaSlotDurationUs == 0) ? " (legacy)" : "");
     LOG_INFO("  Antenna delay: %u", antennaDelay);
 
+    m_broadcastAntennaDelay = antennaDelay;
+
     // Pass antenna delay to algorithm so it's broadcast in TX packets
     m_UwbConfig.antennaDelay = antennaDelay;
 
@@ -174,6 +176,17 @@ void UWBAnchorTDoA::Update()
         uwbTdoa2Algorithm.init(&m_UwbConfig, &m_Device);
         uwbTdoa2Algorithm.onEvent(&m_Device, uwbEvent_t::eventTimeout);
         m_lastEventTimeMs = now;
+    }
+
+    // If the antenna delay parameter is updated at runtime (via the websocket
+    // param interface), propagate it to the TDoA anchor algorithm immediately
+    // so it is reflected in outgoing packets without requiring a reboot.
+    const uint16_t desiredDelay = Front::uwbLittleFSFront.GetParams().ADelay;
+    if (desiredDelay != m_broadcastAntennaDelay) {
+        m_broadcastAntennaDelay = desiredDelay;
+        m_UwbConfig.antennaDelay = desiredDelay;
+        uwbTdoa2AnchorSetAntennaDelay(desiredDelay);
+        LOG_INFO("Updated broadcast antenna delay: %u", static_cast<unsigned int>(desiredDelay));
     }
 
     if (m_DwData.interrupt_flags != 0) {

@@ -19,6 +19,7 @@ extern "C" {
 #include "uwb_backend.hpp"
 
 #include "anchor/tdoa_anchor.hpp"
+#include "anchor/tdoa_anchor_api.h"
 
 #include "utils/dispatcher.hpp"
 
@@ -37,6 +38,7 @@ public:
 
 private:
     uint32_t m_lastEventTimeMs = 0;
+    uint16_t m_broadcastAntennaDelay = 0;
     // Libdw1000 device
     dwDevice_t m_Device;
     dwOps_t m_Ops = {

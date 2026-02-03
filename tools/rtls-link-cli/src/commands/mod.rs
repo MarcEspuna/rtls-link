@@ -8,6 +8,7 @@ pub mod logs;
 pub mod ota;
 pub mod preset;
 pub mod status;
+pub mod calibrate;
 
 pub use bulk::run_bulk;
 pub use cmd::run_cmd;
@@ -17,3 +18,4 @@ pub use logs::run_logs;
 pub use ota::run_ota;
 pub use preset::run_preset;
 pub use status::run_status;
+pub use calibrate::run_calibrate;
