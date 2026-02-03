@@ -104,6 +104,10 @@ static uint64_t alignDwTicks512(uint64_t ticks)
 // Timeout for receiving a packet in a timeslot
 #define RECEIVE_TIMEOUT 300
 
+// Timeout while searching for the master anchor (slot 0) during sync.
+// Use a longer window to avoid duty-cycled listen gaps during acquisition.
+#define RECEIVE_SYNC_TIMEOUT 20000
+
 // Timeout for receiving a service packet after we TX ours
 #define RECEIVE_SERVICE_TIMEOUT 800
 
@@ -111,6 +115,8 @@ static uint64_t alignDwTicks512(uint64_t ticks)
 
 // Useful constants
 static const uint8_t base_address[] = {0,0,0,0,0,0,0xcf,0xbc};
+
+static constexpr uint8_t kSlot0MissThreshold = 3;
 
 // FSM states
 enum state_e {
@@ -129,6 +135,7 @@ static struct ctx_s {
   int anchorId;
   enum state_e state;
   enum slotState_e slotState;
+  uint8_t slot0MissCount;
 
   // Current and next TDMA slot
   int slot;
@@ -209,14 +216,22 @@ static dwTime_t transmitTimeForSlot(int slot)
 
 static void handleFailedRx(dwDevice_t *dev)
 {
+  (void)dev;
 
   ctx.rxTimestamps[ctx.slot] = 0;
   ctx.distances[ctx.slot] = 0;
 
-  // Failed TDMA sync, keeps track of the number of fail so that the TDMA
-  // watchdog can take decision as of TDMA resynchronisation
+  // Missing slot 0 (master anchor) occasionally is expected in real RF
+  // environments. Only drop sync after a few consecutive misses to reduce
+  // sync oscillation.
   if (ctx.slot == 0) {
-    ctx.state = syncTdmaState;
+    if (ctx.slot0MissCount < 0xff) {
+      ctx.slot0MissCount++;
+    }
+    if (ctx.slot0MissCount >= kSlot0MissThreshold) {
+      ctx.state = syncTdmaState;
+      ctx.slot0MissCount = 0;
+    }
   }
 }
 
@@ -268,6 +283,7 @@ static void handleRxPacket(dwDevice_t *dev)
 
   // Resync TDMA and save useful anchor 0 information
   if (ctx.slot == 0) {
+    ctx.slot0MissCount = 0;
     // Resync local frame start to packet from anchor 0
     dwTime_t pkTxTime = { .full = 0 };
     memcpy(&pkTxTime, rangePacket->timestamps[ctx.slot], TS_TX_SIZE);
@@ -425,9 +441,6 @@ static uint32_t slotStep(dwDevice_t *dev, uwbEvent_t event)
       if (event == eventPacketReceived) {
         debug("Received service packet!\r\n");
         handleServicePacket(dev);
-        // The service packet handling time desynchronized us, lets resynch
-        ctx.state = syncTdmaState;
-        return 0;
       }
       // eventReceiveTimeout, eventReceiveFailed, or eventTimeout:
       // proceed to next slot
@@ -489,6 +502,7 @@ static void tdoa2Init(uwbConfig_t * config, dwDevice_t *dev)
   ctx.frameLen = frameLen;
 
   ctx.state = syncTdmaState;
+  ctx.slot0MissCount = 0;
   ctx.slot = ctx.activeSlots - 1;
   ctx.nextSlot = 0;
   ctx.antennaDelay = config->antennaDelay;
@@ -536,7 +550,7 @@ static uint32_t tdoa2UwbEvent(dwDevice_t *dev, uwbEvent_t event)
             } else {
               // Start the receiver waiting for a packet from anchor 0
               dwIdle(dev);
-              dwSetReceiveWaitTimeout(dev, RECEIVE_TIMEOUT);
+              dwSetReceiveWaitTimeout(dev, RECEIVE_SYNC_TIMEOUT);
               dwWriteSystemConfigurationRegister(dev);
 
               dwNewReceive(dev);
@@ -548,7 +562,7 @@ static uint32_t tdoa2UwbEvent(dwDevice_t *dev, uwbEvent_t event)
         default:
           // Start the receiver waiting for a packet from anchor 0
           dwIdle(dev);
-          dwSetReceiveWaitTimeout(dev, RECEIVE_TIMEOUT);
+          dwSetReceiveWaitTimeout(dev, RECEIVE_SYNC_TIMEOUT);
           dwWriteSystemConfigurationRegister(dev);
 
           dwNewReceive(dev);

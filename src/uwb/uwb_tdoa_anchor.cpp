@@ -154,9 +154,11 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
 
 void UWBAnchorTDoA::Update()
 {
-    if (isr_flag) {
-        dwHandleInterrupt(&m_Device);
+    while (isr_flag) {
+        // Clear the flag before handling the interrupt to avoid losing a new
+        // interrupt that arrives during dwHandleInterrupt().
         isr_flag = false;
+        dwHandleInterrupt(&m_Device);
         m_lastEventTimeMs = millis();
     }
 
@@ -176,9 +178,6 @@ void UWBAnchorTDoA::Update()
         m_lastEventTimeMs = now;
     }
 
-    AnchorTDoADispatcher dispatcher(this);
-    dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
-
     // If the antenna delay parameter is updated at runtime (via the websocket
     // param interface), propagate it to the TDoA anchor algorithm immediately
     // so it is reflected in outgoing packets without requiring a reboot.
@@ -188,6 +187,11 @@ void UWBAnchorTDoA::Update()
         m_UwbConfig.antennaDelay = desiredDelay;
         uwbTdoa2AnchorSetAntennaDelay(desiredDelay);
         LOG_INFO("Updated broadcast antenna delay: %u", static_cast<unsigned int>(desiredDelay));
+    }
+
+    if (m_DwData.interrupt_flags != 0) {
+        AnchorTDoADispatcher dispatcher(this);
+        dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
     }
 }
 
