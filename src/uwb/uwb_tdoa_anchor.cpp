@@ -152,9 +152,11 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
 
 void UWBAnchorTDoA::Update()
 {
-    if (isr_flag) {
-        dwHandleInterrupt(&m_Device);
+    while (isr_flag) {
+        // Clear the flag before handling the interrupt to avoid losing a new
+        // interrupt that arrives during dwHandleInterrupt().
         isr_flag = false;
+        dwHandleInterrupt(&m_Device);
         m_lastEventTimeMs = millis();
     }
 
@@ -174,8 +176,10 @@ void UWBAnchorTDoA::Update()
         m_lastEventTimeMs = now;
     }
 
-    AnchorTDoADispatcher dispatcher(this);
-    dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
+    if (m_DwData.interrupt_flags != 0) {
+        AnchorTDoADispatcher dispatcher(this);
+        dispatcher.Dispatch(static_cast<libDw1000::IsrFlags>(m_DwData.interrupt_flags));
+    }
 }
 
 template<libDw1000::IsrFlags TFlags>
