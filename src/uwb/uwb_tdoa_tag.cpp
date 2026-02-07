@@ -123,6 +123,9 @@ static constexpr uint64_t POSITION_LOG_INTERVAL_MS = 500;  // Log position every
 DynamicAnchorPositionCalculator UWBTagTDoA::s_dynamicCalc;
 bool UWBTagTDoA::s_useDynamicPositions = false;
 uint32_t UWBTagTDoA::s_lastPositionUpdate = 0;
+// Coordination flags between dynamic-anchor updates and estimator task
+static std::atomic<bool> s_dynamicPositionsReadyForEstimator{false};
+static std::atomic<bool> s_dynamicEstimatorReinitRequested{false};
 
 // Interval for dynamic position updates (ms)
 static constexpr uint32_t DYNAMIC_POS_UPDATE_INTERVAL_MS = 200;
@@ -224,6 +227,8 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     // Initialize dynamic anchor positioning if enabled
     s_useDynamicPositions = (uwbParams.dynamicAnchorPosEnabled != 0);
+    s_dynamicPositionsReadyForEstimator.store(false, std::memory_order_relaxed);
+    s_dynamicEstimatorReinitRequested.store(false, std::memory_order_relaxed);
     if (s_useDynamicPositions) {
         DynamicAnchorConfig dynamicConfig = {
             .layout = uwbParams.anchorLayout,
@@ -388,6 +393,16 @@ static void estimatorProcess() {
     static constexpr int NUM_ITERATIONS = 10;
     static constexpr size_t MIN_MEASUREMENTS = 4; // Require 4 measurements for robustness in both modes
 
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    // When dynamic anchors become available, reset the warm-start state once so
+    // the first guess matches the measured anchor geometry instead of static config.
+    if (UWBTagTDoA::IsDynamicPositioningEnabled()
+        && s_dynamicEstimatorReinitRequested.exchange(false, std::memory_order_relaxed)) {
+        first_estimation = true;
+        LOG_INFO("Reinitializing estimator from dynamic anchor positions");
+    }
+#endif
+
     // Periodic scheduling (200Hz) with lock-free freshness gate.
     // The periodic scheduler provides stable timing via vTaskDelayUntil, while
     // the atomic counter ensures we only run Newton-Raphson when new TDoA
@@ -472,8 +487,18 @@ static void estimatorProcess() {
                     last_position(2) = ASSUMED_TAG_Z;
                 }
                 first_estimation = false;
-                LOG_INFO("Position estimator initialized at [%.2f, %.2f, %.2f]",
-                         last_position(0), last_position(1), last_position(2));
+                const char* anchor_source = "configured";
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+                if (UWBTagTDoA::IsDynamicPositioningEnabled()) {
+                    if (s_dynamicPositionsReadyForEstimator.load(std::memory_order_relaxed)) {
+                        anchor_source = "dynamic";
+                    } else {
+                        anchor_source = "configured (dynamic pending)";
+                    }
+                }
+#endif
+                LOG_INFO("Position estimator initialized at [%.2f, %.2f, %.2f] using %s anchors",
+                         last_position(0), last_position(1), last_position(2), anchor_source);
             }
         }
 
@@ -717,6 +742,14 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
                 anchor_positions[i].z = newPositions[i].z;
             }
             xSemaphoreGive(measurements_mtx);
+        }
+
+        // First successful dynamic update should reset the estimator warm-start
+        // so initialization matches measured anchor positions.
+        bool was_ready = s_dynamicPositionsReadyForEstimator.exchange(true, std::memory_order_relaxed);
+        if (!was_ready) {
+            s_dynamicEstimatorReinitRequested.store(true, std::memory_order_relaxed);
+            LOG_INFO("Dynamic anchor positions ready, estimator reinit scheduled");
         }
 
         s_lastPositionUpdate = now;
