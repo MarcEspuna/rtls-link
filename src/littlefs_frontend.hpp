@@ -39,14 +39,20 @@ public:
                     memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
                 } else {
                     char* paramStorage = reinterpret_cast<char*>(&m_Params) + param.address;
-                    if (len == param.len) {
-                        memcpy(paramStorage, data, len);
-                    } else if (len < param.len) {
-                        memcpy(paramStorage, data, len);
-                        memset(paramStorage + len, 0, param.len - len);
-                    } else {
+                    if (param.len == 0) {
+                        return ErrorParam::INVALID_DATA;
+                    }
+                    const char* input = static_cast<const char*>(data);
+                    uint32_t copyLen = len;
+                    // Accept callers that include the trailing NUL in len.
+                    if (copyLen > 0 && input[copyLen - 1] == '\0') {
+                        copyLen--;
+                    }
+                    if (copyLen >= param.len) {
                         return ErrorParam::PARAM_TOO_LONG;
                     }
+                    memcpy(paramStorage, data, copyLen);
+                    memset(paramStorage + copyLen, 0, param.len - copyLen);
                 }
                 return SaveParams();
             }
@@ -135,11 +141,13 @@ public:
                     if (strcmp(param.name, paramName.c_str()) == 0) {
                         if (param.type == ParamType::STRING) {
                             char* dst = reinterpret_cast<char*>(&m_Params) + param.address;
-                            size_t copyLen = min(static_cast<size_t>(param.len), static_cast<size_t>(value.length()));
-                            memcpy(dst, value.c_str(), copyLen);
-                            if (copyLen < param.len) {
-                                memset(dst + copyLen, 0, param.len - copyLen);
+                            if (param.len == 0) {
+                                break;
                             }
+                            // Keep one byte reserved for terminator for C-string consumers.
+                            size_t copyLen = min(static_cast<size_t>(param.len - 1), static_cast<size_t>(value.length()));
+                            memcpy(dst, value.c_str(), copyLen);
+                            memset(dst + copyLen, 0, param.len - copyLen);
                         } else {
                             uint16_t neededLen = max(param.len, static_cast<uint16_t>(4));
                             char dataTransformed[neededLen];
