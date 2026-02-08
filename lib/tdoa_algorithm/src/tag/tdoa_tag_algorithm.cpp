@@ -70,6 +70,7 @@ typedef struct {
 static uint8_t previousAnchor;
 // Holds data for the latest packet from all anchors
 static history_t history[LOCODECK_NR_OF_TDOA2_ANCHORS];
+static constexpr uint32_t kAnchorStatusTimeoutTicks = pdMS_TO_TICKS(1000);
 
 
 // LPP packet handling
@@ -227,6 +228,7 @@ static bool rxcallback(dwDevice_t *dev) {
 
     if (anchor < LOCODECK_NR_OF_TDOA2_ANCHORS) {
       uint32_t now_ms = millis();
+      history[anchor].anchorStatusTimeout = xTaskGetTickCount() + kAnchorStatusTimeoutTicks;
 
       const int64_t rxAn_by_T_in_cl_T = arrival.full;           // Retrieving timestamp of packet reception
       const int64_t txAn_in_cl_An = packet->timestamps[anchor]; // Retrieving timestamp of packet transmition in transmiter clock timebase 
@@ -303,7 +305,7 @@ static uint32_t onEvent(dwDevice_t *dev, uwbEvent_t event) {
   uint32_t now = xTaskGetTickCount();
   uint16_t rangingState = 0;
   for (int anchor = 0; anchor < LOCODECK_NR_OF_TDOA2_ANCHORS; anchor++) {
-    if (now < history[anchor].anchorStatusTimeout) {
+    if (static_cast<int32_t>(history[anchor].anchorStatusTimeout - now) > 0) {
       rangingState |= (1 << anchor);
     }
   }

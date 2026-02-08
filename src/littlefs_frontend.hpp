@@ -38,11 +38,12 @@ public:
                     }
                     memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
                 } else {
+                    char* paramStorage = reinterpret_cast<char*>(&m_Params) + param.address;
                     if (len == param.len) {
-                        memcpy(reinterpret_cast<char*>(&m_Params) + param.address, data, len);
+                        memcpy(paramStorage, data, len);
                     } else if (len < param.len) {
-                        memcpy(reinterpret_cast<char*>(&m_Params) + param.address, data, len);
-                        reinterpret_cast<char*>(&m_Params)[param.address + len] = '\0';
+                        memcpy(paramStorage, data, len);
+                        memset(paramStorage + len, 0, param.len - len);
                     } else {
                         return ErrorParam::PARAM_TOO_LONG;
                     }
@@ -63,8 +64,12 @@ public:
                     len = min(strlen(value), static_cast<uint32_t>(32));
                 } else {
                     const char* str_param = reinterpret_cast<const char*>(&m_Params) + param.address;
-                    len = min(strlen(str_param), static_cast<uint32_t>(param.len));
-                    strncpy(value, str_param, len);
+                    size_t boundedLen = 0;
+                    while (boundedLen < param.len && str_param[boundedLen] != '\0') {
+                        boundedLen++;
+                    }
+                    len = static_cast<uint32_t>(boundedLen);
+                    memcpy(value, str_param, len);
                 }
                 value[len] = '\0';
                 type = param.type;
@@ -125,17 +130,21 @@ public:
             // Extract parameter name (remove group prefix)
             String paramName = key.substring(groupPrefix.size());
             
-            // Find matching parameter definition
-            for (const ParamDef& param : GetParamLayout()) {
-                if (strcmp(param.name, paramName.c_str()) == 0) {
-                    if (param.type == ParamType::STRING) {
-                        strncpy(reinterpret_cast<char*>(&m_Params) + param.address, value.c_str(), param.len - 1);
-                        reinterpret_cast<char*>(&m_Params)[param.address + param.len - 1] = '\0';
-                    } else {
-                        uint16_t neededLen = max(param.len, static_cast<uint16_t>(4));
-                        char dataTransformed[neededLen];
-                        if (Utils::TransformStrToData(param.type, value.c_str(), dataTransformed) == Utils::ErrorTransform::OK) {
-                            memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
+                // Find matching parameter definition
+                for (const ParamDef& param : GetParamLayout()) {
+                    if (strcmp(param.name, paramName.c_str()) == 0) {
+                        if (param.type == ParamType::STRING) {
+                            char* dst = reinterpret_cast<char*>(&m_Params) + param.address;
+                            size_t copyLen = min(static_cast<size_t>(param.len), static_cast<size_t>(value.length()));
+                            memcpy(dst, value.c_str(), copyLen);
+                            if (copyLen < param.len) {
+                                memset(dst + copyLen, 0, param.len - copyLen);
+                            }
+                        } else {
+                            uint16_t neededLen = max(param.len, static_cast<uint16_t>(4));
+                            char dataTransformed[neededLen];
+                            if (Utils::TransformStrToData(param.type, value.c_str(), dataTransformed) == Utils::ErrorTransform::OK) {
+                                memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
                         }
                     }
                     break;
