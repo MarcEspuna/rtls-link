@@ -4,6 +4,7 @@
 #include "../littlefs_frontend.hpp"
 #include "../scheduler.hpp"
 #include "wifi_backend.hpp"
+#include <freertos/semphr.h>
 
 class WifiLittleFSFrontend : public LittleFSFrontend<WifiParams> {
 public:
@@ -34,11 +35,13 @@ private:
     void SetupWebServer();
     void UpdateMode(WifiMode mode);
     void ClearBackends();
+    void ClearBackendsUnlocked();
     void ApplyLoggingSettings();
 
     static constexpr uint32_t maxClients = 10;
 
     etl::vector<WifiBackend*, maxClients> m_Backends;
+    SemaphoreHandle_t m_backendsMutex = nullptr;
     class WifiTcpServer* m_TcpLoggingServer;
     WifiMode m_currentMode = WifiMode::UNDEFINED;
     bool m_stationConnected = false;

@@ -29,6 +29,34 @@
 #include "uwb/uwb_tdoa_tag.hpp"
 #include "uwb/uwb_frontend_littlefs.hpp"
 
+namespace {
+class BackendsLockGuard {
+public:
+    explicit BackendsLockGuard(SemaphoreHandle_t mutex)
+        : m_mutex(mutex) {
+        if (m_mutex == nullptr) {
+            m_locked = true;
+            return;
+        }
+        m_locked = (xSemaphoreTake(m_mutex, portMAX_DELAY) == pdTRUE);
+    }
+
+    ~BackendsLockGuard() {
+        if (m_mutex != nullptr && m_locked) {
+            xSemaphoreGive(m_mutex);
+        }
+    }
+
+    bool IsLocked() const {
+        return m_locked;
+    }
+
+private:
+    SemaphoreHandle_t m_mutex = nullptr;
+    bool m_locked = false;
+};
+} // namespace
+
 // Free function for telemetry callback (ETL delegates require free function or static method)
 #ifdef USE_WIFI_DISCOVERY
 static DeviceTelemetry GetDeviceTelemetry() {
@@ -117,6 +145,13 @@ void WifiLittleFSFrontend::Init() {
 
     LOG_INFO("WifiLittleFSFrontend initialized");
 
+    if (m_backendsMutex == nullptr) {
+        m_backendsMutex = xSemaphoreCreateMutex();
+        if (m_backendsMutex == nullptr) {
+            LOG_ERROR("Failed to create WiFi backend mutex");
+        }
+    }
+
     UpdateMode(m_Params.mode);
 
 #ifdef USE_WIFI_TCP_LOGGING
@@ -136,8 +171,16 @@ void WifiLittleFSFrontend::Init() {
 }
 
 void WifiLittleFSFrontend::Update() {
-    for (WifiBackend* backend : m_Backends) {
-        backend->Update();
+    {
+        BackendsLockGuard lock(m_backendsMutex);
+        if (!lock.IsLocked()) {
+            LOG_WARN("WiFi backend lock failed in Update()");
+            return;
+        }
+
+        for (WifiBackend* backend : m_Backends) {
+            backend->Update();
+        }
     }
     
     if (m_TcpLoggingServer) {
@@ -171,7 +214,13 @@ void WifiLittleFSFrontend::SetupStation() {
 }
 
 void WifiLittleFSFrontend::SetupWebServer() {
-    ClearBackends();
+    BackendsLockGuard lock(m_backendsMutex);
+    if (!lock.IsLocked()) {
+        LOG_WARN("WiFi backend lock failed in SetupWebServer()");
+        return;
+    }
+
+    ClearBackendsUnlocked();
 
     if (m_Params.enableWebServer) {
 #ifdef USE_WIFI_WEBSERVER
@@ -272,6 +321,16 @@ void WifiLittleFSFrontend::UpdateLastTWRSample(float x, float y, float z, uint32
 
 
 void WifiLittleFSFrontend::ClearBackends() {
+    BackendsLockGuard lock(m_backendsMutex);
+    if (!lock.IsLocked()) {
+        LOG_WARN("WiFi backend lock failed in ClearBackends()");
+        return;
+    }
+
+    ClearBackendsUnlocked();
+}
+
+void WifiLittleFSFrontend::ClearBackendsUnlocked() {
     for (auto* backend : m_Backends) {
         delete backend;
     }
