@@ -29,10 +29,39 @@
 #include "uwb/uwb_tdoa_tag.hpp"
 #include "uwb/uwb_frontend_littlefs.hpp"
 
+namespace {
+class BackendsLockGuard {
+public:
+    explicit BackendsLockGuard(SemaphoreHandle_t mutex)
+        : m_mutex(mutex) {
+        if (m_mutex == nullptr) {
+            m_locked = true;
+            return;
+        }
+        m_locked = (xSemaphoreTake(m_mutex, portMAX_DELAY) == pdTRUE);
+    }
+
+    ~BackendsLockGuard() {
+        if (m_mutex != nullptr && m_locked) {
+            xSemaphoreGive(m_mutex);
+        }
+    }
+
+    bool IsLocked() const {
+        return m_locked;
+    }
+
+private:
+    SemaphoreHandle_t m_mutex = nullptr;
+    bool m_locked = false;
+};
+} // namespace
+
 // Free function for telemetry callback (ETL delegates require free function or static method)
 #ifdef USE_WIFI_DISCOVERY
 static DeviceTelemetry GetDeviceTelemetry() {
     DeviceTelemetry t;
+    const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
 
 #ifdef USE_MAVLINK
     t.sending_pos = App::IsSendingPositions();
@@ -44,7 +73,7 @@ static DeviceTelemetry GetDeviceTelemetry() {
 
     // Only report anchors_seen for TDoA tag mode
 #ifdef USE_UWB_MODE_TDOA_TAG
-    if (Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA) {
+    if (uwbParams.mode == UWBMode::TAG_TDOA) {
         t.anchors_seen = UWBTagTDoA::GetAnchorsSeenCount();
     } else {
         t.anchors_seen = 0;  // Not applicable for non-TDoA-tag modes
@@ -52,6 +81,14 @@ static DeviceTelemetry GetDeviceTelemetry() {
 #else
     t.anchors_seen = 0;
 #endif
+
+    // Runtime subsystem state
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+    t.uwb_enabled = (uwbParams.uwbEnable != 0);
+#else
+    t.uwb_enabled = true;
+#endif
+    t.rf_forward_enabled = (uwbParams.rfForwardEnable != 0);
 
     // Rangefinder status
 #ifdef HAS_RANGEFINDER
@@ -75,7 +112,7 @@ static DeviceTelemetry GetDeviceTelemetry() {
 
     // Dynamic anchor positions (for TDoA tag mode with dynamic positioning enabled)
 #if defined(USE_DYNAMIC_ANCHOR_POSITIONS) && defined(USE_UWB_MODE_TDOA_TAG)
-    if (Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA) {
+    if (uwbParams.mode == UWBMode::TAG_TDOA) {
         t.dynamic_anchors_enabled = UWBTagTDoA::IsDynamicPositioningEnabled();
         if (t.dynamic_anchors_enabled) {
             t.dynamic_anchor_count = UWBTagTDoA::GetDynamicAnchorPositions(
@@ -108,6 +145,13 @@ void WifiLittleFSFrontend::Init() {
 
     LOG_INFO("WifiLittleFSFrontend initialized");
 
+    if (m_backendsMutex == nullptr) {
+        m_backendsMutex = xSemaphoreCreateMutex();
+        if (m_backendsMutex == nullptr) {
+            LOG_ERROR("Failed to create WiFi backend mutex");
+        }
+    }
+
     UpdateMode(m_Params.mode);
 
 #ifdef USE_WIFI_TCP_LOGGING
@@ -127,8 +171,16 @@ void WifiLittleFSFrontend::Init() {
 }
 
 void WifiLittleFSFrontend::Update() {
-    for (WifiBackend* backend : m_Backends) {
-        backend->Update();
+    {
+        BackendsLockGuard lock(m_backendsMutex);
+        if (!lock.IsLocked()) {
+            LOG_WARN("WiFi backend lock failed in Update()");
+            return;
+        }
+
+        for (WifiBackend* backend : m_Backends) {
+            backend->Update();
+        }
     }
     
     if (m_TcpLoggingServer) {
@@ -155,12 +207,20 @@ bool WifiLittleFSFrontend::SetupAP() {
 void WifiLittleFSFrontend::SetupStation() {
     LOG_INFO("WiFi Station mode - SSID: %s", m_Params.ssidST.data());
 
+    // Station backends are configured only after a confirmed connection event.
+    m_stationConnected = false;
     WiFi.mode(WIFI_STA);
     WiFi.begin(m_Params.ssidST.data(), m_Params.pswdST.data());
 }
 
 void WifiLittleFSFrontend::SetupWebServer() {
-    ClearBackends();
+    BackendsLockGuard lock(m_backendsMutex);
+    if (!lock.IsLocked()) {
+        LOG_WARN("WiFi backend lock failed in SetupWebServer()");
+        return;
+    }
+
+    ClearBackendsUnlocked();
 
     if (m_Params.enableWebServer) {
 #ifdef USE_WIFI_WEBSERVER
@@ -204,6 +264,10 @@ void WifiLittleFSFrontend::SetupWebServer() {
 }
 
 void WifiLittleFSFrontend::UpdateMode(WifiMode mode) {
+    // Rebuild runtime WiFi services on every explicit mode update.
+    ClearBackends();
+    m_stationConnected = false;
+
     m_currentMode = mode;
     
     switch (mode) {
@@ -257,6 +321,16 @@ void WifiLittleFSFrontend::UpdateLastTWRSample(float x, float y, float z, uint32
 
 
 void WifiLittleFSFrontend::ClearBackends() {
+    BackendsLockGuard lock(m_backendsMutex);
+    if (!lock.IsLocked()) {
+        LOG_WARN("WiFi backend lock failed in ClearBackends()");
+        return;
+    }
+
+    ClearBackendsUnlocked();
+}
+
+void WifiLittleFSFrontend::ClearBackendsUnlocked() {
     for (auto* backend : m_Backends) {
         delete backend;
     }
@@ -283,14 +357,35 @@ ErrorParam WifiLittleFSFrontend::SetParam(const char* name, const void* data, ui
     // Call base class implementation first
     ErrorParam result = LittleFSFrontend<WifiParams>::SetParam(name, data, len);
 
-    if (result == ErrorParam::OK) {
-        // Check if this was a logging-related parameter and apply changes
-        if (strcmp(name, "logSerialEnabled") == 0 ||
-            strcmp(name, "logUdpEnabled") == 0 ||
-            strcmp(name, "logUdpPort") == 0 ||
-            strcmp(name, "gcsIp") == 0) {
-            ApplyLoggingSettings();
+    if (result != ErrorParam::OK) {
+        return result;
+    }
+
+    // Apply mode changes immediately when requested.
+    if (strcmp(name, "mode") == 0) {
+        UpdateMode(m_Params.mode);
+    }
+
+    // Reconfigure runtime WiFi services immediately when bridge/server/discovery
+    // parameters are updated and networking is currently active.
+    if (strcmp(name, "enableWebServer") == 0 ||
+        strcmp(name, "enableUartBridge") == 0 ||
+        strcmp(name, "enableDiscovery") == 0 ||
+        strcmp(name, "gcsIp") == 0 ||
+        strcmp(name, "udpPort") == 0 ||
+        strcmp(name, "discoveryPort") == 0) {
+        if (m_currentMode == WifiMode::AP ||
+            (m_currentMode == WifiMode::STATION && m_stationConnected)) {
+            SetupWebServer();
         }
+    }
+
+    // Check if this was a logging-related parameter and apply changes.
+    if (strcmp(name, "logSerialEnabled") == 0 ||
+        strcmp(name, "logUdpEnabled") == 0 ||
+        strcmp(name, "logUdpPort") == 0 ||
+        strcmp(name, "gcsIp") == 0) {
+        ApplyLoggingSettings();
     }
 
     return result;

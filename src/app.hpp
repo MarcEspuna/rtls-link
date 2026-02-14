@@ -108,10 +108,15 @@ private:
 #ifdef USE_MAVLINK_HEARTBEAT
     uint64_t last_heartbeat_timestamp_ms_ = 0;
     uint64_t last_heartbeat_received_timestamp_ms_ = 0;
+    uint8_t last_heartbeat_system_id_ = 0;
 #endif // USE_MAVLINK_HEARTBEAT
 #ifdef USE_MAVLINK_ORIGIN
     bool is_origin_position_sent_ = false;
     bool is_origin_set_ = false;
+    uint64_t last_origin_attempt_timestamp_ms_ = 0;
+    uint64_t last_origin_sent_timestamp_ms_ = 0;
+    bool origin_target_fallback_logged_ = false;
+    bool origin_target_missing_logged_ = false;
 #endif // USE_MAVLINK_ORIGIN
 #endif // USE_MAVLINK
 
@@ -158,6 +163,8 @@ private:
 #endif // USE_MAVLINK_HEARTBEAT
 #ifdef USE_MAVLINK_ORIGIN
     static constexpr uint64_t kSendOriginPositionAfterMs = 16000;    // After 16 seconds healthy device, send global origin position
+    static constexpr uint64_t kOriginRetryIntervalMs = 2000;          // Retry origin TX every 2 seconds until first successful send
+    static constexpr uint64_t kOriginResendIntervalMs = 10000;        // Re-send origin every 10 seconds to recover AP reboots/missed packets
 #endif // USE_MAVLINK_ORIGIN
 #endif // USE_MAVLINK
 

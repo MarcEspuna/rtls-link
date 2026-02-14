@@ -54,7 +54,9 @@ void App::Init()
 
 #ifdef USE_MAVLINK_HEARTBEAT
   local_position_sensor_.set_heartbeat_callback([this](uint8_t system_id, uint8_t component_id) {
+    (void)component_id;
     last_heartbeat_received_timestamp_ms_ = millis();
+    last_heartbeat_system_id_ = system_id;
   });
 #endif // USE_MAVLINK_HEARTBEAT
 #endif // USE_MAVLINK
@@ -166,22 +168,62 @@ void App::Update()
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
 #ifdef USE_MAVLINK_HEARTBEAT
     uint64_t time_since_rcv_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
+    bool heartbeat_recent = time_since_rcv_heartbeat < kHeartbeatRcvTimeoutMs;
 #else
-    uint64_t time_since_rcv_heartbeat = 0;  // Always send if no heartbeat checking
+    bool heartbeat_recent = true;
 #endif
-    if (time_since_unhealthy > kSendOriginPositionAfterMs
-        && !is_origin_position_sent_
-        && time_since_rcv_heartbeat < kHeartbeatRcvTimeoutMs) {
-      uint8_t target_system_id = Front::uwbLittleFSFront.GetParams().mavlinkTargetSystemId;
-      LOG_INFO("Sending origin position to system %d", target_system_id);
-      local_position_sensor_.send_set_gps_global_origin(
-          Front::uwbLittleFSFront.GetParams().originLat,
-          Front::uwbLittleFSFront.GetParams().originLon,
-          Front::uwbLittleFSFront.GetParams().originAlt,
-          target_system_id, micros());
+    bool origin_retry_due = (now_ms - last_origin_attempt_timestamp_ms_) >= kOriginRetryIntervalMs;
+    bool origin_resend_due = is_origin_position_sent_
+                          && (now_ms - last_origin_sent_timestamp_ms_) >= kOriginResendIntervalMs;
+    bool should_try_send_origin = (time_since_unhealthy > kSendOriginPositionAfterMs)
+                               && heartbeat_recent
+                               && origin_retry_due
+                               && (!is_origin_position_sent_ || origin_resend_due);
 
-      time_since_unhealthy = now_ms;
-      is_origin_position_sent_ = true;
+    if (should_try_send_origin) {
+      const auto& params = Front::uwbLittleFSFront.GetParams();
+      uint8_t target_system_id = params.mavlinkTargetSystemId;
+
+#ifdef USE_MAVLINK_HEARTBEAT
+      if (target_system_id == 0 && last_heartbeat_system_id_ != 0) {
+        target_system_id = last_heartbeat_system_id_;
+        if (!origin_target_fallback_logged_) {
+          LOG_WARN("mavlinkTargetSystemId is 0, falling back to heartbeat system id %u",
+                   static_cast<unsigned int>(target_system_id));
+          origin_target_fallback_logged_ = true;
+        }
+      }
+#endif
+
+      last_origin_attempt_timestamp_ms_ = now_ms;
+
+      if (target_system_id == 0) {
+        if (!origin_target_missing_logged_) {
+          LOG_WARN("Skipping origin TX: target system id is 0");
+          origin_target_missing_logged_ = true;
+        }
+      } else {
+        origin_target_missing_logged_ = false;
+        bool sent = local_position_sensor_.send_set_gps_global_origin(
+            params.originLat,
+            params.originLon,
+            params.originAlt,
+            target_system_id, micros());
+
+        if (sent) {
+          bool first_success = !is_origin_position_sent_;
+          is_origin_position_sent_ = true;
+          last_origin_sent_timestamp_ms_ = now_ms;
+          if (first_success) {
+            LOG_INFO("Origin sent to system %u", static_cast<unsigned int>(target_system_id));
+          } else {
+            LOG_DEBUG("Origin re-sent to system %u", static_cast<unsigned int>(target_system_id));
+          }
+        } else {
+          LOG_WARN("Origin TX failed (system %u) - retrying",
+                   static_cast<unsigned int>(target_system_id));
+        }
+      }
     }
 #endif // USE_MAVLINK_ORIGIN
   }
@@ -189,7 +231,11 @@ void App::Update()
   // Periodic App health log (every 1 second)
   if (now_ms - app_stats_last_log_ms >= APP_STATS_LOG_INTERVAL_MS) {
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
+#ifdef USE_MAVLINK_HEARTBEAT
     uint64_t time_since_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
+#else
+    uint64_t time_since_heartbeat = 0;
+#endif
     LOG_DEBUG("H:%u U:%u | OriginSent:%d UnhealthyAge:%llums HB_Age:%llums",
            app_stats_healthy_cycles, app_stats_unhealthy_cycles,
            is_origin_position_sent_ ? 1 : 0,
@@ -314,7 +360,8 @@ float App::GetRangefinderZ() {
 }
 
 bool App::IsRangefinderEnabled() {
-  return Front::uwbLittleFSFront.GetParams().zCalcMode == ZCalcMode::RANGEFINDER;
+  const auto& params = Front::uwbLittleFSFront.GetParams();
+  return (params.zCalcMode == ZCalcMode::RANGEFINDER) || (params.rfForwardEnable != 0);
 }
 
 bool App::IsRangefinderHealthy() {

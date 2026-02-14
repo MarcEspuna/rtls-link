@@ -36,6 +36,7 @@
 
 ; TDoA anchor mode only
 -D USE_UWB_MODE_TDOA_ANCHOR
+-D USE_RUNTIME_SUBSYSTEM_TOGGLES
 
 ; Performance
 -D USE_FAST_CODE

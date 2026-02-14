@@ -1,5 +1,7 @@
 #pragma once
 
+#include "config/features.hpp"
+
 #include "uwb_params.hpp"
 #include "../littlefs_frontend.hpp"
 #include "uwb_backend.hpp"
@@ -12,6 +14,7 @@ public:
 
     virtual void Init() override;
     virtual void Update() override;
+    virtual ErrorParam SetParam(const char* name, const void* data, uint32_t len) override;
 
     void UpdateAntennaDelay(uint16_t delay) override {
         // Write parameter to eeprom
@@ -43,6 +46,7 @@ public:
     void PerformAnchorCalibration();
 
 protected:
+    void InitBackendForCurrentMode();
     etl::vector<UWBAnchorParam, UWBParams::maxAnchorCount> GetAnchors();
 
     UWBBackend* m_Backend = nullptr;
@@ -50,6 +54,9 @@ protected:
 public:
     static constexpr ParamDef s_ParamDefs[] = {
         PARAM_DEF(UWBParams, mode),
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+        PARAM_DEF(UWBParams, uwbEnable),
+#endif
         PARAM_DEF(UWBParams, devShortAddr),
         PARAM_DEF(UWBParams, anchorCount),
         PARAM_DEF(UWBParams, devId1),

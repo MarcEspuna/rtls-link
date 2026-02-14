@@ -28,7 +28,9 @@ struct DeviceTelemetry {
     bool sending_pos = false;   // True if sent position to ArduPilot in last 2s
     uint8_t anchors_seen = 0;   // Unique anchor IDs in measurement set
     bool origin_sent = false;   // True if GPS origin sent to ArduPilot
-    bool rf_enabled = false;    // True if zCalcMode == RANGEFINDER
+    bool uwb_enabled = true;    // True if runtime UWB backend is enabled
+    bool rf_forward_enabled = false; // True if rangefinder forwarding is enabled
+    bool rf_enabled = false;    // True if rangefinder functionality is active
     bool rf_healthy = false;    // True if receiving non-stale rangefinder data
     // Update rate statistics (centi-Hz for 0.01 Hz precision without floats)
     uint16_t avg_rate_cHz = 0;  // Average update rate in centi-Hz (e.g., 1000 = 10.0 Hz)

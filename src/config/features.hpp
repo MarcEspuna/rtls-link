@@ -9,6 +9,7 @@
  *   USE_<SUBSYSTEM>           - Main subsystem toggle
  *   USE_<SUBSYSTEM>_<FEATURE> - Sub-feature within a subsystem
  *   USE_UWB_MODE_<MODE>       - UWB operational mode
+ *   USE_RUNTIME_<FEATURE>     - Runtime behavior toggles
  *
  * @note This file MUST be included first in any source file that uses feature guards.
  */
@@ -84,6 +85,7 @@
 #define USE_STATUS_LED_TASK
 #define USE_RATE_STATISTICS
 #define USE_FAST_CODE                 // IRAM placement for hot-path functions
+#define USE_RUNTIME_SUBSYSTEM_TOGGLES // Runtime UWB on/off and service-level toggles
 
 // --- Logging Subsystem ---
 #define USE_LOGGING

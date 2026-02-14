@@ -38,7 +38,7 @@ void WifiDiscovery::SendHeartbeat() {
         return; // No valid GCS IP configured
     }
 
-    char response[768];  // Increased buffer for telemetry + logging + dynamic anchors
+    char response[896];  // Increased buffer for telemetry + logging + dynamic anchors
 
     // Get IP and MAC based on WiFi mode
     bool isAP = (WiFi.getMode() == WIFI_AP);
@@ -85,6 +85,7 @@ void WifiDiscovery::SendHeartbeat() {
         "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\","
         "\"sending_pos\":%s,\"anchors_seen\":%u,\"origin_sent\":%s,"
         "\"rf_enabled\":%s,\"rf_healthy\":%s,"
+        "\"uwb_enabled\":%s,\"rf_forward_enabled\":%s,"
         "\"avg_rate_cHz\":%u,\"min_rate_cHz\":%u,\"max_rate_cHz\":%u,"
         "\"log_level\":%u,\"log_udp_port\":%u,"
         "\"log_serial_enabled\":%s,\"log_udp_enabled\":%s",
@@ -101,6 +102,8 @@ void WifiDiscovery::SendHeartbeat() {
         telemetry.origin_sent ? "true" : "false",
         telemetry.rf_enabled ? "true" : "false",
         telemetry.rf_healthy ? "true" : "false",
+        telemetry.uwb_enabled ? "true" : "false",
+        telemetry.rf_forward_enabled ? "true" : "false",
         static_cast<unsigned int>(telemetry.avg_rate_cHz),
         static_cast<unsigned int>(telemetry.min_rate_cHz),
         static_cast<unsigned int>(telemetry.max_rate_cHz),
@@ -109,14 +112,34 @@ void WifiDiscovery::SendHeartbeat() {
         m_WifiParams.logSerialEnabled ? "true" : "false",
         m_WifiParams.logUdpEnabled ? "true" : "false");
 
+    if (written < 0) {
+        response[0] = '\0';
+        return;
+    }
+
+    bool truncated = false;
+    if (written >= static_cast<int>(sizeof(response))) {
+        written = static_cast<int>(sizeof(response) - 1);
+        response[written] = '\0';
+        truncated = true;
+    }
+
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     // Append dynamic anchor positions if enabled and available
-    if (telemetry.dynamic_anchors_enabled && telemetry.dynamic_anchor_count > 0) {
+    if (!truncated && telemetry.dynamic_anchors_enabled && telemetry.dynamic_anchor_count > 0) {
         int remaining = sizeof(response) - written;
         int added = snprintf(response + written, remaining, ",\"dyn_anchors\":[");
-        written += added;
+        if (added < 0) {
+            truncated = true;
+        } else if (added >= remaining) {
+            written = static_cast<int>(sizeof(response) - 1);
+            response[written] = '\0';
+            truncated = true;
+        } else {
+            written += added;
+        }
 
-        for (uint8_t i = 0; i < telemetry.dynamic_anchor_count && written < static_cast<int>(sizeof(response) - 50); i++) {
+        for (uint8_t i = 0; i < telemetry.dynamic_anchor_count && !truncated; i++) {
             remaining = sizeof(response) - written;
             added = snprintf(response + written, remaining,
                 "%s{\"id\":%u,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}",
@@ -125,24 +148,44 @@ void WifiDiscovery::SendHeartbeat() {
                 telemetry.dynamic_anchors[i].x,
                 telemetry.dynamic_anchors[i].y,
                 telemetry.dynamic_anchors[i].z);
-            written += added;
+            if (added < 0) {
+                truncated = true;
+            } else if (added >= remaining) {
+                written = static_cast<int>(sizeof(response) - 1);
+                response[written] = '\0';
+                truncated = true;
+            } else {
+                written += added;
+            }
         }
 
-        remaining = sizeof(response) - written;
-        added = snprintf(response + written, remaining, "]");
-        written += added;
+        if (!truncated) {
+            remaining = sizeof(response) - written;
+            added = snprintf(response + written, remaining, "]");
+            if (added < 0) {
+                truncated = true;
+            } else if (added >= remaining) {
+                written = static_cast<int>(sizeof(response) - 1);
+                response[written] = '\0';
+                truncated = true;
+            } else {
+                written += added;
+            }
+        }
     }
 #endif
 
     // Close the JSON object
-    if (written < static_cast<int>(sizeof(response) - 1)) {
+    if (!truncated && written < static_cast<int>(sizeof(response) - 1)) {
         response[written++] = '}';
         response[written] = '\0';
+    } else {
+        truncated = true;
     }
 
     // Log truncation warning once
     static bool truncation_warned = false;
-    if (written >= static_cast<int>(sizeof(response)) && !truncation_warned) {
+    if (truncated && !truncation_warned) {
         LOG_WARN("WifiDiscovery: heartbeat JSON truncated!");
         truncation_warned = true;
     }

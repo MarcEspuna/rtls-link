@@ -38,14 +38,21 @@ public:
                     }
                     memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
                 } else {
-                    if (len == param.len) {
-                        memcpy(reinterpret_cast<char*>(&m_Params) + param.address, data, len);
-                    } else if (len < param.len) {
-                        memcpy(reinterpret_cast<char*>(&m_Params) + param.address, data, len);
-                        reinterpret_cast<char*>(&m_Params)[param.address + len] = '\0';
-                    } else {
+                    char* paramStorage = reinterpret_cast<char*>(&m_Params) + param.address;
+                    if (param.len == 0) {
+                        return ErrorParam::INVALID_DATA;
+                    }
+                    const char* input = static_cast<const char*>(data);
+                    uint32_t copyLen = len;
+                    // Accept callers that include the trailing NUL in len.
+                    if (copyLen > 0 && input[copyLen - 1] == '\0') {
+                        copyLen--;
+                    }
+                    if (copyLen >= param.len) {
                         return ErrorParam::PARAM_TOO_LONG;
                     }
+                    memcpy(paramStorage, data, copyLen);
+                    memset(paramStorage + copyLen, 0, param.len - copyLen);
                 }
                 return SaveParams();
             }
@@ -63,8 +70,12 @@ public:
                     len = min(strlen(value), static_cast<uint32_t>(32));
                 } else {
                     const char* str_param = reinterpret_cast<const char*>(&m_Params) + param.address;
-                    len = min(strlen(str_param), static_cast<uint32_t>(param.len));
-                    strncpy(value, str_param, len);
+                    size_t boundedLen = 0;
+                    while (boundedLen < param.len && str_param[boundedLen] != '\0') {
+                        boundedLen++;
+                    }
+                    len = static_cast<uint32_t>(boundedLen);
+                    memcpy(value, str_param, len);
                 }
                 value[len] = '\0';
                 type = param.type;
@@ -125,17 +136,23 @@ public:
             // Extract parameter name (remove group prefix)
             String paramName = key.substring(groupPrefix.size());
             
-            // Find matching parameter definition
-            for (const ParamDef& param : GetParamLayout()) {
-                if (strcmp(param.name, paramName.c_str()) == 0) {
-                    if (param.type == ParamType::STRING) {
-                        strncpy(reinterpret_cast<char*>(&m_Params) + param.address, value.c_str(), param.len - 1);
-                        reinterpret_cast<char*>(&m_Params)[param.address + param.len - 1] = '\0';
-                    } else {
-                        uint16_t neededLen = max(param.len, static_cast<uint16_t>(4));
-                        char dataTransformed[neededLen];
-                        if (Utils::TransformStrToData(param.type, value.c_str(), dataTransformed) == Utils::ErrorTransform::OK) {
-                            memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
+                // Find matching parameter definition
+                for (const ParamDef& param : GetParamLayout()) {
+                    if (strcmp(param.name, paramName.c_str()) == 0) {
+                        if (param.type == ParamType::STRING) {
+                            char* dst = reinterpret_cast<char*>(&m_Params) + param.address;
+                            if (param.len == 0) {
+                                break;
+                            }
+                            // Keep one byte reserved for terminator for C-string consumers.
+                            size_t copyLen = min(static_cast<size_t>(param.len - 1), static_cast<size_t>(value.length()));
+                            memcpy(dst, value.c_str(), copyLen);
+                            memset(dst + copyLen, 0, param.len - copyLen);
+                        } else {
+                            uint16_t neededLen = max(param.len, static_cast<uint16_t>(4));
+                            char dataTransformed[neededLen];
+                            if (Utils::TransformStrToData(param.type, value.c_str(), dataTransformed) == Utils::ErrorTransform::OK) {
+                                memcpy(reinterpret_cast<char*>(&m_Params) + param.address, dataTransformed, param.len);
                         }
                     }
                     break;
