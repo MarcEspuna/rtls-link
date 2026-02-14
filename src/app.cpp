@@ -360,7 +360,8 @@ float App::GetRangefinderZ() {
 }
 
 bool App::IsRangefinderEnabled() {
-  return Front::uwbLittleFSFront.GetParams().zCalcMode == ZCalcMode::RANGEFINDER;
+  const auto& params = Front::uwbLittleFSFront.GetParams();
+  return (params.zCalcMode == ZCalcMode::RANGEFINDER) || (params.rfForwardEnable != 0);
 }
 
 bool App::IsRangefinderHealthy() {
