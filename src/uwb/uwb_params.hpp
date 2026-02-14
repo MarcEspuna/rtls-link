@@ -47,6 +47,7 @@ struct UWBAnchorParam {
 
 struct UWBParams {
     UWBMode mode;                                       // Device UWB mode
+    uint8_t uwbEnable = 1;                              // Runtime UWB backend enable (0=disabled, 1=enabled)
     UWBShortAddr devShortAddr;                          // Device short address
     uint8_t anchorCount;                                // Number of anchors that might be available to the device
     // Anchor devices and it's relative locations

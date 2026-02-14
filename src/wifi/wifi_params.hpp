@@ -31,9 +31,9 @@ struct WifiParams {
     etl::array<char,MAX_IP_LENGTH>   gcsIp;         // IP address of the device
     uint16_t dbgPort;               // Port of the device debug server
     uint16_t udpPort;               // Port of the device UDP server (Used for the UartBridge)
-    uint8_t enableWebServer;        // Enable the web server (Web socket terminal and http page)
-    uint8_t enableUartBridge;       // Enable the UART bridge (Bridge between serial port and UDP port)
-    uint8_t enableDebugSocket;      // Enable the debug socket (Used for 3D position data visualization)
+    uint8_t enableWebServer = 1;    // Enable the web server (Web socket terminal and http page)
+    uint8_t enableUartBridge = 1;   // Enable the UART bridge (Bridge between serial port and UDP port)
+    uint8_t enableDebugSocket = 0;  // Enable the debug socket (Used for 3D position data visualization)
     uint8_t enableDiscovery = 1;    // Enable UDP discovery service (default: enabled)
     uint16_t discoveryPort = 3333;  // UDP port for discovery service
     // Logging parameters
@@ -41,5 +41,4 @@ struct WifiParams {
     uint8_t logSerialEnabled = 1;   // Runtime: enable Serial log output (default: on)
     uint8_t logUdpEnabled = 0;      // Runtime: enable UDP log streaming (default: off)
 }ULS_PACKED;
-
 

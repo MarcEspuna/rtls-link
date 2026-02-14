@@ -283,14 +283,35 @@ ErrorParam WifiLittleFSFrontend::SetParam(const char* name, const void* data, ui
     // Call base class implementation first
     ErrorParam result = LittleFSFrontend<WifiParams>::SetParam(name, data, len);
 
-    if (result == ErrorParam::OK) {
-        // Check if this was a logging-related parameter and apply changes
-        if (strcmp(name, "logSerialEnabled") == 0 ||
-            strcmp(name, "logUdpEnabled") == 0 ||
-            strcmp(name, "logUdpPort") == 0 ||
-            strcmp(name, "gcsIp") == 0) {
-            ApplyLoggingSettings();
+    if (result != ErrorParam::OK) {
+        return result;
+    }
+
+    // Apply mode changes immediately when requested.
+    if (strcmp(name, "mode") == 0) {
+        UpdateMode(m_Params.mode);
+    }
+
+    // Reconfigure runtime WiFi services immediately when bridge/server/discovery
+    // parameters are updated and networking is currently active.
+    if (strcmp(name, "enableWebServer") == 0 ||
+        strcmp(name, "enableUartBridge") == 0 ||
+        strcmp(name, "enableDiscovery") == 0 ||
+        strcmp(name, "gcsIp") == 0 ||
+        strcmp(name, "udpPort") == 0 ||
+        strcmp(name, "discoveryPort") == 0) {
+        if (m_currentMode == WifiMode::AP ||
+            (m_currentMode == WifiMode::STATION && m_stationConnected)) {
+            SetupWebServer();
         }
+    }
+
+    // Check if this was a logging-related parameter and apply changes.
+    if (strcmp(name, "logSerialEnabled") == 0 ||
+        strcmp(name, "logUdpEnabled") == 0 ||
+        strcmp(name, "logUdpPort") == 0 ||
+        strcmp(name, "gcsIp") == 0) {
+        ApplyLoggingSettings();
     }
 
     return result;

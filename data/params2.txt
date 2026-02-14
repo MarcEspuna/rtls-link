@@ -10,6 +10,7 @@ wifi.enableWebServer: 1
 wifi.enableUartBridge: 1
 wifi.enableDebugSocket: 0
 uwb.mode: 4
+uwb.uwbEnable: 1
 uwb.devShortAddr: 1
 uwb.anchorCount: 4
 uwb.devId1: 0

@@ -2,6 +2,7 @@
 
 #include "uwb_frontend_littlefs.hpp"
 #include "logging/logging.hpp"
+#include <cstring>
 
 // Conditional includes based on feature flags
 #ifdef USE_UWB_MODE_TWR_ANCHOR
@@ -24,13 +25,12 @@
 #include "uwb_tdoa_anchor.hpp"
 #endif
 
-void UWBLittleFSFrontend::Init() {
-    LittleFSFrontend<UWBParams>::Init();
-    LOG_INFO("UWB frontend initializing");
-
+void UWBLittleFSFrontend::InitBackendForCurrentMode() {
+    if (m_Backend != nullptr) {
+        return;
+    }
     auto anchors = GetAnchors();
-    switch (m_Params.mode)
-    {
+    switch (m_Params.mode) {
     case UWBMode::ANCHOR_MODE_TWR:
 #ifdef USE_UWB_MODE_TWR_ANCHOR
         m_Backend = new UWBAnchor(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
@@ -70,17 +70,81 @@ void UWBLittleFSFrontend::Init() {
         LOG_ERROR("Unknown UWB mode");
         break;
     }
+}
+
+void UWBLittleFSFrontend::Init() {
+    LittleFSFrontend<UWBParams>::Init();
+    LOG_INFO("UWB frontend initializing");
+
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+    if (m_Params.uwbEnable == 0) {
+        LOG_WARN("UWB backend disabled by parameter (uwb.uwbEnable=0)");
+    } else {
+        InitBackendForCurrentMode();
+    }
+#else
+    InitBackendForCurrentMode();
+#endif
 
     LOG_INFO("UWB frontend initialized");
 }
 
+ErrorParam UWBLittleFSFrontend::SetParam(const char* name, const void* data, uint32_t len) {
+    ErrorParam result = LittleFSFrontend<UWBParams>::SetParam(name, data, len);
+    if (result != ErrorParam::OK) {
+        return result;
+    }
+
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+    if (strcmp(name, "uwbEnable") == 0) {
+        if (m_Params.uwbEnable == 0) {
+            LOG_INFO("UWB runtime disabled");
+        } else {
+            LOG_INFO("UWB runtime enabled");
+            InitBackendForCurrentMode();
+        }
+        return result;
+    }
+#endif
+
+    if (strcmp(name, "mode") == 0) {
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+        if (m_Params.uwbEnable != 0 && m_Backend == nullptr) {
+            InitBackendForCurrentMode();
+        } else if (m_Backend != nullptr) {
+            LOG_WARN("UWB mode changed at runtime; reboot required to fully apply backend mode");
+        }
+#else
+        if (m_Backend == nullptr) {
+            InitBackendForCurrentMode();
+        } else {
+            LOG_WARN("UWB mode changed at runtime; reboot required to fully apply backend mode");
+        }
+#endif
+    }
+
+    return result;
+}
+
 void UWBLittleFSFrontend::Update() {
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+    if (m_Params.uwbEnable == 0) {
+        return;
+    }
+#endif
+
     if (m_Backend) {
         m_Backend->Update();
     }
 }
 
 uint32_t UWBLittleFSFrontend::GetConnectedDevices() {
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+    if (m_Params.uwbEnable == 0) {
+        return 0;
+    }
+#endif
+
     if (m_Backend) {
         return m_Backend->GetNumberOfConnectedDevices();
     }
@@ -88,6 +152,12 @@ uint32_t UWBLittleFSFrontend::GetConnectedDevices() {
 }
 
 bool UWBLittleFSFrontend::StartTag() {
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+    if (m_Params.uwbEnable == 0) {
+        return false;
+    }
+#endif
+
     if (m_Backend) {
         return m_Backend->Start();
     }
