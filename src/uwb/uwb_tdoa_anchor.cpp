@@ -65,6 +65,27 @@ static void applyTxPower(dwDevice_t* dev, uint8_t powerLevel, uint8_t smartPower
     }
 }
 
+static bool parseTdoaAnchorId(const UWBShortAddr& shortAddr, uint8_t& outAnchorId) {
+    if (shortAddr[0] < '0' || shortAddr[0] > '9') {
+        return false;
+    }
+
+    uint8_t value = static_cast<uint8_t>(shortAddr[0] - '0');
+    if (shortAddr[1] != '\0') {
+        if (shortAddr[1] < '0' || shortAddr[1] > '9') {
+            return false;
+        }
+        value = static_cast<uint8_t>(value * 10 + static_cast<uint8_t>(shortAddr[1] - '0'));
+    }
+
+    if (value > 7) {
+        return false;
+    }
+
+    outAnchorId = value;
+    return true;
+}
+
 static volatile bool isr_flag = false;
 
 UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay)
@@ -75,8 +96,13 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
 
     LOG_INFO("--- UWB Anchor TDOA Mode ---");
 
-    m_UwbConfig.address[1] = shortAddr[1] - '0';
-    m_UwbConfig.address[0] = shortAddr[0] - '0';
+    uint8_t parsedAnchorId = 0;
+    if (!parseTdoaAnchorId(shortAddr, parsedAnchorId)) {
+        LOG_WARN("Invalid TDoA anchor short address '%c%c', forcing anchor ID 0",
+                 shortAddr[0], shortAddr[1]);
+    }
+    m_UwbConfig.address[0] = parsedAnchorId;
+    m_UwbConfig.address[1] = 0;
 
     // Spi pins already setup on uwb_backend
     dwInit(&m_Device, &m_Ops);          // Initialize the driver. Init resets user data!
@@ -125,7 +151,8 @@ UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_conf
     dwCommitConfiguration(&m_Device);
 
     uint32_t dev_id = dwGetDeviceId(&m_Device);
-    LOG_INFO("Initialized TDoA Anchor - DevID: 0x%08X, Addr: %c%c", dev_id, shortAddr[0], shortAddr[1]);
+    LOG_INFO("Initialized TDoA Anchor - DevID: 0x%08X, AnchorID: %u",
+             dev_id, static_cast<unsigned int>(parsedAnchorId));
     LOG_INFO("  Radio: mode=%u, ch=%u, txPower=%u, smartPwr=%s",
              uwbParams.dwMode, uwbParams.channel, uwbParams.txPowerLevel,
              uwbParams.smartPowerEnable ? "on" : "off");

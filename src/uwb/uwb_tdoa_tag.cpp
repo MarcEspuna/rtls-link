@@ -82,6 +82,27 @@ static void applyTxPower(dwDevice_t* dev, uint8_t powerLevel, uint8_t smartPower
     }
 }
 
+static bool parseTdoaAnchorId(const UWBShortAddr& shortAddr, uint8_t& outAnchorId) {
+    if (shortAddr[0] < '0' || shortAddr[0] > '9') {
+        return false;
+    }
+
+    uint8_t value = static_cast<uint8_t>(shortAddr[0] - '0');
+    if (shortAddr[1] != '\0') {
+        if (shortAddr[1] < '0' || shortAddr[1] > '9') {
+            return false;
+        }
+        value = static_cast<uint8_t>(value * 10 + static_cast<uint8_t>(shortAddr[1] - '0'));
+    }
+
+    if (value > 7) {
+        return false;
+    }
+
+    outAnchorId = value;
+    return true;
+}
+
 static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa);
 Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
 static void estimatorProcess();
@@ -89,6 +110,7 @@ static void estimatorProcess();
 static etl::vector<tdoa_estimator::TDoAMeasurement, 64> measurements;
 static SemaphoreHandle_t measurements_mtx = xSemaphoreCreateMutex();
 static etl::array<UWBAnchorParam, 8> anchor_positions;
+static etl::array<bool, 8> configured_anchor_ids = {};
 
 static constexpr uint32_t kNumberMeasurements = 64;     // Preferably to be multiple of the number of anchors
 
@@ -151,12 +173,18 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     LOG_INFO("--- UWB Tag TDOA Mode ---");
     vTaskDelay(pdMS_TO_TICKS(300));
 
+    configured_anchor_ids.fill(false);
+
     // Fill in anchor positions lookup table
     for (uint32_t i = 0; i < anchors.size(); i++) {
-        uint32_t index_to_copy = anchors[i].shortAddr[0] - '0';
-        if (index_to_copy < anchor_positions.size()) {
-            anchor_positions[index_to_copy] = anchors[i];
-        } 
+        uint8_t anchorId = 0;
+        if (!parseTdoaAnchorId(anchors[i].shortAddr, anchorId)) {
+            LOG_WARN("Ignoring invalid configured anchor short address '%c%c' (expected 0-7)",
+                     anchors[i].shortAddr[0], anchors[i].shortAddr[1]);
+            continue;
+        }
+        anchor_positions[anchorId] = anchors[i];
+        configured_anchor_ids[anchorId] = true;
     }
 
 #ifdef USE_BEACON_PROTOCOL
@@ -355,6 +383,17 @@ static FAST_CODE void rxFailedCallback(dwDevice_t *dev)
 
 static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
 {
+    if (tdoa == nullptr) {
+        return;
+    }
+
+    if (tdoa->anchorIdA >= anchor_positions.size()
+        || tdoa->anchorIdB >= anchor_positions.size()
+        || !configured_anchor_ids[tdoa->anchorIdA]
+        || !configured_anchor_ids[tdoa->anchorIdB]) {
+        return;
+    }
+
     if (xSemaphoreTake(measurements_mtx, portMAX_DELAY) == pdTRUE) {
         auto it = std::find_if(measurements.begin(), measurements.end(),
             [&tdoa](const tdoa_estimator::TDoAMeasurement& m) {
@@ -448,6 +487,20 @@ static void estimatorProcess() {
             std::remove_if(measurements.begin(), measurements.end(),
                 [current_time_us](const tdoa_estimator::TDoAMeasurement& m) {
                     return (current_time_us - m.timestamp) > STALE_THRESHOLD_US;
+                }),
+            measurements.end()
+        );
+
+        // Remove measurements that reference anchors not configured in local params.
+        measurements.erase(
+            std::remove_if(measurements.begin(), measurements.end(),
+                [](const tdoa_estimator::TDoAMeasurement& m) {
+                    return m.anchor_a < 0
+                        || m.anchor_b < 0
+                        || m.anchor_a >= static_cast<int>(anchor_positions.size())
+                        || m.anchor_b >= static_cast<int>(anchor_positions.size())
+                        || !configured_anchor_ids[static_cast<size_t>(m.anchor_a)]
+                        || !configured_anchor_ids[static_cast<size_t>(m.anchor_b)];
                 }),
             measurements.end()
         );

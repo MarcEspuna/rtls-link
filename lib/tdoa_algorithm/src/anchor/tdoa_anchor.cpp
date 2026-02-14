@@ -505,9 +505,12 @@ static void tdoa2Init(uwbConfig_t * config, dwDevice_t *dev)
   ctx.slot0MissCount = 0;
   ctx.slot = ctx.activeSlots - 1;
   ctx.nextSlot = 0;
+  ctx.pid = 0;
   ctx.antennaDelay = config->antennaDelay;
+  memset(ctx.packetIds, 0, sizeof(ctx.packetIds));
   memset(ctx.txTimestamps, 0, sizeof(ctx.txTimestamps));
   memset(ctx.rxTimestamps, 0, sizeof(ctx.rxTimestamps));
+  memset(ctx.distances, 0, sizeof(ctx.distances));
 
   s_initialized = true;
 }

@@ -112,22 +112,20 @@ static bool IsDigitChar(char c) {
 
 static bool ParseShortAddrDigits(String input, char out[2], uint32_t& outLen) {
     input.trim();
-    if (input.length() == 0 || input.length() > 2) {
+    if (input.length() != 1) {
         return false;
     }
-    for (size_t i = 0; i < input.length(); i++) {
-        if (!IsDigitChar(input[i])) {
-            return false;
-        }
+    if (!IsDigitChar(input[0])) {
+        return false;
     }
+    uint8_t numeric = static_cast<uint8_t>(input[0] - '0');
+    if (numeric > 7) {
+        return false;
+    }
+
     out[0] = input[0];
-    if (input.length() == 2) {
-        out[1] = input[1];
-        outLen = 2;
-    } else {
-        out[1] = '\0';
-        outLen = 1;
-    }
+    out[1] = '\0';
+    outLen = 1;
     return true;
 }
 
@@ -327,7 +325,7 @@ static void writeCallback(cmd* c)
         char addrBytes[2] = {};
         uint32_t addrLen = 0;
         if (!ParseShortAddrDigits(data, addrBytes, addrLen)) {
-            commandResult = "Invalid short address (expected 1-2 digits)";
+            commandResult = "Invalid short address (expected single digit 0-7)";
             return;
         }
         ErrorParam ret = Front::WriteGlobalParam(paramGroup.c_str(), valueGroup.c_str(), addrBytes, addrLen);
