@@ -38,7 +38,7 @@ void WifiDiscovery::SendHeartbeat() {
         return; // No valid GCS IP configured
     }
 
-    char response[768];  // Increased buffer for telemetry + logging + dynamic anchors
+    char response[896];  // Increased buffer for telemetry + logging + dynamic anchors
 
     // Get IP and MAC based on WiFi mode
     bool isAP = (WiFi.getMode() == WIFI_AP);
@@ -85,6 +85,7 @@ void WifiDiscovery::SendHeartbeat() {
         "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\","
         "\"sending_pos\":%s,\"anchors_seen\":%u,\"origin_sent\":%s,"
         "\"rf_enabled\":%s,\"rf_healthy\":%s,"
+        "\"uwb_enabled\":%s,\"rf_forward_enabled\":%s,"
         "\"avg_rate_cHz\":%u,\"min_rate_cHz\":%u,\"max_rate_cHz\":%u,"
         "\"log_level\":%u,\"log_udp_port\":%u,"
         "\"log_serial_enabled\":%s,\"log_udp_enabled\":%s",
@@ -101,6 +102,8 @@ void WifiDiscovery::SendHeartbeat() {
         telemetry.origin_sent ? "true" : "false",
         telemetry.rf_enabled ? "true" : "false",
         telemetry.rf_healthy ? "true" : "false",
+        telemetry.uwb_enabled ? "true" : "false",
+        telemetry.rf_forward_enabled ? "true" : "false",
         static_cast<unsigned int>(telemetry.avg_rate_cHz),
         static_cast<unsigned int>(telemetry.min_rate_cHz),
         static_cast<unsigned int>(telemetry.max_rate_cHz),

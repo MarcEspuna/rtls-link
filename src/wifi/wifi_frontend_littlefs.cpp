@@ -33,6 +33,7 @@
 #ifdef USE_WIFI_DISCOVERY
 static DeviceTelemetry GetDeviceTelemetry() {
     DeviceTelemetry t;
+    const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
 
 #ifdef USE_MAVLINK
     t.sending_pos = App::IsSendingPositions();
@@ -44,7 +45,7 @@ static DeviceTelemetry GetDeviceTelemetry() {
 
     // Only report anchors_seen for TDoA tag mode
 #ifdef USE_UWB_MODE_TDOA_TAG
-    if (Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA) {
+    if (uwbParams.mode == UWBMode::TAG_TDOA) {
         t.anchors_seen = UWBTagTDoA::GetAnchorsSeenCount();
     } else {
         t.anchors_seen = 0;  // Not applicable for non-TDoA-tag modes
@@ -52,6 +53,14 @@ static DeviceTelemetry GetDeviceTelemetry() {
 #else
     t.anchors_seen = 0;
 #endif
+
+    // Runtime subsystem state
+#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
+    t.uwb_enabled = (uwbParams.uwbEnable != 0);
+#else
+    t.uwb_enabled = true;
+#endif
+    t.rf_forward_enabled = (uwbParams.rfForwardEnable != 0);
 
     // Rangefinder status
 #ifdef HAS_RANGEFINDER
@@ -75,7 +84,7 @@ static DeviceTelemetry GetDeviceTelemetry() {
 
     // Dynamic anchor positions (for TDoA tag mode with dynamic positioning enabled)
 #if defined(USE_DYNAMIC_ANCHOR_POSITIONS) && defined(USE_UWB_MODE_TDOA_TAG)
-    if (Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA) {
+    if (uwbParams.mode == UWBMode::TAG_TDOA) {
         t.dynamic_anchors_enabled = UWBTagTDoA::IsDynamicPositioningEnabled();
         if (t.dynamic_anchors_enabled) {
             t.dynamic_anchor_count = UWBTagTDoA::GetDynamicAnchorPositions(
