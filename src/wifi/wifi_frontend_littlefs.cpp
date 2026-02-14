@@ -155,6 +155,8 @@ bool WifiLittleFSFrontend::SetupAP() {
 void WifiLittleFSFrontend::SetupStation() {
     LOG_INFO("WiFi Station mode - SSID: %s", m_Params.ssidST.data());
 
+    // Station backends are configured only after a confirmed connection event.
+    m_stationConnected = false;
     WiFi.mode(WIFI_STA);
     WiFi.begin(m_Params.ssidST.data(), m_Params.pswdST.data());
 }
@@ -204,6 +206,10 @@ void WifiLittleFSFrontend::SetupWebServer() {
 }
 
 void WifiLittleFSFrontend::UpdateMode(WifiMode mode) {
+    // Rebuild runtime WiFi services on every explicit mode update.
+    ClearBackends();
+    m_stationConnected = false;
+
     m_currentMode = mode;
     
     switch (mode) {
