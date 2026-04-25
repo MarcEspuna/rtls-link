@@ -45,6 +45,18 @@ public:
      */
     static uint8_t GetAnchorsSeenCount();
 
+    static void ResetAnchorModel();
+    static bool StartAnchorModelCollection();
+    static bool LockAnchorModel();
+    static String GetAnchorModelStatusJson();
+    static String GetAnchorModelCollectStatusJson();
+    static String ExportAnchorModelJson();
+    static String GetEstimatorStatsJson();
+    static void ResetEstimatorStats();
+#ifdef ESP32S3_UWB_BOARD
+    static void ApplyMatcherPolicy(uint8_t policy);
+#endif
+
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     /**
      * @brief Check if dynamic anchor positioning is enabled.

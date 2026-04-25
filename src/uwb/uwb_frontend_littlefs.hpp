@@ -104,11 +104,22 @@ public:
         PARAM_DEF(UWBParams, smartPowerEnable),
         PARAM_DEF(UWBParams, tdoaSlotCount),
         PARAM_DEF(UWBParams, tdoaSlotDurationUs),
+#ifdef ESP32S3_UWB_BOARD
+        PARAM_DEF(UWBParams, tdoaMatcherPolicy),
+#endif
         PARAM_DEF(UWBParams, dynamicAnchorPosEnabled),
         PARAM_DEF(UWBParams, anchorLayout),
         PARAM_DEF(UWBParams, anchorHeight),
         PARAM_DEF(UWBParams, anchorPosLocked),
-        PARAM_DEF(UWBParams, distanceAvgSamples)
+        PARAM_DEF(UWBParams, distanceAvgSamples),
+        PARAM_DEF(UWBParams, tdoaAnchorModelMode),
+        PARAM_DEF(UWBParams, tdoaAnchorModelStartupCollect),
+        PARAM_DEF(UWBParams, tdoaAnchorModelCollectWindowMs),
+        PARAM_DEF(UWBParams, tdoaAnchorModelMinSamplesPerPair),
+        PARAM_DEF(UWBParams, tdoaAnchorModelDomain),
+        PARAM_DEF(UWBParams, tdoaAnchorModelHealthThresholdTicks),
+        PARAM_DEF(UWBParams, tdoaAnchorModelHealthWindow),
+        PARAM_DEF(UWBParams, tdoaAnchorModelHealthQuorum)
     };
 };
 

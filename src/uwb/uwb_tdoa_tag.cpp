@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <array>
 
@@ -27,6 +28,8 @@
 #include "app.hpp"
 #include "bsp/board.hpp"
 #include "uwb_frontend_littlefs.hpp"
+#include "tdoa_anchor_model.hpp"
+#include "tdoa_anchor_model_commands.hpp"
 
 static FAST_CODE void tagInterruptISR();
 static FAST_CODE void txCallback(dwDevice_t *dev);
@@ -101,6 +104,7 @@ static bool parseTdoaAnchorId(const UWBShortAddr& shortAddr, uint8_t& outAnchorI
 }
 
 static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa);
+static bool anchorModelTofCallback(uint8_t fromAnchor, uint8_t toAnchor, uint16_t rawDistanceTimestampUnits, uint16_t fromAntennaDelay, uint16_t toAntennaDelay, uint16_t* outDistanceTimestampUnits);
 Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
 static void estimatorProcess();
 
@@ -159,6 +163,489 @@ static volatile bool isr_flag = false;
 
 // Cache for anchors_seen (used when mutex is unavailable)
 static uint8_t cached_anchors_seen = 0;
+static TDoAAnchorModel s_anchorModel;
+
+static constexpr size_t kEstimatorPositionWindow = 128;
+static constexpr size_t kEstimatorPairCount = 6;
+
+struct RunningStats {
+    uint32_t count = 0;
+    double mean = 0.0;
+    double m2 = 0.0;
+    double minValue = 0.0;
+    double maxValue = 0.0;
+};
+
+struct PairInputStats {
+    uint8_t a = 0;
+    uint8_t b = 0;
+    RunningStats distanceDiffCm;
+};
+
+struct EstimatorStats {
+    uint32_t samplesSent = 0;
+    uint32_t samplesRejected = 0;
+    uint32_t rejectRmse = 0;
+    uint32_t rejectNan = 0;
+    uint32_t rejectInsufficient = 0;
+    uint32_t staleRemoved = 0;
+    uint32_t lastRmseMm = 0;
+    uint8_t minMeasurementCount = UINT8_MAX;
+    uint8_t maxMeasurementCount = 0;
+    RunningStats xCmFull;
+    RunningStats yCmFull;
+    RunningStats zCmFull;
+    RunningStats rmseMmFull;
+    RunningStats measurementCountFull;
+    PairInputStats pairInputs[kEstimatorPairCount];
+    float* x = nullptr;
+    float* y = nullptr;
+    float* z = nullptr;
+    size_t positionIndex = 0;
+    size_t positionCount = 0;
+};
+
+static EstimatorStats* s_estimatorStats = nullptr;
+static SemaphoreHandle_t estimator_stats_mtx = nullptr;
+
+static void updateRunningStats(RunningStats& stats, double value)
+{
+    stats.count++;
+    if (stats.count == 1) {
+        stats.mean = value;
+        stats.m2 = 0.0;
+        stats.minValue = value;
+        stats.maxValue = value;
+        return;
+    }
+
+    if (value < stats.minValue) {
+        stats.minValue = value;
+    }
+    if (value > stats.maxValue) {
+        stats.maxValue = value;
+    }
+
+    const double delta = value - stats.mean;
+    stats.mean += delta / static_cast<double>(stats.count);
+    const double delta2 = value - stats.mean;
+    stats.m2 += delta * delta2;
+}
+
+static double runningStatsStd(const RunningStats& stats)
+{
+    if (stats.count <= 1) {
+        return 0.0;
+    }
+    return std::sqrt(stats.m2 / static_cast<double>(stats.count));
+}
+
+static void appendRunningStatsJson(String& out, const RunningStats& stats, uint8_t decimals)
+{
+    const unsigned int places = static_cast<unsigned int>(decimals);
+    out += "{\"count\":";
+    out += String(stats.count);
+    out += ",\"mean\":";
+    out += String(stats.mean, places);
+    out += ",\"std\":";
+    out += String(runningStatsStd(stats), places);
+    out += ",\"min\":";
+    out += String(stats.count == 0 ? 0.0 : stats.minValue, places);
+    out += ",\"max\":";
+    out += String(stats.count == 0 ? 0.0 : stats.maxValue, places);
+    out += "}";
+}
+
+static int8_t estimatorPairIndex(uint8_t anchorA, uint8_t anchorB)
+{
+    const uint8_t lo = std::min(anchorA, anchorB);
+    const uint8_t hi = std::max(anchorA, anchorB);
+    if (lo == 0 && hi == 1) return 0;
+    if (lo == 0 && hi == 2) return 1;
+    if (lo == 0 && hi == 3) return 2;
+    if (lo == 1 && hi == 2) return 3;
+    if (lo == 1 && hi == 3) return 4;
+    if (lo == 2 && hi == 3) return 5;
+    return -1;
+}
+
+static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
+{
+#ifdef ESP32S3_UWB_BOARD
+    return policy == 1
+        ? TdoaEngineMatchingAlgorithmRandom
+        : TdoaEngineMatchingAlgorithmYoungest;
+#else
+    (void)policy;
+    return TdoaEngineMatchingAlgorithmYoungest;
+#endif
+}
+
+static const char* matcherPolicyName(tdoaEngineMatchingAlgorithm_t policy)
+{
+    switch (policy) {
+        case TdoaEngineMatchingAlgorithmRandom:
+            return "RANDOM";
+        case TdoaEngineMatchingAlgorithmYoungest:
+        default:
+            return "YOUNGEST";
+    }
+}
+
+static uint8_t configuredMatcherPolicy()
+{
+#ifdef ESP32S3_UWB_BOARD
+    return Front::uwbLittleFSFront.GetParams().tdoaMatcherPolicy;
+#else
+    return 0;
+#endif
+}
+
+static void initEstimatorStatsPairs(EstimatorStats& stats)
+{
+    constexpr uint8_t pairs[kEstimatorPairCount][2] = {
+        {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}
+    };
+    for (size_t i = 0; i < kEstimatorPairCount; i++) {
+        stats.pairInputs[i].a = pairs[i][0];
+        stats.pairInputs[i].b = pairs[i][1];
+    }
+}
+
+static void ensureEstimatorStatsMutex()
+{
+    if (s_estimatorStats == nullptr) {
+        s_estimatorStats = new EstimatorStats();
+        if (s_estimatorStats != nullptr) {
+            initEstimatorStatsPairs(*s_estimatorStats);
+        }
+    }
+    if (s_estimatorStats == nullptr) {
+        return;
+    }
+    if (estimator_stats_mtx == nullptr) {
+        estimator_stats_mtx = xSemaphoreCreateMutex();
+    }
+    if (s_estimatorStats->x == nullptr) {
+        s_estimatorStats->x = new float[kEstimatorPositionWindow]();
+    }
+    if (s_estimatorStats->y == nullptr) {
+        s_estimatorStats->y = new float[kEstimatorPositionWindow]();
+    }
+    if (s_estimatorStats->z == nullptr) {
+        s_estimatorStats->z = new float[kEstimatorPositionWindow]();
+    }
+}
+
+static void recordEstimatorInputTdoa(uint8_t anchorA, uint8_t anchorB, float distanceDiffMeters)
+{
+    const int8_t pairIndex = estimatorPairIndex(anchorA, anchorB);
+    if (pairIndex < 0) {
+        return;
+    }
+
+    const float normalizedDiffMeters = anchorA <= anchorB
+        ? distanceDiffMeters
+        : -distanceDiffMeters;
+
+    ensureEstimatorStatsMutex();
+    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(1)) != pdTRUE) {
+        return;
+    }
+    updateRunningStats(s_estimatorStats->pairInputs[pairIndex].distanceDiffCm,
+                       static_cast<double>(normalizedDiffMeters) * 100.0);
+    xSemaphoreGive(estimator_stats_mtx);
+}
+
+static void recordMeasurementCountLocked(size_t measurementCount)
+{
+    const uint8_t clampedCount = measurementCount > UINT8_MAX
+        ? UINT8_MAX
+        : static_cast<uint8_t>(measurementCount);
+    if (clampedCount < s_estimatorStats->minMeasurementCount) {
+        s_estimatorStats->minMeasurementCount = clampedCount;
+    }
+    if (clampedCount > s_estimatorStats->maxMeasurementCount) {
+        s_estimatorStats->maxMeasurementCount = clampedCount;
+    }
+}
+
+static void recordEstimatorAccepted(float x, float y, float z, double rmse, size_t measurementCount)
+{
+    ensureEstimatorStatsMutex();
+    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(2)) != pdTRUE) {
+        return;
+    }
+
+    s_estimatorStats->samplesSent++;
+    s_estimatorStats->lastRmseMm = rmse > 0.0
+        ? static_cast<uint32_t>((rmse * 1000.0) + 0.5)
+        : 0;
+    recordMeasurementCountLocked(measurementCount);
+    updateRunningStats(s_estimatorStats->xCmFull, static_cast<double>(x) * 100.0);
+    updateRunningStats(s_estimatorStats->yCmFull, static_cast<double>(y) * 100.0);
+    updateRunningStats(s_estimatorStats->zCmFull, static_cast<double>(z) * 100.0);
+    updateRunningStats(s_estimatorStats->rmseMmFull, rmse * 1000.0);
+    updateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
+
+    if (s_estimatorStats->x != nullptr && s_estimatorStats->y != nullptr && s_estimatorStats->z != nullptr) {
+        s_estimatorStats->x[s_estimatorStats->positionIndex] = x;
+        s_estimatorStats->y[s_estimatorStats->positionIndex] = y;
+        s_estimatorStats->z[s_estimatorStats->positionIndex] = z;
+        s_estimatorStats->positionIndex = (s_estimatorStats->positionIndex + 1) % kEstimatorPositionWindow;
+        if (s_estimatorStats->positionCount < kEstimatorPositionWindow) {
+            s_estimatorStats->positionCount++;
+        }
+    }
+
+    xSemaphoreGive(estimator_stats_mtx);
+}
+
+static void recordEstimatorRejected(bool rmse, bool nan, bool insufficient, size_t measurementCount)
+{
+    ensureEstimatorStatsMutex();
+    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(2)) != pdTRUE) {
+        return;
+    }
+
+    s_estimatorStats->samplesRejected++;
+    if (rmse) {
+        s_estimatorStats->rejectRmse++;
+    }
+    if (nan) {
+        s_estimatorStats->rejectNan++;
+    }
+    if (insufficient) {
+        s_estimatorStats->rejectInsufficient++;
+    }
+    recordMeasurementCountLocked(measurementCount);
+    updateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
+
+    xSemaphoreGive(estimator_stats_mtx);
+}
+
+static void recordStaleRemoved(size_t count)
+{
+    if (count == 0) {
+        return;
+    }
+
+    ensureEstimatorStatsMutex();
+    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(2)) != pdTRUE) {
+        return;
+    }
+    s_estimatorStats->staleRemoved += count;
+    xSemaphoreGive(estimator_stats_mtx);
+}
+
+static uint32_t metersToCentimeters(float meters)
+{
+    const float centimeters = meters * 100.0f;
+    if (centimeters <= 0.0f) {
+        return 0;
+    }
+    return static_cast<uint32_t>(centimeters + 0.5f);
+}
+
+static String estimatorStatsJson()
+{
+    ensureEstimatorStatsMutex();
+    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return "{\"error\":\"estimator stats unavailable\"}";
+    }
+
+    const bool havePositionStats = s_estimatorStats->x != nullptr
+        && s_estimatorStats->y != nullptr
+        && s_estimatorStats->z != nullptr;
+    const size_t positionCount = havePositionStats ? s_estimatorStats->positionCount : 0;
+    float meanX = 0.0f;
+    float meanY = 0.0f;
+    float meanZ = 0.0f;
+    for (size_t i = 0; i < positionCount; i++) {
+        meanX += s_estimatorStats->x[i];
+        meanY += s_estimatorStats->y[i];
+        meanZ += s_estimatorStats->z[i];
+    }
+    if (positionCount > 0) {
+        const float invCount = 1.0f / static_cast<float>(positionCount);
+        meanX *= invCount;
+        meanY *= invCount;
+        meanZ *= invCount;
+    }
+
+    float sumSqX = 0.0f;
+    float sumSqY = 0.0f;
+    float sumSqZ = 0.0f;
+    float sumSqHorizontal = 0.0f;
+    for (size_t i = 0; i < positionCount; i++) {
+        const float dx = s_estimatorStats->x[i] - meanX;
+        const float dy = s_estimatorStats->y[i] - meanY;
+        const float dz = s_estimatorStats->z[i] - meanZ;
+        sumSqX += dx * dx;
+        sumSqY += dy * dy;
+        sumSqZ += dz * dz;
+        sumSqHorizontal += dx * dx + dy * dy;
+    }
+
+    float stdX = 0.0f;
+    float stdY = 0.0f;
+    float stdZ = 0.0f;
+    float rmsHorizontal = 0.0f;
+    if (positionCount > 1) {
+        const float invCount = 1.0f / static_cast<float>(positionCount);
+        stdX = std::sqrt(sumSqX * invCount);
+        stdY = std::sqrt(sumSqY * invCount);
+        stdZ = std::sqrt(sumSqZ * invCount);
+        rmsHorizontal = std::sqrt(sumSqHorizontal * invCount);
+    }
+
+    const uint32_t samplesSent = s_estimatorStats->samplesSent;
+    const uint32_t samplesRejected = s_estimatorStats->samplesRejected;
+    const uint32_t rejectRmse = s_estimatorStats->rejectRmse;
+    const uint32_t rejectNan = s_estimatorStats->rejectNan;
+    const uint32_t rejectInsufficient = s_estimatorStats->rejectInsufficient;
+    const uint32_t staleRemoved = s_estimatorStats->staleRemoved;
+    const uint32_t lastRmseMm = s_estimatorStats->lastRmseMm;
+    const uint8_t minMeasurementCount = s_estimatorStats->minMeasurementCount;
+    const uint8_t maxMeasurementCount = s_estimatorStats->maxMeasurementCount;
+    const RunningStats xCmFull = s_estimatorStats->xCmFull;
+    const RunningStats yCmFull = s_estimatorStats->yCmFull;
+    const RunningStats zCmFull = s_estimatorStats->zCmFull;
+    const RunningStats rmseMmFull = s_estimatorStats->rmseMmFull;
+    const RunningStats measurementCountFull = s_estimatorStats->measurementCountFull;
+    PairInputStats pairInputs[kEstimatorPairCount];
+    for (size_t i = 0; i < kEstimatorPairCount; i++) {
+        pairInputs[i] = s_estimatorStats->pairInputs[i];
+    }
+    xSemaphoreGive(estimator_stats_mtx);
+
+    String out;
+    out.reserve(1500);
+    out = "{\"sent\":";
+    out += String(samplesSent);
+    out += ",\"rejected\":";
+    out += String(samplesRejected);
+    out += ",\"rejectRmse\":";
+    out += String(rejectRmse);
+    out += ",\"rejectNan\":";
+    out += String(rejectNan);
+    out += ",\"rejectInsufficient\":";
+    out += String(rejectInsufficient);
+    out += ",\"staleRemoved\":";
+    out += String(staleRemoved);
+    out += ",\"lastRmseMm\":";
+    out += String(lastRmseMm);
+    out += ",\"measurementMin\":";
+    out += String(minMeasurementCount == UINT8_MAX ? 0 : minMeasurementCount);
+    out += ",\"measurementMax\":";
+    out += String(maxMeasurementCount);
+    out += ",\"positionWindow\":";
+    out += String(static_cast<unsigned int>(positionCount));
+    out += ",\"meanCm\":{\"x\":";
+    out += String(meanX * 100.0f, 1);
+    out += ",\"y\":";
+    out += String(meanY * 100.0f, 1);
+    out += ",\"z\":";
+    out += String(meanZ * 100.0f, 1);
+    out += "},\"stdCm\":{\"x\":";
+    out += String(stdX * 100.0f, 1);
+    out += ",\"y\":";
+    out += String(stdY * 100.0f, 1);
+    out += ",\"z\":";
+    out += String(stdZ * 100.0f, 1);
+    out += "},\"horizontalRmsCm\":";
+    out += String(metersToCentimeters(rmsHorizontal));
+    out += ",\"fullWindow\":{\"count\":";
+    out += String(xCmFull.count);
+    out += ",\"meanCm\":{\"x\":";
+    out += String(xCmFull.mean, 2);
+    out += ",\"y\":";
+    out += String(yCmFull.mean, 2);
+    out += ",\"z\":";
+    out += String(zCmFull.mean, 2);
+    out += "},\"stdCm\":{\"x\":";
+    out += String(runningStatsStd(xCmFull), 2);
+    out += ",\"y\":";
+    out += String(runningStatsStd(yCmFull), 2);
+    out += ",\"z\":";
+    out += String(runningStatsStd(zCmFull), 2);
+    out += "},\"minCm\":{\"x\":";
+    out += String(xCmFull.count == 0 ? 0.0 : xCmFull.minValue, 2);
+    out += ",\"y\":";
+    out += String(yCmFull.count == 0 ? 0.0 : yCmFull.minValue, 2);
+    out += ",\"z\":";
+    out += String(zCmFull.count == 0 ? 0.0 : zCmFull.minValue, 2);
+    out += "},\"maxCm\":{\"x\":";
+    out += String(xCmFull.count == 0 ? 0.0 : xCmFull.maxValue, 2);
+    out += ",\"y\":";
+    out += String(yCmFull.count == 0 ? 0.0 : yCmFull.maxValue, 2);
+    out += ",\"z\":";
+    out += String(zCmFull.count == 0 ? 0.0 : zCmFull.maxValue, 2);
+    out += "},\"horizontalRmsCm\":";
+    const double fullHorizontalRms = std::sqrt((xCmFull.count > 1 ? xCmFull.m2 / static_cast<double>(xCmFull.count) : 0.0)
+                                             + (yCmFull.count > 1 ? yCmFull.m2 / static_cast<double>(yCmFull.count) : 0.0));
+    out += String(fullHorizontalRms, 2);
+    out += "},\"rmseMm\":";
+    appendRunningStatsJson(out, rmseMmFull, 2);
+    out += ",\"measurementCount\":";
+    appendRunningStatsJson(out, measurementCountFull, 2);
+    out += ",\"tdoaPairs\":[";
+    for (size_t i = 0; i < kEstimatorPairCount; i++) {
+        if (i > 0) out += ",";
+        out += "{\"pair\":\"";
+        out += String(static_cast<unsigned int>(pairInputs[i].a));
+        out += String(static_cast<unsigned int>(pairInputs[i].b));
+        out += "\",\"diffCm\":";
+        appendRunningStatsJson(out, pairInputs[i].distanceDiffCm, 2);
+        out += "}";
+    }
+    out += "]";
+    out += "}";
+    return out;
+}
+
+static void resetEstimatorStats()
+{
+    ensureEstimatorStatsMutex();
+    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+
+    float* x = s_estimatorStats->x;
+    float* y = s_estimatorStats->y;
+    float* z = s_estimatorStats->z;
+    *s_estimatorStats = EstimatorStats();
+    initEstimatorStatsPairs(*s_estimatorStats);
+    s_estimatorStats->x = x;
+    s_estimatorStats->y = y;
+    s_estimatorStats->z = z;
+    if (x != nullptr) {
+        std::fill(x, x + kEstimatorPositionWindow, 0.0f);
+    }
+    if (y != nullptr) {
+        std::fill(y, y + kEstimatorPositionWindow, 0.0f);
+    }
+    if (z != nullptr) {
+        std::fill(z, z + kEstimatorPositionWindow, 0.0f);
+    }
+
+    xSemaphoreGive(estimator_stats_mtx);
+}
+
+static String anchorModelStatusWithEstimatorJson()
+{
+    String out = s_anchorModel.StatusJson();
+    if (out.endsWith("}")) {
+        out.remove(out.length() - 1);
+        out += ",\"matcherPolicy\":\"";
+        out += matcherPolicyName(matcherPolicyFromParam(configuredMatcherPolicy()));
+        out += "\"";
+        out += ",\"estimator\":";
+        out += estimatorStatsJson();
+        out += "}";
+    }
+    return out;
+}
 
 #if TDOA_STATS_LOGGING == ENABLE
 static uint32_t stats_samples_sent = 0;
@@ -220,6 +707,7 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     // Using a lambda to attach the class method as an interrupt handler
     LOG_INFO("--- UWB Tag TDOA Mode ---");
     vTaskDelay(pdMS_TO_TICKS(300));
+    ensureEstimatorStatsMutex();
 
     configured_anchor_ids.fill(false);
 
@@ -299,8 +787,14 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     uint32_t dev_id = dwGetDeviceId(&m_Device);
     LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
 
+#ifdef ESP32S3_UWB_BOARD
+    ApplyMatcherPolicy(uwbParams.tdoaMatcherPolicy);
+#endif
+
     // Init the tdoa anchor algorithm
     uwbTdoa2TagAlgorithm.init(&m_Device, estimatorCallback);
+    s_anchorModel.Configure(uwbParams);
+    uwbTdoa2TagSetTofCallback(anchorModelTofCallback);
 
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     // Initialize dynamic anchor positioning if enabled
@@ -491,6 +985,8 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
     }
     xSemaphoreGive(measurements_mtx);
 
+    recordEstimatorInputTdoa(tdoa->anchorIdA, tdoa->anchorIdB, tdoa->distanceDiff);
+
     // Notify the estimator task once we have enough fresh pairs and the
     // debounce window has elapsed. Prevents per-callback wake storms when
     // UWB frames arrive in tight bursts.
@@ -508,6 +1004,114 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
 // Watchdog wake interval — keeps the task responsive when measurements stop
 // arriving (so dynamic-anchor reinit checks and stats dumps still run).
 static constexpr uint32_t kEstimatorWatchdogMs = 50;
+
+static bool anchorModelTofCallback(uint8_t fromAnchor,
+                                   uint8_t toAnchor,
+                                   uint16_t rawDistanceTimestampUnits,
+                                   uint16_t fromAntennaDelay,
+                                   uint16_t toAntennaDelay,
+                                   uint16_t* outDistanceTimestampUnits)
+{
+    const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
+    return s_anchorModel.ProcessInterAnchorTof(fromAnchor,
+                                               toAnchor,
+                                               rawDistanceTimestampUnits,
+                                               fromAntennaDelay,
+                                               toAntennaDelay,
+                                               outDistanceTimestampUnits,
+                                               uwbParams);
+}
+
+void UWBTagTDoA::ResetAnchorModel()
+{
+    s_anchorModel.Reset();
+}
+
+bool UWBTagTDoA::StartAnchorModelCollection()
+{
+    return s_anchorModel.StartCollection(Front::uwbLittleFSFront.GetParams());
+}
+
+bool UWBTagTDoA::LockAnchorModel()
+{
+    return s_anchorModel.Lock(Front::uwbLittleFSFront.GetParams());
+}
+
+String UWBTagTDoA::GetAnchorModelStatusJson()
+{
+    return anchorModelStatusWithEstimatorJson();
+}
+
+String UWBTagTDoA::GetAnchorModelCollectStatusJson()
+{
+    return s_anchorModel.CollectStatusJson();
+}
+
+String UWBTagTDoA::ExportAnchorModelJson()
+{
+    return s_anchorModel.ExportJson();
+}
+
+String UWBTagTDoA::GetEstimatorStatsJson()
+{
+    return estimatorStatsJson();
+}
+
+void UWBTagTDoA::ResetEstimatorStats()
+{
+    resetEstimatorStats();
+}
+
+#ifdef ESP32S3_UWB_BOARD
+void UWBTagTDoA::ApplyMatcherPolicy(uint8_t policy)
+{
+    const tdoaEngineMatchingAlgorithm_t matcherPolicy = matcherPolicyFromParam(policy);
+    uwbTdoa2TagSetMatchingAlgorithm(matcherPolicy);
+    LOG_INFO("TDoA matcher policy: %s", matcherPolicyName(matcherPolicy));
+}
+#endif
+
+namespace TDoAAnchorModelCommands {
+void Reset()
+{
+    s_anchorModel.Reset();
+}
+
+bool StartCollection()
+{
+    return s_anchorModel.StartCollection(Front::uwbLittleFSFront.GetParams());
+}
+
+bool Lock()
+{
+    return s_anchorModel.Lock(Front::uwbLittleFSFront.GetParams());
+}
+
+String StatusJson()
+{
+    return anchorModelStatusWithEstimatorJson();
+}
+
+String CollectStatusJson()
+{
+    return s_anchorModel.CollectStatusJson();
+}
+
+String ExportJson()
+{
+    return s_anchorModel.ExportJson();
+}
+
+String EstimatorStatsJson()
+{
+    return estimatorStatsJson();
+}
+
+void ResetEstimatorStats()
+{
+    resetEstimatorStats();
+}
+}
 
 static void estimatorProcess() {
     static tdoa_estimator::PosMatrix anchors_left;
@@ -561,6 +1165,7 @@ static void estimatorProcess() {
     // low TDMA rates.
     bool have_enough = false;
     size_t copy_count = 0;
+    size_t measurement_count_for_stats = 0;
     PairSlot snapshot[kNumPairs];
 
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -584,8 +1189,10 @@ static void estimatorProcess() {
             }
             ++usable_fresh;
         }
+        recordStaleRemoved(expired);
 
         have_enough = (usable_fresh >= MIN_MEASUREMENTS);
+        measurement_count_for_stats = usable_fresh;
 
         // Pass 2: only consume if we'll solve. Otherwise leave fresh slots
         // intact so they accumulate across watchdog wakes.
@@ -601,6 +1208,7 @@ static void estimatorProcess() {
             if (consumed + expired > 0) {
                 fresh_pair_count.fetch_sub(consumed + expired, std::memory_order_relaxed);
             }
+            measurement_count_for_stats = copy_count;
         } else if (expired > 0) {
             fresh_pair_count.fetch_sub(expired, std::memory_order_relaxed);
         }
@@ -664,6 +1272,7 @@ static void estimatorProcess() {
     // SendSample writes to Serial via MAVLink — decoupled from measurement writes.
 
     if (!have_enough) {
+        recordEstimatorRejected(false, false, true, measurement_count_for_stats);
 #if TDOA_STATS_LOGGING == ENABLE
         stats_samples_rejected++;
         stats_reject_insufficient++;
@@ -785,6 +1394,11 @@ static void estimatorProcess() {
         // --- Send Data to Application ---
         bool has_nan = current_estimate_3d.hasNaN();
         if (is_valid_estimate && !has_nan) { // Only send if the estimate is valid
+            recordEstimatorAccepted(current_estimate_3d(0),
+                                    current_estimate_3d(1),
+                                    current_estimate_3d(2),
+                                    solution_rmse,
+                                    copy_count);
             App::SendSample(current_estimate_3d(0), current_estimate_3d(1), current_estimate_3d(2), position_covariance);
 
             // Update the persistent state for the next iteration (Warm Start)
@@ -794,6 +1408,7 @@ static void estimatorProcess() {
             stats_samples_sent++;
 #endif
         } else {
+            recordEstimatorRejected(!is_valid_estimate && !has_nan, has_nan, false, copy_count);
 #if TDOA_STATS_LOGGING == ENABLE
             stats_samples_rejected++;
             // Track rejection reason

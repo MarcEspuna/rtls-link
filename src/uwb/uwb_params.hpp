@@ -102,6 +102,9 @@ struct UWBParams {
     // NOTE: 0 values keep legacy behavior (8 slots, ~2ms slot length).
     uint8_t tdoaSlotCount = 0;          // Active TDMA slots per frame (2-8), 0=legacy (8)
     uint16_t tdoaSlotDurationUs = 0;    // Slot duration in microseconds, 0=legacy (~2ms)
+#ifdef ESP32S3_UWB_BOARD
+    uint8_t tdoaMatcherPolicy = 0;      // 0=YOUNGEST, 1=RANDOM/rotating eligible candidate
+#endif
 
     // Dynamic anchor positioning (TDoA tags)
     uint8_t dynamicAnchorPosEnabled = 0;  // 0=static (use configured positions), 1=dynamic (calculate from inter-anchor distances)
@@ -109,6 +112,16 @@ struct UWBParams {
     float anchorHeight = 0.0f;            // Height for Z calculation (NED: Z = -height)
     uint8_t anchorPosLocked = 0;          // Bitmask: bit N = anchor N position locked
     uint16_t distanceAvgSamples = 50;     // Number of samples to average before calculating (default: 50)
+
+    // TDoA anchor model correction (TDoA tags)
+    uint8_t tdoaAnchorModelMode = 0;              // 0=OFF, 1=MONITOR, 2=LOCKED_ANCHOR_MODEL
+    uint8_t tdoaAnchorModelStartupCollect = 0;    // 0=manual, 1=collect/lock after startup ranging begins
+    uint32_t tdoaAnchorModelCollectWindowMs = 10000;
+    uint16_t tdoaAnchorModelMinSamplesPerPair = 20;
+    uint8_t tdoaAnchorModelDomain = 0;            // 0=RAW_EFFECTIVE, 1=PROPAGATION
+    uint16_t tdoaAnchorModelHealthThresholdTicks = 250;
+    uint16_t tdoaAnchorModelHealthWindow = 50;
+    uint8_t tdoaAnchorModelHealthQuorum = 5;
 
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 6;
