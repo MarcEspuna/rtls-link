@@ -14,11 +14,8 @@
 
 #include <atomic>
 #include <algorithm>
-#include <iostream>
 #include <optional>
 #include <array>
-
-#include <etl/set.h>
 
 #include "tdoa_newton_raphson.hpp"
 
@@ -107,16 +104,56 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa);
 Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
 static void estimatorProcess();
 
-static etl::vector<tdoa_estimator::TDoAMeasurement, 64> measurements;
+// 8 anchors → 8C2 = 28 unique unordered pairs. Each pair has its own slot,
+// so the producer never needs to scan, and stale removal becomes a per-slot
+// timestamp check at consume time.
+static constexpr uint8_t kNumAnchors = 8;
+static constexpr uint8_t kNumPairs = (kNumAnchors * (kNumAnchors - 1)) / 2;
+
+// Pair-index lookup: index for canonical pair (a < b).
+//   pair_index(a, b) = a*(2*kNumAnchors - a - 3)/2 + (b - 1)
+// Compile-time table avoids the arithmetic at runtime and keeps the producer
+// path branch-free.
+static constexpr auto kPairIndexTable = []() {
+    etl::array<etl::array<uint8_t, kNumAnchors>, kNumAnchors> t{};
+    uint8_t idx = 0;
+    for (uint8_t a = 0; a < kNumAnchors; ++a) {
+        for (uint8_t b = a + 1; b < kNumAnchors; ++b) {
+            t[a][b] = idx;
+            t[b][a] = idx;  // symmetric for reverse-order callbacks
+            ++idx;
+        }
+    }
+    return t;
+}();
+
+struct PairSlot {
+    float tdoa;             // canonical: distance(a) - distance(b) with a < b
+    uint64_t timestamp_us;  // esp_timer_get_time() when last updated
+    uint8_t anchor_a;       // canonical (smaller) anchor id
+    uint8_t anchor_b;       // canonical (larger) anchor id
+    bool fresh;             // true if updated since last consume
+};
+
+static etl::array<PairSlot, kNumPairs> pair_slots = {};
 static SemaphoreHandle_t measurements_mtx = xSemaphoreCreateMutex();
 static etl::array<UWBAnchorParam, 8> anchor_positions;
 static etl::array<bool, 8> configured_anchor_ids = {};
 
-static constexpr uint32_t kNumberMeasurements = 64;     // Preferably to be multiple of the number of anchors
+// Stale threshold for TDoA pair measurements (350ms — one frame at min TDMA rate).
+static constexpr uint64_t kStaleThresholdUs = 350000;
 
-// Atomic counter for new measurements since last estimation (lock-free freshness tracking).
-// Incremented in estimatorCallback (outside mutex), checked/reset in estimatorProcess (before mutex).
-static std::atomic<uint32_t> new_measurement_count{0};
+// Estimator task handle for direct notification from producer.
+static TaskHandle_t s_estimator_task_handle = nullptr;
+
+// Lock-free counter of fresh-pair count maintained by producer and reader.
+// Producer increments only when it transitions a stale slot to fresh. Reader
+// decrements as it consumes. Used to gate task notifications without holding
+// the mutex.
+static std::atomic<uint32_t> fresh_pair_count{0};
+
+// Last-notify timestamp for debouncing producer-side wakeups.
+static std::atomic<uint32_t> last_notify_ms{0};
 
 static volatile bool isr_flag = false;
 
@@ -129,9 +166,10 @@ static uint32_t stats_samples_rejected = 0;
 static uint32_t stats_reject_rmse = 0;          // Rejected due to RMSE > threshold
 static uint32_t stats_reject_nan = 0;           // Rejected due to NaN in estimate
 static uint32_t stats_reject_insufficient = 0;  // Rejected due to < MIN_MEASUREMENTS
-static uint32_t stats_stale_removed = 0;        // Number of stale measurements removed
-static uint32_t stats_min_meas_count = UINT32_MAX;  // Min measurements seen this period
-static uint32_t stats_max_meas_count = 0;       // Max measurements seen this period
+static uint32_t stats_stale_removed = 0;        // Number of stale slot expirations
+static uint32_t stats_min_meas_count = UINT32_MAX;
+static uint32_t stats_max_meas_count = 0;
+static std::atomic<uint32_t> stats_producer_dropped{0};  // producer mutex timeouts
 static uint64_t stats_last_log_time_ms = 0;
 static constexpr uint64_t STATS_LOG_INTERVAL_MS = 1000;
 #endif
@@ -155,10 +193,14 @@ static constexpr uint32_t DYNAMIC_POS_UPDATE_INTERVAL_MS = 200;
 static constexpr uint32_t DYNAMIC_REINIT_HOLDOFF_MS = 300;
 #endif
 
-static StaticTaskHolder<etl::delegate<void()>, 16384, TaskType::PERIODIC> pos_estimator_task = {
+// Event-driven (continuous) task — body blocks on xTaskNotifyTake with a
+// watchdog timeout, so cadence is driven by measurement arrivals not polling.
+// Priority 2 sits strictly above the App/WiFi/Console tasks (all priority 1)
+// that produce its input, so a solve isn't preempted by lower-priority work.
+static StaticTaskHolder<etl::delegate<void()>, 16384, TaskType::CONTINUOUS> pos_estimator_task = {
   "PosEstimatorTask",
-  200,              // 200Hz polling (5ms period, divides 1000 evenly so no integer truncation)
-  1,                // Priority
+  0,                // unused for continuous tasks
+  2,                // Priority (above App task at 1)
   etl::delegate<void()>::create<&estimatorProcess>(),
     {},
     {}
@@ -282,13 +324,13 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     attachInterrupt(digitalPinToInterrupt(uwb_config.pins.int_pin),
         tagInterruptISR, RISING);
 
-    measurements.reserve(64);
-
-    // Any on event needed? 
+    // Any on event needed?
     uwbTdoa2TagAlgorithm.onEvent(&m_Device, uwbEvent_t::eventTimeout);
 
-    // Start the pos estimator task
+    // Start the pos estimator task and capture its handle for direct
+    // notifications from the producer (estimatorCallback).
     Scheduler::scheduler.CreateStaticTask(pos_estimator_task);
+    s_estimator_task_handle = pos_estimator_task.handle;
 }
 
 
@@ -315,19 +357,21 @@ void UWBTagTDoA::Update()
 
 uint8_t UWBTagTDoA::GetAnchorsSeenCount()
 {
-    // Try to acquire mutex with small timeout (10ms) - non-blocking would often fail
-    // since the estimator holds the mutex frequently
+    // Walk the pair-indexed slots, mark which anchors appear in any non-stale
+    // slot. With kNumAnchors=8 a uint8_t bitmask is sufficient and lets us
+    // skip the etl::set allocation entirely.
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
-        // Collect unique anchor IDs using etl::set for arbitrary uint8_t IDs
-        etl::set<uint8_t, 16> seen_anchors;  // Max 16 unique anchors expected
-        for (const auto& m : measurements) {
-            seen_anchors.insert(static_cast<uint8_t>(m.anchor_a));
-            seen_anchors.insert(static_cast<uint8_t>(m.anchor_b));
+        const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+        uint8_t seen_mask = 0;
+        for (const auto& slot : pair_slots) {
+            if (!slot.fresh) continue;
+            if ((now_us - slot.timestamp_us) > kStaleThresholdUs) continue;
+            seen_mask |= (1u << slot.anchor_a);
+            seen_mask |= (1u << slot.anchor_b);
         }
-        cached_anchors_seen = static_cast<uint8_t>(seen_anchors.size());
+        cached_anchors_seen = static_cast<uint8_t>(__builtin_popcount(seen_mask));
         xSemaphoreGive(measurements_mtx);
     }
-    // Return cached value (either fresh or from last successful read)
     return cached_anchors_seen;
 }
 
@@ -381,59 +425,101 @@ static FAST_CODE void rxFailedCallback(dwDevice_t *dev)
     dw_data->interrupt_flags |= libDw1000::RX_FAILED;
 }
 
+// Constants for producer notification debouncing and consumer wake.
+static constexpr uint32_t kProducerMutexTimeoutMs = 2;
+static constexpr uint32_t kNotifyDebounceMs = 5;
+static constexpr size_t kMinMeasurementsForNotify = 4;
+
 static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
 {
     if (tdoa == nullptr) {
         return;
     }
-
-    if (tdoa->anchorIdA >= anchor_positions.size()
-        || tdoa->anchorIdB >= anchor_positions.size()
+    if (tdoa->anchorIdA >= kNumAnchors
+        || tdoa->anchorIdB >= kNumAnchors
+        || tdoa->anchorIdA == tdoa->anchorIdB
         || !configured_anchor_ids[tdoa->anchorIdA]
         || !configured_anchor_ids[tdoa->anchorIdB]) {
         return;
     }
 
-    if (xSemaphoreTake(measurements_mtx, portMAX_DELAY) == pdTRUE) {
-        auto it = std::find_if(measurements.begin(), measurements.end(),
-            [&tdoa](const tdoa_estimator::TDoAMeasurement& m) {
-                return (m.anchor_a == tdoa->anchorIdA && m.anchor_b == tdoa->anchorIdB) ||
-                        (m.anchor_a == tdoa->anchorIdB && m.anchor_b == tdoa->anchorIdA);
-            });
+    // Canonicalize: smaller id is "a", larger is "b". Sign of tdoa flips if
+    // the callback's order is reversed relative to canonical.
+    uint8_t a = tdoa->anchorIdA;
+    uint8_t b = tdoa->anchorIdB;
+    float canonical_tdoa = tdoa->distanceDiff;
+    if (a > b) {
+        std::swap(a, b);
+        canonical_tdoa = -canonical_tdoa;
+    }
+    const uint8_t idx = kPairIndexTable[a][b];
+    const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
 
-        if (it != measurements.end()) {
-            // Use raw measurement - ArduPilot's EKF handles filtering
-            float distanceDiff = tdoa->distanceDiff;
-            if (tdoa->anchorIdA == it->anchor_b) {  // If it's a reverse measurement, change sign
-                distanceDiff = -distanceDiff;
-            }
-
-            it->tdoa = distanceDiff;
-            it->timestamp = static_cast<uint64_t>(esp_timer_get_time());
-        } else {
-            measurements.push_back({tdoa->anchorIdA, tdoa->anchorIdB, tdoa->distanceDiff, static_cast<uint64_t>(esp_timer_get_time())});
-        }
-        xSemaphoreGive(measurements_mtx);
+    // Bounded mutex wait — if the consumer is mid-solve we drop this sample
+    // rather than backpressure the UWB stack. One TDoA frame missing is
+    // invisible compared to the cost of stalling the producer.
+    if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(kProducerMutexTimeoutMs)) != pdTRUE) {
+#if TDOA_STATS_LOGGING == ENABLE
+        stats_producer_dropped.fetch_add(1, std::memory_order_relaxed);
+#endif
+        return;
     }
 
-    // Track new measurement arrival (lock-free, outside mutex).
-    // The periodic estimator task checks this counter to skip cycles with no new data.
-    new_measurement_count.fetch_add(1, std::memory_order_relaxed);
+    PairSlot& slot = pair_slots[idx];
+    const bool was_fresh = slot.fresh;
+    slot.tdoa = canonical_tdoa;
+    slot.timestamp_us = now_us;
+    slot.anchor_a = a;
+    slot.anchor_b = b;
+    slot.fresh = true;
+    xSemaphoreGive(measurements_mtx);
+
+    // Update fresh-pair count outside the mutex — only changes on transition.
+    uint32_t fresh = was_fresh
+        ? fresh_pair_count.load(std::memory_order_relaxed)
+        : fresh_pair_count.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    // Notify the estimator task once we have enough fresh pairs and the
+    // debounce window has elapsed. Prevents per-callback wake storms when
+    // UWB frames arrive in tight bursts.
+    if (fresh >= kMinMeasurementsForNotify && s_estimator_task_handle != nullptr) {
+        uint32_t now_ms = millis();
+        uint32_t last = last_notify_ms.load(std::memory_order_relaxed);
+        if ((now_ms - last) >= kNotifyDebounceMs
+            && last_notify_ms.compare_exchange_strong(last, now_ms,
+                                                     std::memory_order_relaxed)) {
+            xTaskNotifyGive(s_estimator_task_handle);
+        }
+    }
 }
+
+// Watchdog wake interval — keeps the task responsive when measurements stop
+// arriving (so dynamic-anchor reinit checks and stats dumps still run).
+static constexpr uint32_t kEstimatorWatchdogMs = 50;
 
 static void estimatorProcess() {
     static tdoa_estimator::PosMatrix anchors_left;
     static tdoa_estimator::PosMatrix anchors_right;
     static tdoa_estimator::DynVector tdoas;
-    static tdoa_estimator::DynVector last_position(3); // Stores the full 3D position state
+    static tdoa_estimator::PosVector3D last_position = tdoa_estimator::PosVector3D::Zero();
     static bool first_estimation = true;
-    static uint32_t anchor_id_range_sample = 0;
+    static bool last_use_2d = true;
+    static constexpr tdoa_estimator::Scalar ASSUMED_TAG_Z = 0.0f;
+    static constexpr int NUM_ITERATIONS = 5;
+    static constexpr size_t MIN_MEASUREMENTS = kMinMeasurementsForNotify;
 
-    // Configuration Flag: Set to true for 2D, false for 3D
-    static constexpr bool USE_2D_ESTIMATOR = true;
-    static constexpr double ASSUMED_TAG_Z = 0.0; // Used for initial Z in 2D mode
-    static constexpr int NUM_ITERATIONS = 10;
-    static constexpr size_t MIN_MEASUREMENTS = 4; // Require 4 measurements for robustness in both modes
+    // Continuous task — block on notification until producer wakes us, or
+    // until the watchdog timeout elapses (so dynamic-anchor / stats
+    // bookkeeping still runs during quiet periods).
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kEstimatorWatchdogMs));
+
+    const bool USE_2D_ESTIMATOR = (Front::uwbLittleFSFront.GetParams().use2DEstimator != 0);
+    if (USE_2D_ESTIMATOR != last_use_2d) {
+        first_estimation = true;
+        last_use_2d = USE_2D_ESTIMATOR;
+        LOG_INFO("Estimator mode changed to %s - resetting warm-start",
+                 USE_2D_ESTIMATOR ? "2D" : "3D");
+    }
 
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     // Brief holdoff right after dynamic-anchor takeover to avoid mixing old/new geometry.
@@ -446,8 +532,6 @@ static void estimatorProcess() {
         s_dynamicTransitionHoldoffUntilMs.store(0, std::memory_order_relaxed);
     }
 
-    // When dynamic anchors become available, reset the warm-start state once so
-    // the first guess matches the measured anchor geometry instead of static config.
     if (UWBTagTDoA::IsDynamicPositioningEnabled()
         && s_dynamicEstimatorReinitRequested.exchange(false, std::memory_order_relaxed)) {
         first_estimation = true;
@@ -455,120 +539,97 @@ static void estimatorProcess() {
     }
 #endif
 
-    // Periodic scheduling (200Hz) with lock-free freshness gate.
-    // The periodic scheduler provides stable timing via vTaskDelayUntil, while
-    // the atomic counter ensures we only run Newton-Raphson when new TDoA
-    // measurements have arrived since the last estimation. This avoids
-    // redundant computation without inheriting UWB frame timing jitter.
-    static constexpr uint64_t STALE_THRESHOLD_US = 350000; // 350ms stale timeout (microseconds)
-
-    // Freshness gate: skip this cycle if no new measurements arrived (lock-free check)
-    uint32_t new_count = new_measurement_count.load(std::memory_order_relaxed);
-    if (new_count == 0) {
-        return;  // No new data since last estimation, skip this cycle
-    }
-    new_measurement_count.store(0, std::memory_order_relaxed);
-
-    // === MUTEX SCOPE: Copy shared measurement data into local matrices ===
-    // The mutex is released immediately after the data copy so that NR computation
-    // and Serial output (SendSample) never block estimatorCallback() from writing
-    // new measurements. This reduces mutex hold time from ~3-5ms to ~0.5ms.
+    // Snapshot fresh slots into local matrices under the mutex. Stale slots
+    // are cleared in place (their fresh flag goes false) so they don't get
+    // copied next cycle. Mutex hold is bounded by O(28) iterations + memcpy.
     bool have_enough = false;
+    size_t copy_count = 0;
+    PairSlot snapshot[kNumPairs];
 
-    if (xSemaphoreTake(measurements_mtx, portMAX_DELAY) == pdTRUE) {
-        uint64_t current_time_us = static_cast<uint64_t>(esp_timer_get_time());
+    if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) == pdTRUE) {
+        const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+        uint32_t consumed_fresh = 0;
+        for (uint8_t i = 0; i < kNumPairs; ++i) {
+            PairSlot& slot = pair_slots[i];
+            if (!slot.fresh) {
+                continue;
+            }
+            if ((now_us - slot.timestamp_us) > kStaleThresholdUs) {
+                slot.fresh = false;
+                ++consumed_fresh;
+#if TDOA_STATS_LOGGING == ENABLE
+                stats_stale_removed++;
+#endif
+                continue;
+            }
+            // Defensive: anchors may be deconfigured between callback and now.
+            if (!configured_anchor_ids[slot.anchor_a]
+                || !configured_anchor_ids[slot.anchor_b]) {
+                slot.fresh = false;
+                ++consumed_fresh;
+                continue;
+            }
+            snapshot[copy_count++] = slot;
+            slot.fresh = false;
+            ++consumed_fresh;
+        }
+        if (consumed_fresh > 0) {
+            fresh_pair_count.fetch_sub(consumed_fresh, std::memory_order_relaxed);
+        }
+        xSemaphoreGive(measurements_mtx);
+    } else {
+        // Couldn't grab the mutex — try again on next wake.
+        return;
+    }
 
 #if TDOA_STATS_LOGGING == ENABLE
-        size_t meas_count_before = measurements.size();
+    if (copy_count < stats_min_meas_count) stats_min_meas_count = copy_count;
+    if (copy_count > stats_max_meas_count) stats_max_meas_count = copy_count;
 #endif
 
-        // Remove stale measurements (older than 350ms)
-        measurements.erase(
-            std::remove_if(measurements.begin(), measurements.end(),
-                [current_time_us](const tdoa_estimator::TDoAMeasurement& m) {
-                    return (current_time_us - m.timestamp) > STALE_THRESHOLD_US;
-                }),
-            measurements.end()
-        );
+    have_enough = (copy_count >= MIN_MEASUREMENTS);
 
-        // Remove measurements that reference anchors not configured in local params.
-        measurements.erase(
-            std::remove_if(measurements.begin(), measurements.end(),
-                [](const tdoa_estimator::TDoAMeasurement& m) {
-                    return m.anchor_a < 0
-                        || m.anchor_b < 0
-                        || m.anchor_a >= static_cast<int>(anchor_positions.size())
-                        || m.anchor_b >= static_cast<int>(anchor_positions.size())
-                        || !configured_anchor_ids[static_cast<size_t>(m.anchor_a)]
-                        || !configured_anchor_ids[static_cast<size_t>(m.anchor_b)];
-                }),
-            measurements.end()
-        );
+    if (have_enough) {
+        anchors_left.resize(copy_count, 3);
+        anchors_right.resize(copy_count, 3);
+        tdoas.resize(copy_count);
 
-#if TDOA_STATS_LOGGING == ENABLE
-        size_t meas_count_after = measurements.size();
-        stats_stale_removed += (meas_count_before - meas_count_after);
-        // Track min/max measurement counts
-        if (meas_count_after < stats_min_meas_count) stats_min_meas_count = meas_count_after;
-        if (meas_count_after > stats_max_meas_count) stats_max_meas_count = meas_count_after;
-#endif
-
-        have_enough = (measurements.size() >= MIN_MEASUREMENTS);
-
-        if (have_enough) {
-            // Resize matrices based on number of measurements
-            anchors_left.resize(measurements.size(), 3);
-            anchors_right.resize(measurements.size(), 3);
-            tdoas.resize(measurements.size());
-
-            // Fill matrices with current measurements
-            for (size_t i = 0; i < measurements.size(); ++i) {
-                const auto& meas = measurements[i];
-
-                // Get anchor positions from the configuration lookup table
-                anchors_left.row(i) << anchor_positions[meas.anchor_a].x,
-                                        anchor_positions[meas.anchor_a].y,
-                                        anchor_positions[meas.anchor_a].z;
-
-                anchors_right.row(i) << anchor_positions[meas.anchor_b].x,
-                                        anchor_positions[meas.anchor_b].y,
-                                        anchor_positions[meas.anchor_b].z;
-
-                // Newton-Raphson expects Left - Right difference.
-                // Measurement tdoa = distanceDiff = Right - Left (from tdoaMeasurement_t definition)
-                tdoas(i) = -meas.tdoa;
-            }
-
-            // Initial Guess Calculation (only on first valid estimation)
-            if (first_estimation) {
-                tdoa_estimator::DynVector avg_pos = tdoa_estimator::DynVector::Zero(3);
-                 for(size_t i = 0; i < measurements.size(); ++i) {
-                    avg_pos += anchors_left.row(i).transpose();
-                    avg_pos += anchors_right.row(i).transpose();
-                }
-                avg_pos /= (2.0 * measurements.size());
-                last_position = avg_pos; // Use average X, Y, Z
-
-                if (USE_2D_ESTIMATOR) { // If starting in 2D mode, override Z
-                    last_position(2) = ASSUMED_TAG_Z;
-                }
-                first_estimation = false;
-                const char* anchor_source = "configured";
-#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
-                if (UWBTagTDoA::IsDynamicPositioningEnabled()) {
-                    if (s_dynamicPositionsReadyForEstimator.load(std::memory_order_relaxed)) {
-                        anchor_source = "dynamic";
-                    } else {
-                        anchor_source = "configured (dynamic pending)";
-                    }
-                }
-#endif
-                LOG_INFO("Position estimator initialized at [%.2f, %.2f, %.2f] using %s anchors",
-                         last_position(0), last_position(1), last_position(2), anchor_source);
-            }
+        for (size_t i = 0; i < copy_count; ++i) {
+            const PairSlot& s = snapshot[i];
+            anchors_left.row(i) << static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_a].x),
+                                   static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_a].y),
+                                   static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_a].z);
+            anchors_right.row(i) << static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_b].x),
+                                    static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_b].y),
+                                    static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_b].z);
+            // Slot stores canonical tdoa = d(b) - d(a) (matching tdoaMeasurement_t's
+            // "right - left" convention with right=b, left=a). The solver's
+            // residual is d(L) - d(R) - tdoas(i) with L=a, R=b, so flip sign.
+            tdoas(i) = -static_cast<tdoa_estimator::Scalar>(s.tdoa);
         }
 
-        xSemaphoreGive(measurements_mtx);
+        if (first_estimation) {
+            tdoa_estimator::PosVector3D avg_pos = tdoa_estimator::PosVector3D::Zero();
+            for (size_t i = 0; i < copy_count; ++i) {
+                avg_pos += anchors_left.row(i).transpose();
+                avg_pos += anchors_right.row(i).transpose();
+            }
+            avg_pos /= static_cast<tdoa_estimator::Scalar>(2 * copy_count);
+            last_position = avg_pos;
+            if (USE_2D_ESTIMATOR) {
+                last_position(2) = ASSUMED_TAG_Z;
+            }
+            first_estimation = false;
+            const char* anchor_source = "configured";
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+            if (UWBTagTDoA::IsDynamicPositioningEnabled()) {
+                anchor_source = s_dynamicPositionsReadyForEstimator.load(std::memory_order_relaxed)
+                              ? "dynamic" : "configured (dynamic pending)";
+            }
+#endif
+            LOG_INFO("Position estimator initialized at [%.2f, %.2f, %.2f] using %s anchors",
+                     last_position(0), last_position(1), last_position(2), anchor_source);
+        }
     }
 
     // === NO MUTEX: Computation and output use only local data ===
@@ -583,23 +644,23 @@ static void estimatorProcess() {
     } else {
         // --- Run Estimator ---
         uint64_t estimation_start_time = millis();
-        tdoa_estimator::DynVector current_estimate_3d = last_position; // Use last state as starting point
+        tdoa_estimator::PosVector3D current_estimate_3d = last_position; // Use last state as starting point
         bool is_valid_estimate = false;
-        double solution_rmse = 0.0;
+        float solution_rmse = 0.0f;
 
         // Covariance to pass to App layer
         std::optional<std::array<float, 6>> position_covariance = std::nullopt;
 
         // Get configurable parameters
         const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
-        const double rmseThreshold = static_cast<double>(uwbParams.rmseThreshold);
+        const tdoa_estimator::Scalar rmseThreshold = static_cast<tdoa_estimator::Scalar>(uwbParams.rmseThreshold);
         const bool enableCovMatrix = uwbParams.enableCovMatrix != 0;
 
         if (USE_2D_ESTIMATOR) {
             // Prepare inputs for 2D estimator
             tdoa_estimator::PosVector2D initial_guess_2d = current_estimate_3d.head<2>();
             // Use the Z component from the current 3D state as the fixed Z for this iteration
-            double fixed_z_for_estimation = current_estimate_3d(2);
+            tdoa_estimator::Scalar fixed_z_for_estimation = current_estimate_3d(2);
 
             // Run 2D Newton-Raphson
             tdoa_estimator::SolverResult2D result = tdoa_estimator::newtonRaphson2D(
@@ -609,7 +670,7 @@ static void estimatorProcess() {
                 initial_guess_2d,
                 fixed_z_for_estimation,
                 NUM_ITERATIONS,
-                1e-4,  // convergenceThreshold (default)
+                1e-3f,  // convergenceThreshold
                 rmseThreshold
             );
 
@@ -635,7 +696,7 @@ static void estimatorProcess() {
 
         } else { // Use 3D Estimator
             // Use the full 3D vector as the initial guess
-            tdoa_estimator::DynVector initial_guess_3d = current_estimate_3d;
+            tdoa_estimator::PosVector3D initial_guess_3d = current_estimate_3d;
 
             // Run 3D Newton-Raphson
             tdoa_estimator::SolverResult result = tdoa_estimator::newtonRaphson(
@@ -644,7 +705,7 @@ static void estimatorProcess() {
                 tdoas,
                 initial_guess_3d,
                 NUM_ITERATIONS,
-                1e-4,  // convergenceThreshold (default)
+                1e-3f,  // convergenceThreshold
                 rmseThreshold
             );
 
@@ -705,13 +766,14 @@ static void estimatorProcess() {
 #if TDOA_STATS_LOGGING == ENABLE
     uint64_t now_ms = millis();
     if (now_ms - stats_last_log_time_ms >= STATS_LOG_INTERVAL_MS) {
-        LOG_DEBUG("Stats: Sent=%u Rej=%u (RMSE=%u NaN=%u Insuff=%u) Meas=[%u-%u] Stale=%u",
+        uint32_t prod_dropped = stats_producer_dropped.exchange(0, std::memory_order_relaxed);
+        LOG_DEBUG("Stats: Sent=%u Rej=%u (RMSE=%u NaN=%u Insuff=%u) Meas=[%u-%u] Stale=%u ProdDrop=%u",
                   stats_samples_sent, stats_samples_rejected,
                   stats_reject_rmse, stats_reject_nan, stats_reject_insufficient,
                   (stats_min_meas_count == UINT32_MAX) ? 0 : stats_min_meas_count,
                   stats_max_meas_count,
-                  stats_stale_removed);
-        // Reset all counters
+                  stats_stale_removed,
+                  prod_dropped);
         stats_samples_sent = 0;
         stats_samples_rejected = 0;
         stats_reject_rmse = 0;
@@ -814,7 +876,10 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
             if (!s_dynamicPositionsReadyForEstimator.load(std::memory_order_relaxed)) {
                 // Drop pre-transition measurements so the next solve uses only
                 // measurements gathered after dynamic geometry is active.
-                measurements.clear();
+                for (auto& slot : pair_slots) {
+                    slot.fresh = false;
+                }
+                fresh_pair_count.store(0, std::memory_order_relaxed);
                 first_dynamic_update = true;
             }
 
@@ -832,7 +897,6 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
             s_dynamicPositionsReadyForEstimator.store(true, std::memory_order_relaxed);
             s_dynamicEstimatorReinitRequested.store(true, std::memory_order_relaxed);
             s_dynamicTransitionHoldoffUntilMs.store(now + DYNAMIC_REINIT_HOLDOFF_MS, std::memory_order_relaxed);
-            new_measurement_count.store(0, std::memory_order_relaxed);
             LOG_INFO("Dynamic anchor positions ready, estimator reinit scheduled");
         }
 
