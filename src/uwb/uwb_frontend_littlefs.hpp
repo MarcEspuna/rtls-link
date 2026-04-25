@@ -103,6 +103,9 @@ public:
         PARAM_DEF(UWBParams, smartPowerEnable),
         PARAM_DEF(UWBParams, tdoaSlotCount),
         PARAM_DEF(UWBParams, tdoaSlotDurationUs),
+#ifdef ESP32S3_UWB_BOARD
+        PARAM_DEF(UWBParams, tdoaMatcherPolicy),
+#endif
         PARAM_DEF(UWBParams, dynamicAnchorPosEnabled),
         PARAM_DEF(UWBParams, anchorLayout),
         PARAM_DEF(UWBParams, anchorHeight),

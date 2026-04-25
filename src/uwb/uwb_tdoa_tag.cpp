@@ -232,6 +232,38 @@ static int8_t estimatorPairIndex(uint8_t anchorA, uint8_t anchorB)
     return -1;
 }
 
+static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
+{
+#ifdef ESP32S3_UWB_BOARD
+    return policy == 1
+        ? TdoaEngineMatchingAlgorithmRandom
+        : TdoaEngineMatchingAlgorithmYoungest;
+#else
+    (void)policy;
+    return TdoaEngineMatchingAlgorithmYoungest;
+#endif
+}
+
+static const char* matcherPolicyName(tdoaEngineMatchingAlgorithm_t policy)
+{
+    switch (policy) {
+        case TdoaEngineMatchingAlgorithmRandom:
+            return "RANDOM";
+        case TdoaEngineMatchingAlgorithmYoungest:
+        default:
+            return "YOUNGEST";
+    }
+}
+
+static uint8_t configuredMatcherPolicy()
+{
+#ifdef ESP32S3_UWB_BOARD
+    return Front::uwbLittleFSFront.GetParams().tdoaMatcherPolicy;
+#else
+    return 0;
+#endif
+}
+
 static void initEstimatorStatsPairs(EstimatorStats& stats)
 {
     constexpr uint8_t pairs[kEstimatorPairCount][2] = {
@@ -568,6 +600,9 @@ static String anchorModelStatusWithEstimatorJson()
     String out = s_anchorModel.StatusJson();
     if (out.endsWith("}")) {
         out.remove(out.length() - 1);
+        out += ",\"matcherPolicy\":\"";
+        out += matcherPolicyName(matcherPolicyFromParam(configuredMatcherPolicy()));
+        out += "\"";
         out += ",\"estimator\":";
         out += estimatorStatsJson();
         out += "}";
@@ -703,6 +738,10 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
 
     uint32_t dev_id = dwGetDeviceId(&m_Device);
     LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
+
+#ifdef ESP32S3_UWB_BOARD
+    ApplyMatcherPolicy(uwbParams.tdoaMatcherPolicy);
+#endif
 
     // Init the tdoa anchor algorithm
     uwbTdoa2TagAlgorithm.init(&m_Device, estimatorCallback);
@@ -934,6 +973,15 @@ void UWBTagTDoA::ResetEstimatorStats()
 {
     resetEstimatorStats();
 }
+
+#ifdef ESP32S3_UWB_BOARD
+void UWBTagTDoA::ApplyMatcherPolicy(uint8_t policy)
+{
+    const tdoaEngineMatchingAlgorithm_t matcherPolicy = matcherPolicyFromParam(policy);
+    uwbTdoa2TagSetMatchingAlgorithm(matcherPolicy);
+    LOG_INFO("TDoA matcher policy: %s", matcherPolicyName(matcherPolicy));
+}
+#endif
 
 namespace TDoAAnchorModelCommands {
 void Reset()

@@ -123,6 +123,12 @@ ErrorParam UWBLittleFSFrontend::SetParam(const char* name, const void* data, uin
 #endif
     }
 
+#if defined(USE_UWB_MODE_TDOA_TAG) && defined(ESP32S3_UWB_BOARD)
+    if (strcmp(name, "tdoaMatcherPolicy") == 0 && m_Params.mode == UWBMode::TAG_TDOA) {
+        UWBTagTDoA::ApplyMatcherPolicy(m_Params.tdoaMatcherPolicy);
+    }
+#endif
+
     return result;
 }
 

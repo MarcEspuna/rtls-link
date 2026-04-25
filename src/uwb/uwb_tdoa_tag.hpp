@@ -53,6 +53,9 @@ public:
     static String ExportAnchorModelJson();
     static String GetEstimatorStatsJson();
     static void ResetEstimatorStats();
+#ifdef ESP32S3_UWB_BOARD
+    static void ApplyMatcherPolicy(uint8_t policy);
+#endif
 
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     /**
