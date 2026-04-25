@@ -90,6 +90,11 @@ void App::Init()
             last_rangefinder_distance_cm_ = distance_msg.current_distance;
             last_rangefinder_timestamp_ms_ = timestamp_ms;
             rangefinder_ever_received_ = true;
+            // Cache the full message and source IDs so the UWB-dropout
+            // fallback path in App::Update() can re-emit them.
+            last_distance_sensor_msg_ = distance_msg;
+            last_distance_sensor_sysid_ = src_sysid;
+            last_distance_sensor_compid_ = src_compid;
 
             // Forward to ArduPilot if enabled
             const auto& params = Front::uwbLittleFSFront.GetParams();
@@ -251,6 +256,38 @@ void App::Update()
   // Process rangefinder MAVLink messages
   if (rangefinder_sensor_) {
     rangefinder_sensor_->process_received_bytes();
+  }
+
+  // UWB-dropout rangefinder fallback: when UWB stops producing samples (so
+  // SendSample's vision_position_estimate path no longer carries the height)
+  // but the rangefinder is still healthy, auto-forward the cached
+  // DISTANCE_SENSOR so ArduPilot's altitude EKF keeps getting corrections.
+  // Only kicks in when explicit forwarding is OFF — otherwise the regular
+  // callback path already handles it.
+  {
+    const auto& params = Front::uwbLittleFSFront.GetParams();
+    bool explicit_forwarding = (params.rfForwardEnable != 0);
+    bool uwb_silent = (last_sample_timestamp_ms_ == 0)
+                    || ((now_ms - last_sample_timestamp_ms_) > kUwbDropoutForwardMs);
+
+    if (!explicit_forwarding && uwb_silent && IsRangefinderHealthy()) {
+      // Re-emit the last received DISTANCE_SENSOR using the same override/
+      // preserve-source-id semantics the user configured.
+      bool sent = local_position_sensor_.send_distance_sensor(
+          last_distance_sensor_msg_,
+          params.rfForwardSensorId,
+          params.rfForwardOrientation,
+          last_distance_sensor_sysid_,
+          last_distance_sensor_compid_,
+          params.rfForwardPreserveSrcIds != 0);
+      if (sent && !rangefinder_dropout_forward_active_) {
+        LOG_WARN("UWB dropout — forwarding rangefinder distance directly");
+        rangefinder_dropout_forward_active_ = true;
+      }
+    } else if (rangefinder_dropout_forward_active_ && !uwb_silent) {
+      LOG_INFO("UWB recovered — rangefinder dropout forward stopped");
+      rangefinder_dropout_forward_active_ = false;
+    }
   }
 #endif
 

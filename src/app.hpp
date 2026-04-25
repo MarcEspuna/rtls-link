@@ -131,6 +131,17 @@ private:
     bool rangefinder_ever_received_ = false;
     uint64_t last_rangefinder_log_ms_ = 0;
     uint32_t rf_forward_fail_count_ = 0;  // Consecutive forwarding failures
+
+    // Cached full DISTANCE_SENSOR message and source IDs, used by the
+    // UWB-dropout fallback path so it can re-emit the last reading even
+    // when SendSample stops being called.
+    mavlink_distance_sensor_t last_distance_sensor_msg_ = {};
+    uint8_t last_distance_sensor_sysid_ = 0;
+    uint8_t last_distance_sensor_compid_ = 0;
+    // Dropout fallback state — true once we've started auto-forwarding
+    // because UWB has gone stale, false otherwise. Used to suppress
+    // repeated state-transition logs.
+    bool rangefinder_dropout_forward_active_ = false;
 #endif
 
 #ifdef USE_RATE_STATISTICS
@@ -172,6 +183,7 @@ private:
     static constexpr uint64_t kRangefinderStaleTimeoutMs = 500;  // Rangefinder data older than this is considered stale
     static constexpr uint64_t kRangefinderLogIntervalMs = 1000;  // Log rangefinder data once per second
     static constexpr uint32_t kRfForwardFailLogThreshold = 10;   // Log after this many consecutive failures
+    static constexpr uint64_t kUwbDropoutForwardMs = 500;        // UWB silent for this long → start forwarding rangefinder ourselves
 #endif
 };
 
