@@ -72,6 +72,12 @@ typedef bool (*InterAnchorTofCallback)(uint8_t fromAnchor,
 // Register a callback that runs before tdoaStorageSetRemoteTimeOfFlight().
 void uwbTdoa2TagSetTofCallback(InterAnchorTofCallback callback);
 
+#ifdef ESP32S3_UWB_BOARD
+// Select the TDoA engine anchor matching policy used to choose the remote
+// anchor paired with each incoming packet.
+void uwbTdoa2TagSetMatchingAlgorithm(tdoaEngineMatchingAlgorithm_t algorithm);
+#endif
+
 // Get the last reported antenna delay for a specific anchor (DW1000 ticks)
 uint16_t uwbTdoa2TagGetAnchorAntennaDelay(uint8_t anchorId);
 
