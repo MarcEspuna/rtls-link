@@ -170,6 +170,12 @@ static uint32_t stats_stale_removed = 0;        // Number of stale slot expirati
 static uint32_t stats_min_meas_count = UINT32_MAX;
 static uint32_t stats_max_meas_count = 0;
 static std::atomic<uint32_t> stats_producer_dropped{0};  // producer mutex timeouts
+// Solve-duration tracking (microseconds; bracketed around newtonRaphson call only).
+static uint32_t stats_solve_count = 0;
+static uint64_t stats_solve_sum_us = 0;
+static uint32_t stats_solve_min_us = UINT32_MAX;
+static uint32_t stats_solve_max_us = 0;
+static uint32_t stats_iter_sum = 0;             // accumulated iteration count
 static uint64_t stats_last_log_time_ms = 0;
 static constexpr uint64_t STATS_LOG_INTERVAL_MS = 1000;
 #endif
@@ -357,14 +363,16 @@ void UWBTagTDoA::Update()
 
 uint8_t UWBTagTDoA::GetAnchorsSeenCount()
 {
-    // Walk the pair-indexed slots, mark which anchors appear in any non-stale
-    // slot. With kNumAnchors=8 a uint8_t bitmask is sufficient and lets us
-    // skip the etl::set allocation entirely.
+    // Filter slots by timestamp recency, not the transient `fresh` flag —
+    // `fresh` is cleared by the consumer between solves so it would flap to
+    // zero. A slot with timestamp_us != 0 and age <= kStaleThresholdUs has
+    // a valid measurement regardless of whether the estimator has consumed
+    // it yet.
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
         const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
         uint8_t seen_mask = 0;
         for (const auto& slot : pair_slots) {
-            if (!slot.fresh) continue;
+            if (slot.timestamp_us == 0) continue;  // never written
             if ((now_us - slot.timestamp_us) > kStaleThresholdUs) continue;
             seen_mask |= (1u << slot.anchor_a);
             seen_mask |= (1u << slot.anchor_b);
@@ -472,12 +480,16 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
     slot.anchor_a = a;
     slot.anchor_b = b;
     slot.fresh = true;
+    // Update fresh-pair count INSIDE the mutex so it stays serialized with
+    // the slot.fresh transition. Doing this outside the mutex races against
+    // the consumer's fetch_sub and can underflow the counter.
+    uint32_t fresh;
+    if (!was_fresh) {
+        fresh = fresh_pair_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    } else {
+        fresh = fresh_pair_count.load(std::memory_order_relaxed);
+    }
     xSemaphoreGive(measurements_mtx);
-
-    // Update fresh-pair count outside the mutex — only changes on transition.
-    uint32_t fresh = was_fresh
-        ? fresh_pair_count.load(std::memory_order_relaxed)
-        : fresh_pair_count.fetch_add(1, std::memory_order_relaxed) + 1;
 
     // Notify the estimator task once we have enough fresh pairs and the
     // debounce window has elapsed. Prevents per-callback wake storms when
@@ -539,43 +551,60 @@ static void estimatorProcess() {
     }
 #endif
 
-    // Snapshot fresh slots into local matrices under the mutex. Stale slots
-    // are cleared in place (their fresh flag goes false) so they don't get
-    // copied next cycle. Mutex hold is bounded by O(28) iterations + memcpy.
+    // Two-pass snapshot under the mutex:
+    //   Pass 1: expire stale or unconfigured fresh slots (drop them) and count
+    //           the remaining usable fresh slots.
+    //   Pass 2: only if the count meets MIN_MEASUREMENTS, copy them out and
+    //           clear their fresh flag. Otherwise leave them fresh so the
+    //           next wake can accumulate to a workable batch.
+    // This prevents the watchdog from silently discarding partial batches at
+    // low TDMA rates.
     bool have_enough = false;
     size_t copy_count = 0;
     PairSlot snapshot[kNumPairs];
 
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) == pdTRUE) {
         const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
-        uint32_t consumed_fresh = 0;
+
+        // Pass 1: drop stale / unconfigured fresh slots, count usable ones.
+        uint32_t expired = 0;
+        size_t usable_fresh = 0;
         for (uint8_t i = 0; i < kNumPairs; ++i) {
             PairSlot& slot = pair_slots[i];
-            if (!slot.fresh) {
-                continue;
-            }
-            if ((now_us - slot.timestamp_us) > kStaleThresholdUs) {
+            if (!slot.fresh) continue;
+            if ((now_us - slot.timestamp_us) > kStaleThresholdUs
+                || !configured_anchor_ids[slot.anchor_a]
+                || !configured_anchor_ids[slot.anchor_b]) {
                 slot.fresh = false;
-                ++consumed_fresh;
+                ++expired;
 #if TDOA_STATS_LOGGING == ENABLE
                 stats_stale_removed++;
 #endif
                 continue;
             }
-            // Defensive: anchors may be deconfigured between callback and now.
-            if (!configured_anchor_ids[slot.anchor_a]
-                || !configured_anchor_ids[slot.anchor_b]) {
+            ++usable_fresh;
+        }
+
+        have_enough = (usable_fresh >= MIN_MEASUREMENTS);
+
+        // Pass 2: only consume if we'll solve. Otherwise leave fresh slots
+        // intact so they accumulate across watchdog wakes.
+        if (have_enough) {
+            uint32_t consumed = 0;
+            for (uint8_t i = 0; i < kNumPairs && copy_count < kNumPairs; ++i) {
+                PairSlot& slot = pair_slots[i];
+                if (!slot.fresh) continue;
+                snapshot[copy_count++] = slot;
                 slot.fresh = false;
-                ++consumed_fresh;
-                continue;
+                ++consumed;
             }
-            snapshot[copy_count++] = slot;
-            slot.fresh = false;
-            ++consumed_fresh;
+            if (consumed + expired > 0) {
+                fresh_pair_count.fetch_sub(consumed + expired, std::memory_order_relaxed);
+            }
+        } else if (expired > 0) {
+            fresh_pair_count.fetch_sub(expired, std::memory_order_relaxed);
         }
-        if (consumed_fresh > 0) {
-            fresh_pair_count.fetch_sub(consumed_fresh, std::memory_order_relaxed);
-        }
+
         xSemaphoreGive(measurements_mtx);
     } else {
         // Couldn't grab the mutex — try again on next wake.
@@ -586,8 +615,6 @@ static void estimatorProcess() {
     if (copy_count < stats_min_meas_count) stats_min_meas_count = copy_count;
     if (copy_count > stats_max_meas_count) stats_max_meas_count = copy_count;
 #endif
-
-    have_enough = (copy_count >= MIN_MEASUREMENTS);
 
     if (have_enough) {
         anchors_left.resize(copy_count, 3);
@@ -643,10 +670,10 @@ static void estimatorProcess() {
 #endif
     } else {
         // --- Run Estimator ---
-        uint64_t estimation_start_time = millis();
         tdoa_estimator::PosVector3D current_estimate_3d = last_position; // Use last state as starting point
         bool is_valid_estimate = false;
         float solution_rmse = 0.0f;
+        int solver_iterations = 0;
 
         // Covariance to pass to App layer
         std::optional<std::array<float, 6>> position_covariance = std::nullopt;
@@ -662,7 +689,11 @@ static void estimatorProcess() {
             // Use the Z component from the current 3D state as the fixed Z for this iteration
             tdoa_estimator::Scalar fixed_z_for_estimation = current_estimate_3d(2);
 
-            // Run 2D Newton-Raphson
+            // Run 2D Newton-Raphson — bracketed for stats. Brackets are no-ops
+            // when stats logging is disabled.
+#if TDOA_STATS_LOGGING == ENABLE
+            uint64_t solve_start_us = static_cast<uint64_t>(esp_timer_get_time());
+#endif
             tdoa_estimator::SolverResult2D result = tdoa_estimator::newtonRaphson2D(
                 anchors_left,
                 anchors_right,
@@ -673,6 +704,16 @@ static void estimatorProcess() {
                 1e-3f,  // convergenceThreshold
                 rmseThreshold
             );
+#if TDOA_STATS_LOGGING == ENABLE
+            uint32_t solve_us = static_cast<uint32_t>(
+                static_cast<uint64_t>(esp_timer_get_time()) - solve_start_us);
+            stats_solve_count++;
+            stats_solve_sum_us += solve_us;
+            stats_iter_sum += static_cast<uint32_t>(result.iterations);
+            if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
+            if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
+#endif
+            solver_iterations = result.iterations;
 
             if (result.valid) {
                 // Update only X and Y components of the 3D state vector
@@ -698,7 +739,9 @@ static void estimatorProcess() {
             // Use the full 3D vector as the initial guess
             tdoa_estimator::PosVector3D initial_guess_3d = current_estimate_3d;
 
-            // Run 3D Newton-Raphson
+#if TDOA_STATS_LOGGING == ENABLE
+            uint64_t solve_start_us = static_cast<uint64_t>(esp_timer_get_time());
+#endif
             tdoa_estimator::SolverResult result = tdoa_estimator::newtonRaphson(
                 anchors_left,
                 anchors_right,
@@ -708,6 +751,16 @@ static void estimatorProcess() {
                 1e-3f,  // convergenceThreshold
                 rmseThreshold
             );
+#if TDOA_STATS_LOGGING == ENABLE
+            uint32_t solve_us = static_cast<uint32_t>(
+                static_cast<uint64_t>(esp_timer_get_time()) - solve_start_us);
+            stats_solve_count++;
+            stats_solve_sum_us += solve_us;
+            stats_iter_sum += static_cast<uint32_t>(result.iterations);
+            if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
+            if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
+#endif
+            solver_iterations = result.iterations;
 
             if (result.valid) {
                 // Update the full 3D state vector
@@ -767,13 +820,22 @@ static void estimatorProcess() {
     uint64_t now_ms = millis();
     if (now_ms - stats_last_log_time_ms >= STATS_LOG_INTERVAL_MS) {
         uint32_t prod_dropped = stats_producer_dropped.exchange(0, std::memory_order_relaxed);
-        LOG_DEBUG("Stats: Sent=%u Rej=%u (RMSE=%u NaN=%u Insuff=%u) Meas=[%u-%u] Stale=%u ProdDrop=%u",
+        uint32_t solve_avg_us = (stats_solve_count > 0)
+            ? static_cast<uint32_t>(stats_solve_sum_us / stats_solve_count) : 0;
+        uint32_t iter_avg_x10 = (stats_solve_count > 0)
+            ? (stats_iter_sum * 10u) / stats_solve_count : 0;  // tenths of an iter
+        LOG_DEBUG("Stats: Sent=%u Rej=%u (RMSE=%u NaN=%u Insuff=%u) Meas=[%u-%u] Stale=%u ProdDrop=%u "
+                  "Solve=[%u/%u/%u]us Iter=%u.%u",
                   stats_samples_sent, stats_samples_rejected,
                   stats_reject_rmse, stats_reject_nan, stats_reject_insufficient,
                   (stats_min_meas_count == UINT32_MAX) ? 0 : stats_min_meas_count,
                   stats_max_meas_count,
                   stats_stale_removed,
-                  prod_dropped);
+                  prod_dropped,
+                  (stats_solve_min_us == UINT32_MAX) ? 0 : stats_solve_min_us,
+                  solve_avg_us,
+                  stats_solve_max_us,
+                  iter_avg_x10 / 10, iter_avg_x10 % 10);
         stats_samples_sent = 0;
         stats_samples_rejected = 0;
         stats_reject_rmse = 0;
@@ -782,6 +844,11 @@ static void estimatorProcess() {
         stats_stale_removed = 0;
         stats_min_meas_count = UINT32_MAX;
         stats_max_meas_count = 0;
+        stats_solve_count = 0;
+        stats_solve_sum_us = 0;
+        stats_solve_min_us = UINT32_MAX;
+        stats_solve_max_us = 0;
+        stats_iter_sum = 0;
         stats_last_log_time_ms = now_ms;
     }
 #endif
