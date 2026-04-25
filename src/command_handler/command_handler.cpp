@@ -18,6 +18,9 @@
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
 #include "anchor/tdoa_anchor_api.h"
 #endif
+#ifdef USE_UWB_MODE_TDOA_TAG
+#include "uwb/tdoa_anchor_model_commands.hpp"
+#endif
 #ifdef USE_CONSOLE_CONFIG_MGMT
 #include "config_manager/config_manager.hpp"
 #endif
@@ -42,6 +45,16 @@ static void calibrateCallback(cmd* c);
 
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
 static void tdoaDistancesCallback(cmd* c);
+#endif
+
+#ifdef USE_UWB_MODE_TDOA_TAG
+static void tdoaAnchorModelResetCallback(cmd* c);
+static void tdoaAnchorModelCollectStartCallback(cmd* c);
+static void tdoaAnchorModelCollectStatusCallback(cmd* c);
+static void tdoaAnchorModelLockCallback(cmd* c);
+static void tdoaAnchorModelStatusCallback(cmd* c);
+static void tdoaAnchorModelExportCallback(cmd* c);
+static void tdoaEstimatorStatsResetCallback(cmd* c);
 #endif
 
 #ifdef USE_CONSOLE_CONFIG_MGMT
@@ -205,6 +218,16 @@ void CommandHandler::Init()
     // Diagnostic/calibration helper: get latest inter-anchor ToF distances (raw ticks)
     // Returns JSON: {"anchorId":0,"antennaDelay":16580,"activeSlots":4,"distances":[...]}
     simpleCLI.addCommand("tdoa-distances", tdoaDistancesCallback);
+#endif
+
+#ifdef USE_UWB_MODE_TDOA_TAG
+    simpleCLI.addCommand("tdoa-anchor-model-reset", tdoaAnchorModelResetCallback);
+    simpleCLI.addCommand("tdoa-anchor-model-collect-start", tdoaAnchorModelCollectStartCallback);
+    simpleCLI.addCommand("tdoa-anchor-model-collect-status", tdoaAnchorModelCollectStatusCallback);
+    simpleCLI.addCommand("tdoa-anchor-model-lock", tdoaAnchorModelLockCallback);
+    simpleCLI.addCommand("tdoa-anchor-model-status", tdoaAnchorModelStatusCallback);
+    simpleCLI.addCommand("tdoa-anchor-model-export", tdoaAnchorModelExportCallback);
+    simpleCLI.addCommand("tdoa-estimator-stats-reset", tdoaEstimatorStatsResetCallback);
 #endif
 
 #ifdef USE_CONSOLE_UWB_CONTROL
@@ -502,6 +525,101 @@ static void tdoaDistancesCallback(cmd* c)
     commandResult += "]}";
 }
 #endif // USE_UWB_MODE_TDOA_ANCHOR
+
+#ifdef USE_UWB_MODE_TDOA_TAG
+static bool IsTagTdoaMode()
+{
+    return Front::uwbLittleFSFront.GetParams().mode == UWBMode::TAG_TDOA;
+}
+
+static String WrapJson(const String& payload, const char* fieldName, bool success)
+{
+    String result;
+    result.reserve(payload.length() + 32);
+    result = "{\"success\":";
+    result += success ? "true" : "false";
+    result += ",\"";
+    result += fieldName;
+    result += "\":";
+    result += payload;
+    result += "}";
+    return result;
+}
+
+static void tdoaAnchorModelResetCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    TDoAAnchorModelCommands::Reset();
+    commandResult = "{\"success\":true}";
+}
+
+static void tdoaAnchorModelCollectStartCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    const bool ok = TDoAAnchorModelCommands::StartCollection();
+    commandResult = ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+static void tdoaAnchorModelCollectStatusCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    commandResult = WrapJson(TDoAAnchorModelCommands::CollectStatusJson(), "collect", true);
+}
+
+static void tdoaAnchorModelLockCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    const bool ok = TDoAAnchorModelCommands::Lock();
+    commandResult = ok ? "{\"success\":true}" : WrapJson(TDoAAnchorModelCommands::CollectStatusJson(), "collect", false);
+}
+
+static void tdoaAnchorModelStatusCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    commandResult = WrapJson(TDoAAnchorModelCommands::StatusJson(), "status", true);
+}
+
+static void tdoaAnchorModelExportCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    commandResult = WrapJson(TDoAAnchorModelCommands::ExportJson(), "model", true);
+}
+
+static void tdoaEstimatorStatsResetCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    TDoAAnchorModelCommands::ResetEstimatorStats();
+    commandResult = "{\"success\":true}";
+}
+#endif // USE_UWB_MODE_TDOA_TAG
 
 static void errorCallback(cmd_error* c)
 {

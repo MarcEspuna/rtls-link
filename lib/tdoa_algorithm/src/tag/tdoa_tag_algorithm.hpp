@@ -59,6 +59,19 @@ typedef void (*InterAnchorDistanceCallback)(uint8_t fromAnchor, uint8_t toAnchor
 // Register a callback to receive inter-anchor distance updates
 void uwbTdoa2TagSetDistanceCallback(InterAnchorDistanceCallback callback);
 
+// Callback type for monitoring or overriding inter-anchor ToF before it is
+// stored in the TDoA engine. Return true to replace rawDistanceTimestampUnits
+// with outDistanceTimestampUnits.
+typedef bool (*InterAnchorTofCallback)(uint8_t fromAnchor,
+                                       uint8_t toAnchor,
+                                       uint16_t rawDistanceTimestampUnits,
+                                       uint16_t fromAntennaDelay,
+                                       uint16_t toAntennaDelay,
+                                       uint16_t* outDistanceTimestampUnits);
+
+// Register a callback that runs before tdoaStorageSetRemoteTimeOfFlight().
+void uwbTdoa2TagSetTofCallback(InterAnchorTofCallback callback);
+
 // Get the last reported antenna delay for a specific anchor (DW1000 ticks)
 uint16_t uwbTdoa2TagGetAnchorAntennaDelay(uint8_t anchorId);
 

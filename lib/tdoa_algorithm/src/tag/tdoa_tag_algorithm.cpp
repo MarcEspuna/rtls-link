@@ -93,12 +93,17 @@ static void* callback_arg = nullptr;
 
 // Callback for inter-anchor distance updates (used for dynamic anchor positioning)
 static InterAnchorDistanceCallback distance_callback = nullptr;
+static InterAnchorTofCallback tof_callback = nullptr;
 
 // Per-anchor antenna delays received from anchor packets
 static uint16_t s_anchorAntennaDelays[LOCODECK_NR_OF_TDOA2_ANCHORS] = {0};
 
 void uwbTdoa2TagSetDistanceCallback(InterAnchorDistanceCallback callback) {
   distance_callback = callback;
+}
+
+void uwbTdoa2TagSetTofCallback(InterAnchorTofCallback callback) {
+  tof_callback = callback;
 }
 
 uint16_t uwbTdoa2TagGetAnchorAntennaDelay(uint8_t anchorId) {
@@ -139,10 +144,19 @@ static void updateRemoteData(tdoaAnchorContext_t* anchorCtx, const rangePacket2_
       if (hasDistance) {
         int64_t tof = packet->distances[i];
         if (isValidTimeStamp(tof)) {
+          uint16_t storedTof = packet->distances[i];
+          const uint16_t toAntennaDelay = uwbTdoa2TagGetAnchorAntennaDelay(remoteId);
+          if (tof_callback) {
+            uint16_t callbackTof = storedTof;
+            if (tof_callback(anchorId, remoteId, storedTof, packet->antennaDelay, toAntennaDelay, &callbackTof)) {
+              storedTof = callbackTof;
+            }
+          }
+          tof = storedTof;
           tdoaStorageSetRemoteTimeOfFlight(anchorCtx, remoteId, tof);
 
           if (isConsecutiveIds(previousAnchor, anchorId)) {
-            logAnchorDistance[anchorId] = packet->distances[previousAnchor];
+            logAnchorDistance[anchorId] = storedTof;
           }
 
           // Report inter-anchor distance for dynamic positioning
