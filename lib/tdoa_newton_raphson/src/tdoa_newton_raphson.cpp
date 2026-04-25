@@ -3,398 +3,434 @@
 #include <Eigen/QR>
 #include <Eigen/Cholesky>
 
+#include <algorithm>
+
 namespace tdoa_estimator {
 
     // Minimum measurement variance floor (1cm std dev squared)
     static constexpr double kMinMeasurementVariance = 0.0001;
 
-    // Regularization threshold - if min diagonal of JtJ is this fraction of trace, add regularization
+    // Tikhonov regularization threshold for covariance computation.
     static constexpr double kRegularizationThreshold = 1e-8;
-
-    // Regularization factor (lambda = kRegularizationFactor * trace(JtJ))
     static constexpr double kRegularizationFactor = 1e-6;
 
-    // Helper to calculate residuals
-    static DynVector calculateResiduals(const PosMatrix& anchorPositionsLeft,
-                                      const PosMatrix& anchorPositionsRight,
-                                      const DynVector& doas,
-                                      const DynVector& currentPos) {
-        const int numAnchors = anchorPositionsLeft.rows();
-        DynVector distancesLeft(numAnchors);
-        DynVector distancesRight(numAnchors);
-        
-        for(int i = 0; i < numAnchors; ++i) {
-            distancesLeft(i) = (anchorPositionsLeft.row(i).transpose() - currentPos).norm();
-            distancesRight(i) = (anchorPositionsRight.row(i).transpose() - currentPos).norm();
-        }
-        
-        // Residual = (d_left - d_right) - measurement
-        // Ideally this is 0.
-        return (distancesLeft - distancesRight) - doas;
-    }
+    // Distance floor: prevents division-by-near-zero in Jacobian rows when the
+    // tag sits effectively on top of an anchor. 1e-4 m = 0.1 mm — well below
+    // sensor noise but large enough to keep float arithmetic stable.
+    static constexpr Scalar kDistanceFloor = static_cast<Scalar>(1e-4);
 
-    // Newton-Raphson step function
-    static DynVector newtonRaphsonStep(const PosMatrix& anchorPositionsLeft,
-                            const PosMatrix& anchorPositionsRight,
-                            const DynVector& doas,
-                            const DynVector& initialPos,
-                            const DynVector& residuals) {
-        const int numAnchors = anchorPositionsLeft.rows();
-        
-        // We need distances again for the Jacobian (Gradient)
-        // Optimization: We could pass these in, but for clarity/safety recalculating
-        // or we can reconstruct from residuals if we had d_left/d_right stored.
-        // For < 10 anchors, recalculation is negligible cost compared to QR decomp.
-        
-        PosMatrix gradF(numAnchors, 3);
-        for(int i = 0; i < numAnchors; ++i) {
-             double dL = (anchorPositionsLeft.row(i).transpose() - initialPos).norm();
-             double dR = (anchorPositionsRight.row(i).transpose() - initialPos).norm();
+    // Levenberg-Marquardt parameters.
+    static constexpr Scalar kLMInitialFactor = static_cast<Scalar>(1e-3);
+    static constexpr Scalar kLMShrinkFactor = static_cast<Scalar>(0.5);
+    static constexpr Scalar kLMGrowFactor = static_cast<Scalar>(4.0);
+    static constexpr Scalar kLMMaxLambda = static_cast<Scalar>(1e6);
+    static constexpr Scalar kLMMinLambda = static_cast<Scalar>(1e-12);
 
-             // Avoid division by zero
-             if (dL < 1e-6) dL = 1e-6;
-             if (dR < 1e-6) dR = 1e-6;
+    namespace {
 
-            gradF.row(i) = (initialPos - anchorPositionsLeft.row(i).transpose()).transpose() / dL -
-                        (initialPos - anchorPositionsRight.row(i).transpose()).transpose() / dR;
-        }
+        // Per-call scratch / cached state. All buffers respect kMaxCapacity so
+        // they live on the stack for the duration of the solve.
+        struct SolverContext3D {
+            DynVector residuals;       // (numAnchors)
+            DynVector distancesL;      // (numAnchors) - cached norms
+            DynVector distancesR;      // (numAnchors) - cached norms
+            PosMatrix jacobian;        // (numAnchors, 3) - cached for covariance
+            // Augmented system buffers for LM: [J; sqrt(λ)·I] · Δ = [r; 0]
+            PosMatrix jaug;            // (numAnchors+3, 3)
+            DynVector raug;            // (numAnchors+3)
+        };
 
-        // Return step: - (J^T * J)^-1 * J^T * f  (Gauss-Newton direction)
-        // solved via QR decomposition of J * step = -f
-        return gradF.completeOrthogonalDecomposition().solve(residuals);
-    }
+        struct SolverContext2D {
+            DynVector residuals;
+            DynVector distancesL;
+            DynVector distancesR;
+            PosMatrix2 jacobian;       // (numAnchors, 2)
+            PosMatrix2 jaug;           // (numAnchors+2, 2)
+            DynVector raug;            // (numAnchors+2)
+        };
 
-    // Newton-Raphson step function (2D)
-    static PosVector2D newtonRaphsonStep2D(const PosMatrix& anchorPositionsLeft,
-                                const PosMatrix& anchorPositionsRight,
-                                const DynVector& doas,
-                                const PosVector2D& initialPosXY,
-                                double fixedZ,
-                                const DynVector& residuals) {
-        const int numAnchors = anchorPositionsLeft.rows();
-        
-        // Construct 3D position from 2D estimate and fixed Z
-        DynVector currentPos3D(3);
-        currentPos3D << initialPosXY(0), initialPosXY(1), fixedZ;
+        // Compute residuals and cache per-row distances. The Jacobian builders
+        // reuse these distances, so the expensive `.norm()` calls only happen
+        // here — once per iteration instead of three times.
+        inline void computeResidualsAndDistances3D(const PosMatrix& L,
+                                                    const PosMatrix& R,
+                                                    const DynVector& doas,
+                                                    const PosVector3D& pos,
+                                                    DynVector& residuals,
+                                                    DynVector& distancesL,
+                                                    DynVector& distancesR)
+        {
+            const int n = static_cast<int>(L.rows());
+            residuals.resize(n);
+            distancesL.resize(n);
+            distancesR.resize(n);
 
-        // Calculate Jacobian (Gradient of f w.r.t X and Y)
-        Eigen::Matrix<double, Eigen::Dynamic, 2, 0, kMaxCapacity, 2> gradF_XY(numAnchors, 2);
-        for(int i = 0; i < numAnchors; ++i) {
-            Eigen::Vector3d diffL = currentPos3D.transpose() - anchorPositionsLeft.row(i);
-            Eigen::Vector3d diffR = currentPos3D.transpose() - anchorPositionsRight.row(i);
-            
-            double dL = diffL.norm();
-            double dR = diffR.norm();
-
-             if (dL < 1e-6) dL = 1e-6;
-             if (dR < 1e-6) dR = 1e-6;
-
-            // Grad = (pos - anchor) / dist
-            // We want gradients w.r.t X and Y only
-            Eigen::Vector3d gradL3 = diffL / dL;
-            Eigen::Vector3d gradR3 = diffR / dR;
-
-            gradF_XY.row(i) = (gradL3 - gradR3).head<2>().transpose();
+            for (int i = 0; i < n; ++i) {
+                Scalar dL = (L.row(i).transpose() - pos).norm();
+                Scalar dR = (R.row(i).transpose() - pos).norm();
+                if (dL < kDistanceFloor) dL = kDistanceFloor;
+                if (dR < kDistanceFloor) dR = kDistanceFloor;
+                distancesL(i) = dL;
+                distancesR(i) = dR;
+                residuals(i) = (dL - dR) - doas(i);
+            }
         }
 
-        // Solve for the step in X and Y
-        return gradF_XY.completeOrthogonalDecomposition().solve(residuals);
-    }
+        // Build the 3D Jacobian using already-cached distances.
+        inline void buildJacobian3D(const PosMatrix& L,
+                                    const PosMatrix& R,
+                                    const PosVector3D& pos,
+                                    const DynVector& distancesL,
+                                    const DynVector& distancesR,
+                                    PosMatrix& J)
+        {
+            const int n = static_cast<int>(L.rows());
+            J.resize(n, 3);
+            for (int i = 0; i < n; ++i) {
+                J.row(i) = (pos - L.row(i).transpose()).transpose() / distancesL(i)
+                         - (pos - R.row(i).transpose()).transpose() / distancesR(i);
+            }
+        }
 
-    /**
-     * @brief Computes 3D position covariance from Jacobian at converged position
-     *
-     * Uses the Gauss-Newton approximation: P = (J^T * J)^-1 * sigma^2
-     * where sigma^2 is the measurement variance estimated from residuals.
-     *
-     * Tikhonov regularization is applied when J^T*J is ill-conditioned.
-     *
-     * @param anchorPositionsLeft  Left anchor positions for each measurement
-     * @param anchorPositionsRight Right anchor positions for each measurement
-     * @param finalPosition        Converged position estimate
-     * @param measurementVariance  Variance of measurements (sigma^2)
-     * @param outCovariance        Output 3x3 covariance matrix
-     * @return true if covariance computation succeeded
-     */
-    static bool computePositionCovariance3D(
-        const PosMatrix& anchorPositionsLeft,
-        const PosMatrix& anchorPositionsRight,
-        const DynVector& finalPosition,
-        double measurementVariance,
-        CovMatrix3D& outCovariance)
+        // Build the 2D Jacobian (Nx2) using cached distances.
+        inline void buildJacobian2D(const PosMatrix& L,
+                                    const PosMatrix& R,
+                                    const PosVector3D& pos3D,
+                                    const DynVector& distancesL,
+                                    const DynVector& distancesR,
+                                    PosMatrix2& J)
+        {
+            const int n = static_cast<int>(L.rows());
+            J.resize(n, 2);
+            for (int i = 0; i < n; ++i) {
+                Eigen::Matrix<Scalar, 1, 3> diffL = pos3D.transpose() - L.row(i);
+                Eigen::Matrix<Scalar, 1, 3> diffR = pos3D.transpose() - R.row(i);
+                Eigen::Matrix<Scalar, 1, 3> gradL = diffL / distancesL(i);
+                Eigen::Matrix<Scalar, 1, 3> gradR = diffR / distancesR(i);
+                J.row(i) = (gradL - gradR).template head<2>();
+            }
+        }
+
+        // Solve [J; sqrt(λ)·I] · Δ = [r; 0] via HouseholderQR. Operating on the
+        // augmented system in float keeps the condition number bounded and
+        // avoids the squared-condition penalty of normal equations — this is
+        // the path that lets us use float without losing centroid stability.
+        template <int Cols, typename JType, typename JaugType, typename RaugType, typename DeltaType>
+        inline void solveLMStep(const JType& J,
+                                const DynVector& residuals,
+                                Scalar lambda,
+                                JaugType& jaug,
+                                RaugType& raug,
+                                DeltaType& delta)
+        {
+            const int n = static_cast<int>(J.rows());
+            jaug.resize(n + Cols, Cols);
+            raug.resize(n + Cols);
+
+            jaug.template topRows(n) = J;
+            jaug.template bottomRows(Cols) = Eigen::Matrix<Scalar, Cols, Cols>::Identity()
+                                             * std::sqrt(lambda);
+            raug.head(n) = residuals;
+            raug.tail(Cols).setZero();
+
+            delta = jaug.householderQr().solve(raug);
+        }
+
+        inline Scalar trace3(const PosMatrix& J) {
+            // trace(JᵀJ) = sum of squared column norms
+            return J.colwise().squaredNorm().sum();
+        }
+
+        inline Scalar trace2(const PosMatrix2& J) {
+            return J.colwise().squaredNorm().sum();
+        }
+
+        // Compute 3D covariance from the cached float Jacobian. JᵀJ is built in
+        // double — small (3x3), runs once at convergence, worth the precision.
+        bool computePositionCovariance3D(const PosMatrix& J,
+                                          double measurementVariance,
+                                          CovMatrix3D& outCovariance)
+        {
+            const int n = static_cast<int>(J.rows());
+            CovMatrix3D JtJ = CovMatrix3D::Zero();
+            for (int i = 0; i < n; ++i) {
+                double j0 = static_cast<double>(J(i, 0));
+                double j1 = static_cast<double>(J(i, 1));
+                double j2 = static_cast<double>(J(i, 2));
+                JtJ(0, 0) += j0 * j0; JtJ(0, 1) += j0 * j1; JtJ(0, 2) += j0 * j2;
+                JtJ(1, 1) += j1 * j1; JtJ(1, 2) += j1 * j2;
+                JtJ(2, 2) += j2 * j2;
+            }
+            JtJ(1, 0) = JtJ(0, 1);
+            JtJ(2, 0) = JtJ(0, 2);
+            JtJ(2, 1) = JtJ(1, 2);
+
+            double trace = JtJ.trace();
+            double minDiag = JtJ.diagonal().minCoeff();
+
+            if (trace < 1e-10) {
+                outCovariance = CovMatrix3D::Identity() * 100.0;
+                return false;
+            }
+
+            if (minDiag < kRegularizationThreshold * trace) {
+                JtJ += (kRegularizationFactor * trace) * CovMatrix3D::Identity();
+            }
+
+            Eigen::LDLT<CovMatrix3D> ldlt(JtJ);
+            if (ldlt.info() != Eigen::Success) {
+                outCovariance = CovMatrix3D::Identity() * 100.0;
+                return false;
+            }
+
+            outCovariance = ldlt.solve(CovMatrix3D::Identity()) * measurementVariance;
+            outCovariance = (outCovariance + outCovariance.transpose()) / 2.0;
+            return true;
+        }
+
+        bool computePositionCovariance2D(const PosMatrix2& J,
+                                          double measurementVariance,
+                                          CovMatrix2D& outCovariance)
+        {
+            const int n = static_cast<int>(J.rows());
+            CovMatrix2D JtJ = CovMatrix2D::Zero();
+            for (int i = 0; i < n; ++i) {
+                double j0 = static_cast<double>(J(i, 0));
+                double j1 = static_cast<double>(J(i, 1));
+                JtJ(0, 0) += j0 * j0;
+                JtJ(0, 1) += j0 * j1;
+                JtJ(1, 1) += j1 * j1;
+            }
+            JtJ(1, 0) = JtJ(0, 1);
+
+            double trace = JtJ.trace();
+            double minDiag = JtJ.diagonal().minCoeff();
+
+            if (trace < 1e-10) {
+                outCovariance = CovMatrix2D::Identity() * 100.0;
+                return false;
+            }
+
+            if (minDiag < kRegularizationThreshold * trace) {
+                JtJ += (kRegularizationFactor * trace) * CovMatrix2D::Identity();
+            }
+
+            Eigen::LDLT<CovMatrix2D> ldlt(JtJ);
+            if (ldlt.info() != Eigen::Success) {
+                outCovariance = CovMatrix2D::Identity() * 100.0;
+                return false;
+            }
+
+            outCovariance = ldlt.solve(CovMatrix2D::Identity()) * measurementVariance;
+            outCovariance = (outCovariance + outCovariance.transpose()) / 2.0;
+            return true;
+        }
+
+    } // namespace
+
+    // ----- 3D solver -----
+
+    SolverResult newtonRaphson(const PosMatrix& L,
+                               const PosMatrix& R,
+                               const DynVector& doas,
+                               PosVector3D initialPos,
+                               int maxIterations,
+                               Scalar convergenceThreshold,
+                               Scalar rmseThreshold)
     {
-        const int numMeasurements = anchorPositionsLeft.rows();
-
-        // Recompute Jacobian at final position
-        Eigen::Matrix<double, Eigen::Dynamic, 3, 0, kMaxCapacity, 3> J(numMeasurements, 3);
-
-        for (int i = 0; i < numMeasurements; ++i) {
-            double dL = (anchorPositionsLeft.row(i).transpose() - finalPosition).norm();
-            double dR = (anchorPositionsRight.row(i).transpose() - finalPosition).norm();
-
-            // Avoid division by zero
-            if (dL < 1e-6) dL = 1e-6;
-            if (dR < 1e-6) dR = 1e-6;
-
-            J.row(i) = (finalPosition - anchorPositionsLeft.row(i).transpose()).transpose() / dL -
-                       (finalPosition - anchorPositionsRight.row(i).transpose()).transpose() / dR;
-        }
-
-        // Compute Fisher Information Matrix approximation: J^T * J
-        CovMatrix3D JtJ = J.transpose() * J;
-
-        // Check if regularization is needed using trace and min diagonal
-        double trace = JtJ.trace();
-        double minDiag = JtJ.diagonal().minCoeff();
-
-        if (trace < 1e-10) {
-            // Matrix is essentially zero - cannot compute covariance
-            outCovariance = CovMatrix3D::Identity() * 100.0;  // Large uncertainty
-            return false;
-        }
-
-        // Apply Tikhonov regularization if ill-conditioned
-        if (minDiag < kRegularizationThreshold * trace) {
-            double lambda = kRegularizationFactor * trace;
-            JtJ += lambda * CovMatrix3D::Identity();
-        }
-
-        // Use LDLT decomposition for symmetric positive semi-definite matrix
-        Eigen::LDLT<CovMatrix3D> ldlt(JtJ);
-
-        if (ldlt.info() != Eigen::Success) {
-            outCovariance = CovMatrix3D::Identity() * 100.0;
-            return false;
-        }
-
-        // Compute covariance: (J^T * J)^-1 * sigma^2
-        outCovariance = ldlt.solve(CovMatrix3D::Identity()) * measurementVariance;
-
-        // Ensure result is symmetric (numerical precision)
-        outCovariance = (outCovariance + outCovariance.transpose()) / 2.0;
-
-        return true;
-    }
-
-    /**
-     * @brief Computes 2D (XY) position covariance from Jacobian
-     */
-    static bool computePositionCovariance2D(
-        const PosMatrix& anchorPositionsLeft,
-        const PosMatrix& anchorPositionsRight,
-        const PosVector2D& finalPositionXY,
-        double fixedZ,
-        double measurementVariance,
-        CovMatrix2D& outCovariance)
-    {
-        const int numMeasurements = anchorPositionsLeft.rows();
-
-        // Construct 3D position
-        Eigen::Vector3d finalPos3D;
-        finalPos3D << finalPositionXY(0), finalPositionXY(1), fixedZ;
-
-        // Compute 2D Jacobian (Nx2)
-        Eigen::Matrix<double, Eigen::Dynamic, 2, 0, kMaxCapacity, 2> J_XY(numMeasurements, 2);
-
-        for (int i = 0; i < numMeasurements; ++i) {
-            Eigen::Vector3d diffL = finalPos3D - anchorPositionsLeft.row(i).transpose();
-            Eigen::Vector3d diffR = finalPos3D - anchorPositionsRight.row(i).transpose();
-
-            double dL = diffL.norm();
-            double dR = diffR.norm();
-
-            if (dL < 1e-6) dL = 1e-6;
-            if (dR < 1e-6) dR = 1e-6;
-
-            Eigen::Vector3d gradL3 = diffL / dL;
-            Eigen::Vector3d gradR3 = diffR / dR;
-
-            J_XY.row(i) = (gradL3 - gradR3).head<2>().transpose();
-        }
-
-        // Compute J^T * J (2x2)
-        CovMatrix2D JtJ = J_XY.transpose() * J_XY;
-
-        // Check if regularization is needed
-        double trace = JtJ.trace();
-        double minDiag = JtJ.diagonal().minCoeff();
-
-        if (trace < 1e-10) {
-            outCovariance = CovMatrix2D::Identity() * 100.0;
-            return false;
-        }
-
-        // Apply Tikhonov regularization if ill-conditioned
-        if (minDiag < kRegularizationThreshold * trace) {
-            double lambda = kRegularizationFactor * trace;
-            JtJ += lambda * CovMatrix2D::Identity();
-        }
-
-        // Use LDLT for 2x2 matrix
-        Eigen::LDLT<CovMatrix2D> ldlt(JtJ);
-
-        if (ldlt.info() != Eigen::Success) {
-            outCovariance = CovMatrix2D::Identity() * 100.0;
-            return false;
-        }
-
-        outCovariance = ldlt.solve(CovMatrix2D::Identity()) * measurementVariance;
-        outCovariance = (outCovariance + outCovariance.transpose()) / 2.0;
-
-        return true;
-    }
-
-    // Main Newton-Raphson function (3D)
-    SolverResult newtonRaphson(const PosMatrix& anchorPositionsLeft,
-                        const PosMatrix& anchorPositionsRight,
-                        const DynVector& doas,
-                        DynVector initialPos,
-                        const int maxIterations,
-                        const double convergenceThreshold,
-                        const double rmseThreshold) {
-        
-        DynVector pos = initialPos;
         SolverResult result;
+        result.position = initialPos;
         result.converged = false;
         result.valid = true;
         result.iterations = 0;
         result.covarianceValid = false;
         result.positionCovariance = CovMatrix3D::Identity();
 
-        for(int i = 0; i < maxIterations; ++i) {
-            result.iterations++;
-            
-            DynVector residuals = calculateResiduals(anchorPositionsLeft, anchorPositionsRight, doas, pos);
-            DynVector step = newtonRaphsonStep(anchorPositionsLeft, anchorPositionsRight, doas, pos, residuals);
-            
-            // Apply step (Newton-Raphson: pos_new = pos_old - step)
-            // Note: The .solve() returns 'x' for 'Ax = b'. 
-            // If we set up J * delta = f, then delta = J_pseudoInv * f.
-            // We want f(pos + delta) ~ f(pos) + J*delta = 0  => J*delta = -f
-            // The .solve() call above solved J * step = f (positive residuals). 
-            // So we subtract the result.
-            pos = pos - step;
+        SolverContext3D ctx;
 
-            if (step.norm() < convergenceThreshold) {
-                result.converged = true;
-                break;
+        PosVector3D pos = initialPos;
+        computeResidualsAndDistances3D(L, R, doas, pos, ctx.residuals, ctx.distancesL, ctx.distancesR);
+        Scalar prevSse = ctx.residuals.squaredNorm();
+
+        // LM lambda initialized from the scale of the problem.
+        buildJacobian3D(L, R, pos, ctx.distancesL, ctx.distancesR, ctx.jacobian);
+        Scalar lambda = kLMInitialFactor * trace3(ctx.jacobian) / Scalar(3);
+        if (lambda < kLMMinLambda) lambda = kLMMinLambda;
+
+        for (int iter = 0; iter < maxIterations; ++iter) {
+            result.iterations++;
+
+            buildJacobian3D(L, R, pos, ctx.distancesL, ctx.distancesR, ctx.jacobian);
+
+            PosVector3D delta;
+            solveLMStep<3>(ctx.jacobian, ctx.residuals, lambda, ctx.jaug, ctx.raug, delta);
+
+            // Trial: pos_new = pos - delta (J*Δ = r ⇒ x_{k+1} = x_k - Δ).
+            PosVector3D posTrial = pos - delta;
+
+            DynVector trialResiduals;
+            DynVector trialDL, trialDR;
+            computeResidualsAndDistances3D(L, R, doas, posTrial, trialResiduals, trialDL, trialDR);
+            Scalar trialSse = trialResiduals.squaredNorm();
+
+            if (trialSse < prevSse) {
+                // Accept step.
+                pos = posTrial;
+                ctx.residuals = trialResiduals;
+                ctx.distancesL = trialDL;
+                ctx.distancesR = trialDR;
+
+                Scalar stepNorm = delta.norm();
+                Scalar relImprove = (prevSse > Scalar(0))
+                    ? (prevSse - trialSse) / prevSse : Scalar(0);
+                prevSse = trialSse;
+
+                lambda *= kLMShrinkFactor;
+                if (lambda < kLMMinLambda) lambda = kLMMinLambda;
+
+                if (stepNorm < convergenceThreshold || relImprove < convergenceThreshold) {
+                    result.converged = true;
+                    break;
+                }
+            } else {
+                // Reject step, increase damping, retry from same pos.
+                lambda *= kLMGrowFactor;
+                if (lambda > kLMMaxLambda) {
+                    // Damping saturated — geometry is bad, give up.
+                    break;
+                }
             }
         }
 
         result.position = pos;
 
-        // Final Quality Check
-        DynVector finalResiduals = calculateResiduals(anchorPositionsLeft, anchorPositionsRight, doas, pos);
-        result.rmse = std::sqrt(finalResiduals.squaredNorm() / doas.size());
-
-        // Sanity check: If RMSE exceeds threshold, result is likely unreliable
+        // Final residuals (prevSse already reflects last accepted pos).
+        result.rmse = std::sqrt(prevSse / static_cast<Scalar>(doas.size()));
         if (result.rmse > rmseThreshold) {
             result.valid = false;
         }
 
-        // Compute covariance if solution is valid and converged
         if (result.valid && result.converged) {
-            const int numMeasurements = static_cast<int>(doas.size());
-            const int stateDimension = 3;
+            // Rebuild Jacobian one last time at the converged pos. Cheap (one
+            // pass over residuals already-cached distances), and keeps the
+            // covariance computation independent of the LM trial state.
+            computeResidualsAndDistances3D(L, R, doas, pos, ctx.residuals, ctx.distancesL, ctx.distancesR);
+            buildJacobian3D(L, R, pos, ctx.distancesL, ctx.distancesR, ctx.jacobian);
 
-            // Estimate measurement variance using degrees-of-freedom corrected estimator
-            double measurementVariance;
-            if (numMeasurements > stateDimension) {
-                // Unbiased variance estimator: sigma^2 = SSE / (N - d)
-                measurementVariance = finalResiduals.squaredNorm() / (numMeasurements - stateDimension);
-            } else {
-                // Not enough measurements for unbiased estimate, use RMSE^2
-                measurementVariance = result.rmse * result.rmse;
-            }
-
-            // Apply minimum variance floor (1cm std dev)
+            const int n = static_cast<int>(doas.size());
+            const int stateDim = 3;
+            double sse = static_cast<double>(ctx.residuals.squaredNorm());
+            double measurementVariance = (n > stateDim)
+                ? sse / static_cast<double>(n - stateDim)
+                : static_cast<double>(result.rmse) * static_cast<double>(result.rmse);
             measurementVariance = std::max(measurementVariance, kMinMeasurementVariance);
 
             result.covarianceValid = computePositionCovariance3D(
-                anchorPositionsLeft,
-                anchorPositionsRight,
-                pos,
-                measurementVariance,
-                result.positionCovariance
-            );
+                ctx.jacobian, measurementVariance, result.positionCovariance);
         }
 
         return result;
     }
 
-    // Main Newton-Raphson function (2D)
-    SolverResult2D newtonRaphson2D(const PosMatrix& anchorPositionsLeft,
-                            const PosMatrix& anchorPositionsRight,
-                            const DynVector& doas,
-                            PosVector2D initialPosXY,
-                            double fixedZ,
-                            const int maxIterations,
-                            const double convergenceThreshold,
-                            const double rmseThreshold) {
-        
-        PosVector2D posXY = initialPosXY;
+    // ----- 2D solver -----
+
+    SolverResult2D newtonRaphson2D(const PosMatrix& L,
+                                   const PosMatrix& R,
+                                   const DynVector& doas,
+                                   PosVector2D initialPos,
+                                   Scalar fixedZ,
+                                   int maxIterations,
+                                   Scalar convergenceThreshold,
+                                   Scalar rmseThreshold)
+    {
         SolverResult2D result;
+        result.position = initialPos;
         result.converged = false;
         result.valid = true;
         result.iterations = 0;
         result.covarianceValid = false;
         result.positionCovariance = CovMatrix2D::Identity();
 
-        for(int i = 0; i < maxIterations; ++i) {
+        SolverContext2D ctx;
+
+        PosVector2D posXY = initialPos;
+        PosVector3D pos3D;
+        pos3D << posXY(0), posXY(1), fixedZ;
+
+        computeResidualsAndDistances3D(L, R, doas, pos3D, ctx.residuals, ctx.distancesL, ctx.distancesR);
+        Scalar prevSse = ctx.residuals.squaredNorm();
+
+        buildJacobian2D(L, R, pos3D, ctx.distancesL, ctx.distancesR, ctx.jacobian);
+        Scalar lambda = kLMInitialFactor * trace2(ctx.jacobian) / Scalar(2);
+        if (lambda < kLMMinLambda) lambda = kLMMinLambda;
+
+        for (int iter = 0; iter < maxIterations; ++iter) {
             result.iterations++;
 
-            // Construct 3D pos for residual calc
-            DynVector currentPos3D(3);
-            currentPos3D << posXY(0), posXY(1), fixedZ;
+            pos3D << posXY(0), posXY(1), fixedZ;
+            buildJacobian2D(L, R, pos3D, ctx.distancesL, ctx.distancesR, ctx.jacobian);
 
-            DynVector residuals = calculateResiduals(anchorPositionsLeft, anchorPositionsRight, doas, currentPos3D);
-            PosVector2D step = newtonRaphsonStep2D(anchorPositionsLeft, anchorPositionsRight, doas, posXY, fixedZ, residuals);
+            PosVector2D delta;
+            solveLMStep<2>(ctx.jacobian, ctx.residuals, lambda, ctx.jaug, ctx.raug, delta);
 
-            posXY = posXY - step;
+            PosVector2D posTrialXY = posXY - delta;
+            PosVector3D trialPos3D;
+            trialPos3D << posTrialXY(0), posTrialXY(1), fixedZ;
 
-            if (step.norm() < convergenceThreshold) {
-                result.converged = true;
-                break;
+            DynVector trialResiduals, trialDL, trialDR;
+            computeResidualsAndDistances3D(L, R, doas, trialPos3D, trialResiduals, trialDL, trialDR);
+            Scalar trialSse = trialResiduals.squaredNorm();
+
+            if (trialSse < prevSse) {
+                posXY = posTrialXY;
+                ctx.residuals = trialResiduals;
+                ctx.distancesL = trialDL;
+                ctx.distancesR = trialDR;
+
+                Scalar stepNorm = delta.norm();
+                Scalar relImprove = (prevSse > Scalar(0))
+                    ? (prevSse - trialSse) / prevSse : Scalar(0);
+                prevSse = trialSse;
+
+                lambda *= kLMShrinkFactor;
+                if (lambda < kLMMinLambda) lambda = kLMMinLambda;
+
+                if (stepNorm < convergenceThreshold || relImprove < convergenceThreshold) {
+                    result.converged = true;
+                    break;
+                }
+            } else {
+                lambda *= kLMGrowFactor;
+                if (lambda > kLMMaxLambda) {
+                    break;
+                }
             }
         }
 
         result.position = posXY;
-
-        DynVector currentPos3D(3);
-        currentPos3D << posXY(0), posXY(1), fixedZ;
-        DynVector finalResiduals = calculateResiduals(anchorPositionsLeft, anchorPositionsRight, doas, currentPos3D);
-        result.rmse = std::sqrt(finalResiduals.squaredNorm() / doas.size());
-
-        // Sanity check: If RMSE exceeds threshold, result is likely unreliable
+        result.rmse = std::sqrt(prevSse / static_cast<Scalar>(doas.size()));
         if (result.rmse > rmseThreshold) {
             result.valid = false;
         }
 
-        // Compute covariance if solution is valid and converged
         if (result.valid && result.converged) {
-            const int numMeasurements = static_cast<int>(doas.size());
-            const int stateDimension = 2;  // 2D mode
+            pos3D << posXY(0), posXY(1), fixedZ;
+            computeResidualsAndDistances3D(L, R, doas, pos3D, ctx.residuals, ctx.distancesL, ctx.distancesR);
+            buildJacobian2D(L, R, pos3D, ctx.distancesL, ctx.distancesR, ctx.jacobian);
 
-            // Estimate measurement variance
-            double measurementVariance;
-            if (numMeasurements > stateDimension) {
-                measurementVariance = finalResiduals.squaredNorm() / (numMeasurements - stateDimension);
-            } else {
-                measurementVariance = result.rmse * result.rmse;
-            }
-
+            const int n = static_cast<int>(doas.size());
+            const int stateDim = 2;
+            double sse = static_cast<double>(ctx.residuals.squaredNorm());
+            double measurementVariance = (n > stateDim)
+                ? sse / static_cast<double>(n - stateDim)
+                : static_cast<double>(result.rmse) * static_cast<double>(result.rmse);
             measurementVariance = std::max(measurementVariance, kMinMeasurementVariance);
 
             result.covarianceValid = computePositionCovariance2D(
-                anchorPositionsLeft,
-                anchorPositionsRight,
-                posXY,
-                fixedZ,
-                measurementVariance,
-                result.positionCovariance
-            );
+                ctx.jacobian, measurementVariance, result.positionCovariance);
         }
 
         return result;
     }
+
 }
