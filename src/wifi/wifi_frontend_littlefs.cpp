@@ -368,10 +368,13 @@ ErrorParam WifiLittleFSFrontend::SetParam(const char* name, const void* data, ui
 
     // Reconfigure runtime WiFi services immediately when bridge/server/discovery
     // parameters are updated and networking is currently active.
+    // gcsIp is intentionally excluded: WifiDiscovery reads it live every heartbeat,
+    // and tearing down AsyncWebServer + rebinding port 80 occasionally fails to
+    // re-bind, leaving HTTP/WS dead until reboot. UART bridge keeps its old gcsIp
+    // until explicit toggle or reboot, which is the safer trade-off.
     if (strcmp(name, "enableWebServer") == 0 ||
         strcmp(name, "enableUartBridge") == 0 ||
         strcmp(name, "enableDiscovery") == 0 ||
-        strcmp(name, "gcsIp") == 0 ||
         strcmp(name, "udpPort") == 0 ||
         strcmp(name, "discoveryPort") == 0) {
         if (m_currentMode == WifiMode::AP ||
