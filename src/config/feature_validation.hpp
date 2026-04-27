@@ -35,6 +35,22 @@
     #error "USE_WIFI_UART_BRIDGE requires USE_WIFI to be defined"
 #endif
 
+#if defined(USE_ARDUPILOT_UPDATE) && !defined(USE_WIFI)
+    #error "USE_ARDUPILOT_UPDATE requires USE_WIFI to be defined"
+#endif
+
+#if defined(USE_ARDUPILOT_UPDATE) && !defined(USE_WIFI_WEBSERVER)
+    #error "USE_ARDUPILOT_UPDATE requires USE_WIFI_WEBSERVER to be defined"
+#endif
+
+#if defined(USE_ARDUPILOT_UPDATE) && !defined(USE_WIFI_UART_BRIDGE)
+    #error "USE_ARDUPILOT_UPDATE requires USE_WIFI_UART_BRIDGE to be defined"
+#endif
+
+#if defined(USE_ARDUPILOT_UPDATE) && !defined(USE_MAVLINK)
+    #error "USE_ARDUPILOT_UPDATE requires USE_MAVLINK to be defined"
+#endif
+
 #if defined(USE_WIFI_DISCOVERY) && !defined(USE_WIFI)
     #error "USE_WIFI_DISCOVERY requires USE_WIFI to be defined"
 #endif

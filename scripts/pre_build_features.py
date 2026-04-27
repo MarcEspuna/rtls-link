@@ -148,7 +148,8 @@ def validate_features(flags, board_define=None):
         'USE_WIFI_TCP_LOGGING',
         'USE_WIFI_UART_BRIDGE',
         'USE_WIFI_DISCOVERY',
-        'USE_WIFI_MDNS'
+        'USE_WIFI_MDNS',
+        'USE_ARDUPILOT_UPDATE',
     ]
     for feat in wifi_features:
         if feat in flag_set and 'USE_WIFI' not in flag_set:
@@ -165,6 +166,11 @@ def validate_features(flags, board_define=None):
     for feat in mavlink_features:
         if feat in flag_set and 'USE_MAVLINK' not in flag_set:
             errors.append(f"{feat} requires USE_MAVLINK")
+
+    if 'USE_ARDUPILOT_UPDATE' in flag_set:
+        for required in ['USE_WIFI_WEBSERVER', 'USE_WIFI_UART_BRIDGE', 'USE_MAVLINK']:
+            if required not in flag_set:
+                errors.append(f"USE_ARDUPILOT_UPDATE requires {required}")
 
     # === CONSOLE DEPENDENCIES ===
     console_features = [
@@ -242,6 +248,8 @@ def print_feature_summary(flags, source_file="user_defines.txt"):
         name = extract_flag_name(flag)
         if name.startswith('USE_WIFI'):
             categories['WiFi'].append(name)
+        elif name == 'USE_ARDUPILOT_UPDATE':
+            categories['MAVLink'].append(name)
         elif name.startswith('USE_MAVLINK'):
             categories['MAVLink'].append(name)
         elif name.startswith('USE_CONSOLE'):

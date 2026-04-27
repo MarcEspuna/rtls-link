@@ -24,6 +24,9 @@
 #ifdef USE_CONSOLE_CONFIG_MGMT
 #include "config_manager/config_manager.hpp"
 #endif
+#ifdef USE_ARDUPILOT_UPDATE
+#include "ardupilot_update/session.hpp"
+#endif
 
 static constexpr int COMMAND_QUEUE_SIZE = 4;
 static SimpleCLI simpleCLI(COMMAND_QUEUE_SIZE, COMMAND_QUEUE_SIZE);
@@ -74,6 +77,10 @@ static void deleteConfigCallback(cmd* c);
 // LED 2 control callbacks
 static void toggleLed2Callback(cmd* c);
 static void getLed2StateCallback(cmd* c);
+#endif
+
+#ifdef USE_ARDUPILOT_UPDATE
+static void ardupilotUpdateCallback(cmd* c);
 #endif
 
 // Helper functions for parameter read/write (used by PARAM_RW and CONFIG_MGMT)
@@ -214,6 +221,12 @@ void CommandHandler::Init()
         commandResult += "\"}";
     });
 
+#ifdef USE_ARDUPILOT_UPDATE
+    Command ardupilotUpdateCmd = simpleCLI.addCommand("ardupilot-update", ardupilotUpdateCallback);
+    ardupilotUpdateCmd.addPositionalArgument("action");
+    ardupilotUpdateCmd.addPositionalArgument("targetSystem", "0");
+#endif
+
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
     // Diagnostic/calibration helper: get latest inter-anchor ToF distances (raw ticks)
     // Returns JSON: {"anchorId":0,"antennaDelay":16580,"activeSlots":4,"distances":[...]}
@@ -279,6 +292,47 @@ String CommandHandler::ExecuteCommand(const char* command)
 }
 
 // ********** Command Callbacks **********
+
+#ifdef USE_ARDUPILOT_UPDATE
+static void ardupilotUpdateCallback(cmd* c)
+{
+    Command cmd(c);
+    Argument actionArg = cmd.getArgument("action");
+    Argument targetSystemArg = cmd.getArgument("targetSystem");
+
+    String action = actionArg.getValue();
+    action.trim();
+
+    if (action == "begin") {
+        uint8_t targetSystem = static_cast<uint8_t>(targetSystemArg.getValue().toInt());
+        String error;
+        if (!ArduPilotUpdateSession::Instance().Begin(targetSystem, 921600, 115200, error)) {
+            commandResult = "{\"success\":false,\"error\":\"" + error + "\"}";
+            return;
+        }
+        commandResult = "{\"success\":true,\"phase\":\"rebooting\",\"tunnel\":\"/ardupilot-update\"}";
+        return;
+    }
+
+    if (action == "end") {
+        ArduPilotUpdateSession::Instance().End("manager requested");
+        commandResult = "{\"success\":true,\"phase\":\"ended\"}";
+        return;
+    }
+
+    if (action == "status") {
+        const auto& session = ArduPilotUpdateSession::Instance();
+        commandResult = "{\"success\":true,\"active\":";
+        commandResult += session.IsActive() ? "true" : "false";
+        commandResult += ",\"tunnelReady\":";
+        commandResult += session.IsTunnelReady() ? "true" : "false";
+        commandResult += "}";
+        return;
+    }
+
+    commandResult = "{\"success\":false,\"error\":\"Unknown action\"}";
+}
+#endif // USE_ARDUPILOT_UPDATE
 
 #ifdef USE_CONSOLE_PARAM_RW
 static void readCallback(cmd* c)

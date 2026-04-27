@@ -10,6 +10,10 @@
 #include "wifi_uart_bridge.hpp"
 #include "logging/logging.hpp"
 
+#ifdef USE_ARDUPILOT_UPDATE
+#include "ardupilot_update/session.hpp"
+#endif
+
 #include "bsp/board.hpp"
 
 
@@ -31,6 +35,12 @@ WifiUartBridge::WifiUartBridge(HardwareSerial &serial, IPAddress gsc_ip, uint16_
  */
 void WifiUartBridge::Update()
 {
+#ifdef USE_ARDUPILOT_UPDATE
+    if (ArduPilotUpdateSession::Instance().IsActive()) {
+        return;
+    }
+#endif
+
     // Only process packets if WiFi is connected in STATION mode or if in AP mode
     if (WiFi.status() == WL_CONNECTED || WiFi.getMode() == WIFI_AP) {
         int packetSize = m_Udp.parsePacket();
