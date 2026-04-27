@@ -53,7 +53,6 @@ void WifiWebSocket::Update()
         m_Ws.cleanupClients();
 #ifdef USE_ARDUPILOT_UPDATE
         m_ArduPilotUpdateWs.cleanupClients();
-        ArduPilotUpdateSession::Instance().Update();
 #endif
     }
 }

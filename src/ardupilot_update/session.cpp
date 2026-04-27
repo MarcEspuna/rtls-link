@@ -213,7 +213,7 @@ void ArduPilotUpdateSession::OnClientData(AsyncWebSocketClient* client, AwsFrame
     const bool shouldWrite = m_active &&
                              m_tunnelReady &&
                              client->id() == m_clientId &&
-                             info->opcode == WS_BINARY;
+                             (info->opcode == WS_BINARY || info->opcode == WS_CONTINUATION);
     if (shouldWrite) {
         Serial2.write(data, len);
     }
