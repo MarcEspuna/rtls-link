@@ -34,6 +34,7 @@
 -D USE_MAVLINK_HEARTBEAT        ; Heartbeat send/receive
 -D USE_MAVLINK_ORIGIN           ; SET_GPS_GLOBAL_ORIGIN
 -D USE_MAVLINK_COVARIANCE       ; Position covariance matrix
+-D USE_ARDUPILOT_UPDATE         ; ArduPilot firmware update tunnel over MAP-Link
 -D USE_MAVLINK_RANGEFINDER      ; Distance sensor forwarding (ESP32S3 only)
 
 ; -----------------------------------------------------------------------------

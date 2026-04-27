@@ -24,6 +24,9 @@ public:
 private:
     AsyncWebServer m_Server;
     AsyncWebSocket m_Ws;
+#ifdef USE_ARDUPILOT_UPDATE
+    AsyncWebSocket m_ArduPilotUpdateWs;
+#endif
     bool initialized = false;
 };
 

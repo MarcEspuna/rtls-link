@@ -21,6 +21,10 @@
 
 #include "logging/logging.hpp"
 
+#ifdef USE_ARDUPILOT_UPDATE
+#include "ardupilot_update/session.hpp"
+#endif
+
 #include "command_handler/command_handler.hpp"
 #include <utils/utils.hpp>
 #include <etl/vector.h>
@@ -175,17 +179,20 @@ void WifiLittleFSFrontend::Update() {
         BackendsLockGuard lock(m_backendsMutex);
         if (!lock.IsLocked()) {
             LOG_WARN("WiFi backend lock failed in Update()");
-            return;
-        }
-
-        for (WifiBackend* backend : m_Backends) {
-            backend->Update();
+        } else {
+            for (WifiBackend* backend : m_Backends) {
+                backend->Update();
+            }
         }
     }
     
     if (m_TcpLoggingServer) {
         m_TcpLoggingServer->Update();
     }
+
+#ifdef USE_ARDUPILOT_UPDATE
+    ArduPilotUpdateSession::Instance().Update();
+#endif
 }
 
 bool WifiLittleFSFrontend::SetupAP() {
