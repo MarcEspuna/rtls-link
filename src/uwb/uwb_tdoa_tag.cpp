@@ -31,6 +31,52 @@
 #include "tdoa_anchor_model.hpp"
 #include "tdoa_anchor_model_commands.hpp"
 
+namespace {
+
+using PackedPositionCovariance = std::array<float, 6>; // [var_x, cov_xy, cov_xz, var_y, cov_yz, var_z]
+
+static constexpr float kRangefinderAssisted2DVerticalStdDevM = 0.01f;
+static constexpr float kRangefinderAssisted2DVerticalVarianceM2 =
+    kRangefinderAssisted2DVerticalStdDevM * kRangefinderAssisted2DVerticalStdDevM;
+
+static bool usesRangefinderZ(const UWBParams& params)
+{
+#ifdef HAS_RANGEFINDER
+    return params.zCalcMode == ZCalcMode::RANGEFINDER;
+#else
+    (void)params;
+    return false;
+#endif
+}
+
+static PackedPositionCovariance packRangefinderAssisted2DCovariance(
+    const tdoa_estimator::CovMatrix2D& xy_covariance)
+{
+    return PackedPositionCovariance{
+        static_cast<float>(xy_covariance(0, 0)),          // var_x from 2D TDoA solver
+        static_cast<float>(xy_covariance(0, 1)),          // cov_xy from 2D TDoA solver
+        0.0f,                                             // cov_xz unavailable in 2D mode
+        static_cast<float>(xy_covariance(1, 1)),          // var_y from 2D TDoA solver
+        0.0f,                                             // cov_yz unavailable in 2D mode
+        kRangefinderAssisted2DVerticalVarianceM2          // var_z from rangefinder-assisted output path
+    };
+}
+
+static PackedPositionCovariance pack3DCovariance(
+    const tdoa_estimator::CovMatrix3D& covariance)
+{
+    return PackedPositionCovariance{
+        static_cast<float>(covariance(0, 0)),  // var_x
+        static_cast<float>(covariance(0, 1)),  // cov_xy
+        static_cast<float>(covariance(0, 2)),  // cov_xz
+        static_cast<float>(covariance(1, 1)),  // var_y
+        static_cast<float>(covariance(1, 2)),  // cov_yz
+        static_cast<float>(covariance(2, 2))   // var_z
+    };
+}
+
+} // namespace
+
 static FAST_CODE void tagInterruptISR();
 static FAST_CODE void txCallback(dwDevice_t *dev);
 static FAST_CODE void rxCallback(dwDevice_t *dev);
@@ -1331,16 +1377,14 @@ static void estimatorProcess() {
                 is_valid_estimate = true;
                 solution_rmse = result.rmse;
 
-                // Extract covariance if valid and enabled
+                // Extract covariance if valid and enabled.
+                // In 2D mode, the solver only owns XY uncertainty. ArduPilot collapses
+                // the MAVLink position covariance to one scalar, so we only send this
+                // 2D covariance when the outgoing Z is rangefinder-assisted.
                 if (enableCovMatrix && result.covarianceValid) {
-                    position_covariance = std::array<float, 6>{
-                        static_cast<float>(result.positionCovariance(0, 0)),  // var_x
-                        static_cast<float>(result.positionCovariance(0, 1)),  // cov_xy
-                        0.0f,                                                   // cov_xz (no Z correlation in 2D)
-                        static_cast<float>(result.positionCovariance(1, 1)),  // var_y
-                        0.0f,                                                   // cov_yz (no Z correlation in 2D)
-                        100.0f                                                  // var_z (large uncertainty, Z is fixed)
-                    };
+                    if (usesRangefinderZ(uwbParams)) {
+                        position_covariance = packRangefinderAssisted2DCovariance(result.positionCovariance);
+                    }
                 }
             }
 
@@ -1379,14 +1423,7 @@ static void estimatorProcess() {
 
                 // Extract covariance if valid and enabled
                 if (enableCovMatrix && result.covarianceValid) {
-                    position_covariance = std::array<float, 6>{
-                        static_cast<float>(result.positionCovariance(0, 0)),  // var_x
-                        static_cast<float>(result.positionCovariance(0, 1)),  // cov_xy
-                        static_cast<float>(result.positionCovariance(0, 2)),  // cov_xz
-                        static_cast<float>(result.positionCovariance(1, 1)),  // var_y
-                        static_cast<float>(result.positionCovariance(1, 2)),  // cov_yz
-                        static_cast<float>(result.positionCovariance(2, 2))   // var_z
-                    };
+                    position_covariance = pack3DCovariance(result.positionCovariance);
                 }
             }
         }
