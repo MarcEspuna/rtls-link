@@ -621,16 +621,19 @@ static std::array<float, 6> rotateCovarianceByYaw(
  * @brief Maps 6-element position covariance to MAVLink 21-element array
  *
  * MAVLink uses row-major upper triangular packing for 6x6 covariance.
- * We only have position (3x3), so orientation terms are set to NaN.
+ * We only provide the position block. Unprovided cross/orientation terms are
+ * set to zero so consumers that treat a finite first element as a complete
+ * covariance do not propagate NaN through their pose-noise handling.
  */
 static std::array<float, VISION_POSITION_COVARIANCE_SIZE> mapToMAVLinkCovariance(
     const std::array<float, 6>& posCovariance)
 {
   std::array<float, VISION_POSITION_COVARIANCE_SIZE> mavCov;
 
-  // Initialize all to NaN (indicates unknown/not-provided)
+  // Once covariance[0] is finite, ArduPilot consumes pose covariance as a
+  // complete matrix. Keep unprovided terms finite and uncorrelated.
   for (size_t i = 0; i < mavCov.size(); ++i) {
-    mavCov[i] = NAN;
+    mavCov[i] = 0.0f;
   }
 
   // Position variances and covariances (3x3 block)
@@ -658,8 +661,9 @@ static std::array<float, VISION_POSITION_COVARIANCE_SIZE> mapToMAVLinkCovariance
   mavCov[13] = 0.0f;
   mavCov[14] = 0.0f;
 
-  // Orientation variances: indices 15,18,20 -> NaN (UWB provides no orientation)
-  // These are already set to NaN from initialization
+  // Orientation covariance block: indices 15..20 remain 0.0f. UWB provides no
+  // orientation covariance, and ArduPilot will clamp the resulting angular
+  // error to its configured VISO_YAW_M_NSE.
 
   return mavCov;
 }
