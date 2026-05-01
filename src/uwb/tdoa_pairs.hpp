@@ -26,9 +26,15 @@ inline bool CanonicalizePair(uint8_t anchorA,
     return true;
 }
 
-inline uint8_t PairCount(uint8_t anchorCount)
+constexpr uint8_t PairCount(uint8_t anchorCount)
 {
     return static_cast<uint8_t>((anchorCount * (anchorCount - 1)) / 2);
+}
+
+inline uint8_t PairIndexCanonical(const AnchorPair& pair, uint8_t anchorCount)
+{
+    return static_cast<uint8_t>(
+        (pair.a * (2 * anchorCount - pair.a - 1)) / 2 + (pair.b - pair.a - 1));
 }
 
 inline int8_t PairIndex(uint8_t anchorA, uint8_t anchorB, uint8_t anchorCount)
@@ -40,8 +46,7 @@ inline int8_t PairIndex(uint8_t anchorA, uint8_t anchorB, uint8_t anchorCount)
     }
 
     (void)reversed;
-    return static_cast<int8_t>(
-        (pair.a * (2 * anchorCount - pair.a - 1)) / 2 + (pair.b - pair.a - 1));
+    return static_cast<int8_t>(PairIndexCanonical(pair, anchorCount));
 }
 
 template <uint8_t AnchorCount>

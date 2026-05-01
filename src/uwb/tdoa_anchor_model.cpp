@@ -14,6 +14,7 @@
 
 #include "logging/logging.hpp"
 #include "tdoa_common.hpp"
+#include "tdoa_pairs.hpp"
 
 namespace {
 constexpr const char* kPersistedModelPath = "/tdoa_anchor_model.bin";
@@ -375,11 +376,11 @@ bool TDoAAnchorModel::FindPair(uint8_t a, uint8_t b, uint8_t& index, bool& rever
         return false;
     }
 
-    const int8_t pairIndex = tdoa::PairIndex(pair.a, pair.b, kAnchorCount);
-    if (pairIndex < 0 || pairIndex >= kPairCount) {
+    const uint8_t pairIndex = tdoa::PairIndexCanonical(pair, kAnchorCount);
+    if (pairIndex >= kPairCount) {
         return false;
     }
-    index = static_cast<uint8_t>(pairIndex);
+    index = pairIndex;
     return true;
 }
 

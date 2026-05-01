@@ -33,6 +33,7 @@
 #include "tdoa_anchor_model_commands.hpp"
 #include "tdoa_common.hpp"
 #include "tdoa_measurement_buffer.hpp"
+#include "tdoa_pairs.hpp"
 #include "utils/running_stats.hpp"
 
 namespace {
@@ -126,7 +127,8 @@ static uint8_t cached_anchors_seen = 0;
 static TDoAAnchorModel s_anchorModel;
 
 static constexpr size_t kEstimatorPositionWindow = 128;
-static constexpr size_t kEstimatorPairCount = 6;
+static constexpr uint8_t kEstimatorAnchorCount = 4;
+static constexpr size_t kEstimatorPairCount = tdoa::PairCount(kEstimatorAnchorCount);
 
 using Utils::RunningStats;
 
@@ -164,7 +166,7 @@ static SemaphoreHandle_t estimator_stats_mtx = nullptr;
 
 static int8_t estimatorPairIndex(uint8_t anchorA, uint8_t anchorB)
 {
-    return tdoa::PairIndex(anchorA, anchorB, 4);
+    return tdoa::PairIndex(anchorA, anchorB, kEstimatorAnchorCount);
 }
 
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
@@ -202,7 +204,8 @@ static uint8_t configuredMatcherPolicy()
 static void initEstimatorStatsPairs(EstimatorStats& stats)
 {
     for (size_t i = 0; i < kEstimatorPairCount; i++) {
-        const tdoa::AnchorPair pair = tdoa::PairByIndex<4>(static_cast<uint8_t>(i));
+        const tdoa::AnchorPair pair =
+            tdoa::PairByIndex<kEstimatorAnchorCount>(static_cast<uint8_t>(i));
         stats.pairInputs[i].a = pair.a;
         stats.pairInputs[i].b = pair.b;
     }
@@ -840,11 +843,7 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
     if (reversed) {
         canonical_tdoa = -canonical_tdoa;
     }
-    const int8_t pairIndex = tdoa::PairIndex(pair.a, pair.b, kNumAnchors);
-    if (pairIndex < 0) {
-        return;
-    }
-    const uint8_t idx = static_cast<uint8_t>(pairIndex);
+    const uint8_t idx = tdoa::PairIndexCanonical(pair, kNumAnchors);
     const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
 
     // Bounded mutex wait — if the consumer is mid-solve we drop this sample

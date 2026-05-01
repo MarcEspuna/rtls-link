@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "uwb/tdoa_common.hpp"
+#include "uwb/tdoa_measurement_buffer.hpp"
 #include "uwb/tdoa_pairs.hpp"
 
 TEST(TDoAPairs, PairIndexMatchesExpectedFourAnchorOrder)
@@ -11,6 +13,9 @@ TEST(TDoAPairs, PairIndexMatchesExpectedFourAnchorOrder)
     EXPECT_EQ(tdoa::PairIndex(1, 2, 4), 3);
     EXPECT_EQ(tdoa::PairIndex(1, 3, 4), 4);
     EXPECT_EQ(tdoa::PairIndex(2, 3, 4), 5);
+
+    const tdoa::AnchorPair pair{1, 3};
+    EXPECT_EQ(tdoa::PairIndexCanonical(pair, 4), 4);
 }
 
 TEST(TDoAPairs, PairIndexIsOrderIndependent)
@@ -57,10 +62,91 @@ TEST(TDoAPairs, PairByIndexMatchesFourAnchorOrder)
     EXPECT_EQ(p5.b, 3);
 }
 
+TEST(TDoACommon, ParseAnchorIdAcceptsOneAndTwoDigitIds)
+{
+    uint8_t anchorId = 0;
+
+    EXPECT_TRUE(tdoa::ParseAnchorId(etl::array<char, 2>{'3', '\0'}, anchorId));
+    EXPECT_EQ(anchorId, 3);
+
+    EXPECT_TRUE(tdoa::ParseAnchorId(etl::array<char, 2>{'1', '2'}, anchorId, 13));
+    EXPECT_EQ(anchorId, 12);
+}
+
+TEST(TDoACommon, ParseAnchorIdRejectsInvalidIds)
+{
+    uint8_t anchorId = 0;
+
+    EXPECT_FALSE(tdoa::ParseAnchorId(etl::array<char, 2>{'a', '\0'}, anchorId));
+    EXPECT_FALSE(tdoa::ParseAnchorId(etl::array<char, 2>{'1', 'x'}, anchorId));
+    EXPECT_FALSE(tdoa::ParseAnchorId(etl::array<char, 2>{'8', '\0'}, anchorId));
+    EXPECT_FALSE(tdoa::ParseAnchorId(etl::array<char, 2>{'4', '\0'}, anchorId, 4));
+}
+
+TEST(TDoAMeasurementBuffer, SnapshotExpiresStaleAndConsumesOnlyWhenEnough)
+{
+    etl::array<tdoa::MeasurementSlot, 3> slots = {};
+    etl::array<bool, 4> configured = {true, true, true, true};
+    tdoa::MeasurementSlot snapshot[3] = {};
+
+    slots[0] = tdoa::MeasurementSlot{1.0f, 90, 0, 1, true};
+    slots[1] = tdoa::MeasurementSlot{2.0f, 20, 1, 2, true};
+    slots[2] = tdoa::MeasurementSlot{3.0f, 80, 2, 3, true};
+
+    const tdoa::MeasurementSnapshotResult result =
+        tdoa::SnapshotFreshMeasurements(slots, configured, 100, 50, 2, snapshot, 3);
+
+    EXPECT_TRUE(result.haveEnough);
+    EXPECT_EQ(result.copied, 2);
+    EXPECT_EQ(result.measurementCountForStats, 2);
+    EXPECT_EQ(result.expired, 1);
+    EXPECT_EQ(result.consumed, 2);
+    EXPECT_EQ(snapshot[0].tdoa, 1.0f);
+    EXPECT_EQ(snapshot[1].tdoa, 3.0f);
+    EXPECT_FALSE(slots[0].fresh);
+    EXPECT_FALSE(slots[1].fresh);
+    EXPECT_FALSE(slots[2].fresh);
+}
+
+TEST(TDoAMeasurementBuffer, SnapshotLeavesPartialFreshBatchUnconsumed)
+{
+    etl::array<tdoa::MeasurementSlot, 2> slots = {};
+    etl::array<bool, 3> configured = {true, true, true};
+    tdoa::MeasurementSlot snapshot[2] = {};
+
+    slots[0] = tdoa::MeasurementSlot{1.0f, 90, 0, 1, true};
+
+    const tdoa::MeasurementSnapshotResult result =
+        tdoa::SnapshotFreshMeasurements(slots, configured, 100, 50, 2, snapshot, 2);
+
+    EXPECT_FALSE(result.haveEnough);
+    EXPECT_EQ(result.copied, 0);
+    EXPECT_EQ(result.measurementCountForStats, 1);
+    EXPECT_EQ(result.expired, 0);
+    EXPECT_EQ(result.consumed, 0);
+    EXPECT_TRUE(slots[0].fresh);
+}
+
+TEST(TDoAMeasurementBuffer, SnapshotExpiresInvalidAnchorSlotsBeforeIndexingConfiguredAnchors)
+{
+    etl::array<tdoa::MeasurementSlot, 1> slots = {};
+    etl::array<bool, 4> configured = {true, true, true, true};
+    tdoa::MeasurementSlot snapshot[1] = {};
+
+    slots[0] = tdoa::MeasurementSlot{1.0f, 90, 0, 9, true};
+
+    const tdoa::MeasurementSnapshotResult result =
+        tdoa::SnapshotFreshMeasurements(slots, configured, 100, 50, 1, snapshot, 1);
+
+    EXPECT_FALSE(result.haveEnough);
+    EXPECT_EQ(result.copied, 0);
+    EXPECT_EQ(result.expired, 1);
+    EXPECT_EQ(result.consumed, 0);
+    EXPECT_FALSE(slots[0].fresh);
+}
+
 int main(int argc, char **argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
-    if (RUN_ALL_TESTS())
-    ;
-    return 0;
+    return RUN_ALL_TESTS();
 }

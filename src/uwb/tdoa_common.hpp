@@ -2,12 +2,14 @@
 
 #include <stdint.h>
 
-#include "tdoa_pairs.hpp"
-#include "uwb_params.hpp"
-
 namespace tdoa {
 
-inline bool ParseAnchorId(const UWBShortAddr& shortAddr, uint8_t& outAnchorId)
+static constexpr uint8_t kMaxParsedAnchorCount = 8;
+
+template <typename ShortAddr>
+inline bool ParseAnchorId(const ShortAddr& shortAddr,
+                          uint8_t& outAnchorId,
+                          uint8_t anchorCount = kMaxParsedAnchorCount)
 {
     if (shortAddr[0] < '0' || shortAddr[0] > '9') {
         return false;
@@ -21,7 +23,7 @@ inline bool ParseAnchorId(const UWBShortAddr& shortAddr, uint8_t& outAnchorId)
         value = static_cast<uint8_t>(value * 10 + static_cast<uint8_t>(shortAddr[1] - '0'));
     }
 
-    if (value > 7) {
+    if (value >= anchorCount) {
         return false;
     }
 
