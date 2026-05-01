@@ -34,6 +34,7 @@
 #include "tdoa_common.hpp"
 #include "tdoa_measurement_buffer.hpp"
 #include "tdoa_pairs.hpp"
+#include "utils/fixed_json_builder.hpp"
 #include "utils/running_stats.hpp"
 
 namespace {
@@ -129,6 +130,7 @@ static TDoAAnchorModel s_anchorModel;
 static constexpr size_t kEstimatorPositionWindow = 128;
 static constexpr uint8_t kEstimatorAnchorCount = 4;
 static constexpr size_t kEstimatorPairCount = tdoa::PairCount(kEstimatorAnchorCount);
+static constexpr size_t kEstimatorStatsJsonCapacity = 2048;
 
 using Utils::RunningStats;
 
@@ -418,89 +420,90 @@ static String estimatorStatsJson()
     }
     xSemaphoreGive(estimator_stats_mtx);
 
-    String out;
-    out.reserve(1500);
-    out = "{\"sent\":";
-    out += String(samplesSent);
-    out += ",\"rejected\":";
-    out += String(samplesRejected);
-    out += ",\"rejectRmse\":";
-    out += String(rejectRmse);
-    out += ",\"rejectNan\":";
-    out += String(rejectNan);
-    out += ",\"rejectInsufficient\":";
-    out += String(rejectInsufficient);
-    out += ",\"staleRemoved\":";
-    out += String(staleRemoved);
-    out += ",\"lastRmseMm\":";
-    out += String(lastRmseMm);
-    out += ",\"measurementMin\":";
-    out += String(minMeasurementCount == UINT8_MAX ? 0 : minMeasurementCount);
-    out += ",\"measurementMax\":";
-    out += String(maxMeasurementCount);
-    out += ",\"positionWindow\":";
-    out += String(static_cast<unsigned int>(positionCount));
-    out += ",\"meanCm\":{\"x\":";
-    out += String(meanX * 100.0f, 1);
-    out += ",\"y\":";
-    out += String(meanY * 100.0f, 1);
-    out += ",\"z\":";
-    out += String(meanZ * 100.0f, 1);
-    out += "},\"stdCm\":{\"x\":";
-    out += String(stdX * 100.0f, 1);
-    out += ",\"y\":";
-    out += String(stdY * 100.0f, 1);
-    out += ",\"z\":";
-    out += String(stdZ * 100.0f, 1);
-    out += "},\"horizontalRmsCm\":";
-    out += String(metersToCentimeters(rmsHorizontal));
-    out += ",\"fullWindow\":{\"count\":";
-    out += String(xCmFull.count);
-    out += ",\"meanCm\":{\"x\":";
-    out += String(xCmFull.mean, 2);
-    out += ",\"y\":";
-    out += String(yCmFull.mean, 2);
-    out += ",\"z\":";
-    out += String(zCmFull.mean, 2);
-    out += "},\"stdCm\":{\"x\":";
-    out += String(Utils::RunningStatsStd(xCmFull), 2);
-    out += ",\"y\":";
-    out += String(Utils::RunningStatsStd(yCmFull), 2);
-    out += ",\"z\":";
-    out += String(Utils::RunningStatsStd(zCmFull), 2);
-    out += "},\"minCm\":{\"x\":";
-    out += String(xCmFull.count == 0 ? 0.0 : xCmFull.minValue, 2);
-    out += ",\"y\":";
-    out += String(yCmFull.count == 0 ? 0.0 : yCmFull.minValue, 2);
-    out += ",\"z\":";
-    out += String(zCmFull.count == 0 ? 0.0 : zCmFull.minValue, 2);
-    out += "},\"maxCm\":{\"x\":";
-    out += String(xCmFull.count == 0 ? 0.0 : xCmFull.maxValue, 2);
-    out += ",\"y\":";
-    out += String(yCmFull.count == 0 ? 0.0 : yCmFull.maxValue, 2);
-    out += ",\"z\":";
-    out += String(zCmFull.count == 0 ? 0.0 : zCmFull.maxValue, 2);
-    out += "},\"horizontalRmsCm\":";
+    Utils::FixedJsonBuilder<kEstimatorStatsJsonCapacity> out;
+    out.Append("{\"sent\":");
+    out.AppendUnsigned(samplesSent);
+    out.Append(",\"rejected\":");
+    out.AppendUnsigned(samplesRejected);
+    out.Append(",\"rejectRmse\":");
+    out.AppendUnsigned(rejectRmse);
+    out.Append(",\"rejectNan\":");
+    out.AppendUnsigned(rejectNan);
+    out.Append(",\"rejectInsufficient\":");
+    out.AppendUnsigned(rejectInsufficient);
+    out.Append(",\"staleRemoved\":");
+    out.AppendUnsigned(staleRemoved);
+    out.Append(",\"lastRmseMm\":");
+    out.AppendUnsigned(lastRmseMm);
+    out.Append(",\"measurementMin\":");
+    out.AppendUnsigned(minMeasurementCount == UINT8_MAX ? 0 : minMeasurementCount);
+    out.Append(",\"measurementMax\":");
+    out.AppendUnsigned(maxMeasurementCount);
+    out.Append(",\"positionWindow\":");
+    out.AppendUnsigned(static_cast<unsigned long>(positionCount));
+    out.Append(",\"meanCm\":{\"x\":");
+    out.AppendDouble(meanX * 100.0f, 1);
+    out.Append(",\"y\":");
+    out.AppendDouble(meanY * 100.0f, 1);
+    out.Append(",\"z\":");
+    out.AppendDouble(meanZ * 100.0f, 1);
+    out.Append("},\"stdCm\":{\"x\":");
+    out.AppendDouble(stdX * 100.0f, 1);
+    out.Append(",\"y\":");
+    out.AppendDouble(stdY * 100.0f, 1);
+    out.Append(",\"z\":");
+    out.AppendDouble(stdZ * 100.0f, 1);
+    out.Append("},\"horizontalRmsCm\":");
+    out.AppendUnsigned(metersToCentimeters(rmsHorizontal));
+    out.Append(",\"fullWindow\":{\"count\":");
+    out.AppendUnsigned(xCmFull.count);
+    out.Append(",\"meanCm\":{\"x\":");
+    out.AppendDouble(xCmFull.mean, 2);
+    out.Append(",\"y\":");
+    out.AppendDouble(yCmFull.mean, 2);
+    out.Append(",\"z\":");
+    out.AppendDouble(zCmFull.mean, 2);
+    out.Append("},\"stdCm\":{\"x\":");
+    out.AppendDouble(Utils::RunningStatsStd(xCmFull), 2);
+    out.Append(",\"y\":");
+    out.AppendDouble(Utils::RunningStatsStd(yCmFull), 2);
+    out.Append(",\"z\":");
+    out.AppendDouble(Utils::RunningStatsStd(zCmFull), 2);
+    out.Append("},\"minCm\":{\"x\":");
+    out.AppendDouble(xCmFull.count == 0 ? 0.0 : xCmFull.minValue, 2);
+    out.Append(",\"y\":");
+    out.AppendDouble(yCmFull.count == 0 ? 0.0 : yCmFull.minValue, 2);
+    out.Append(",\"z\":");
+    out.AppendDouble(zCmFull.count == 0 ? 0.0 : zCmFull.minValue, 2);
+    out.Append("},\"maxCm\":{\"x\":");
+    out.AppendDouble(xCmFull.count == 0 ? 0.0 : xCmFull.maxValue, 2);
+    out.Append(",\"y\":");
+    out.AppendDouble(yCmFull.count == 0 ? 0.0 : yCmFull.maxValue, 2);
+    out.Append(",\"z\":");
+    out.AppendDouble(zCmFull.count == 0 ? 0.0 : zCmFull.maxValue, 2);
+    out.Append("},\"horizontalRmsCm\":");
     const double fullHorizontalRms = std::sqrt((xCmFull.count > 1 ? xCmFull.m2 / static_cast<double>(xCmFull.count) : 0.0)
                                              + (yCmFull.count > 1 ? yCmFull.m2 / static_cast<double>(yCmFull.count) : 0.0));
-    out += String(fullHorizontalRms, 2);
-    out += "},\"rmseMm\":";
+    out.AppendDouble(fullHorizontalRms, 2);
+    out.Append("},\"rmseMm\":");
     Utils::AppendRunningStatsJson(out, rmseMmFull, 2);
-    out += ",\"measurementCount\":";
+    out.Append(",\"measurementCount\":");
     Utils::AppendRunningStatsJson(out, measurementCountFull, 2);
-    out += ",\"tdoaPairs\":[";
+    out.Append(",\"tdoaPairs\":[");
     for (size_t i = 0; i < kEstimatorPairCount; i++) {
-        if (i > 0) out += ",";
-        out += "{\"pair\":\"";
-        out += String(static_cast<unsigned int>(pairInputs[i].a));
-        out += String(static_cast<unsigned int>(pairInputs[i].b));
-        out += "\",\"diffCm\":";
+        if (i > 0) out.Append(',');
+        out.Append("{\"pair\":\"");
+        out.AppendUnsigned(pairInputs[i].a);
+        out.AppendUnsigned(pairInputs[i].b);
+        out.Append("\",\"diffCm\":");
         Utils::AppendRunningStatsJson(out, pairInputs[i].distanceDiffCm, 2);
-        out += "}";
+        out.Append("}");
     }
-    out += "]";
-    out += "}";
-    return out;
+    out.Append("]}");
+    if (out.Truncated()) {
+        return "{\"error\":\"estimator_stats_json_truncated\"}";
+    }
+    return String(out.CStr());
 }
 
 static void resetEstimatorStats()

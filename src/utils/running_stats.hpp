@@ -1,7 +1,5 @@
 #pragma once
 
-#include <Arduino.h>
-
 #include <cmath>
 #include <stdint.h>
 
@@ -47,20 +45,20 @@ inline double RunningStatsStd(const RunningStats& stats)
     return std::sqrt(stats.m2 / static_cast<double>(stats.count));
 }
 
-inline void AppendRunningStatsJson(String& out, const RunningStats& stats, uint8_t decimals)
+template <typename JsonBuilder>
+inline void AppendRunningStatsJson(JsonBuilder& out, const RunningStats& stats, uint8_t decimals)
 {
-    const unsigned int places = static_cast<unsigned int>(decimals);
-    out += "{\"count\":";
-    out += String(stats.count);
-    out += ",\"mean\":";
-    out += String(stats.mean, places);
-    out += ",\"std\":";
-    out += String(RunningStatsStd(stats), places);
-    out += ",\"min\":";
-    out += String(stats.count == 0 ? 0.0 : stats.minValue, places);
-    out += ",\"max\":";
-    out += String(stats.count == 0 ? 0.0 : stats.maxValue, places);
-    out += "}";
+    out.Append("{\"count\":");
+    out.AppendUnsigned(stats.count);
+    out.Append(",\"mean\":");
+    out.AppendDouble(stats.mean, decimals);
+    out.Append(",\"std\":");
+    out.AppendDouble(RunningStatsStd(stats), decimals);
+    out.Append(",\"min\":");
+    out.AppendDouble(stats.count == 0 ? 0.0 : stats.minValue, decimals);
+    out.Append(",\"max\":");
+    out.AppendDouble(stats.count == 0 ? 0.0 : stats.maxValue, decimals);
+    out.Append("}");
 }
 
 } // namespace Utils

@@ -3,6 +3,8 @@
 #include "uwb/tdoa_common.hpp"
 #include "uwb/tdoa_measurement_buffer.hpp"
 #include "uwb/tdoa_pairs.hpp"
+#include "utils/fixed_json_builder.hpp"
+#include "utils/running_stats.hpp"
 
 TEST(TDoAPairs, PairIndexMatchesExpectedFourAnchorOrder)
 {
@@ -143,6 +145,29 @@ TEST(TDoAMeasurementBuffer, SnapshotExpiresInvalidAnchorSlotsBeforeIndexingConfi
     EXPECT_EQ(result.expired, 1);
     EXPECT_EQ(result.consumed, 0);
     EXPECT_FALSE(slots[0].fresh);
+}
+
+TEST(RunningStats, AppendsJsonToFixedBuilder)
+{
+    Utils::RunningStats stats;
+    Utils::UpdateRunningStats(stats, 1.0);
+    Utils::UpdateRunningStats(stats, 2.0);
+    Utils::UpdateRunningStats(stats, 3.0);
+
+    Utils::FixedJsonBuilder<128> json;
+    Utils::AppendRunningStatsJson(json, stats, 2);
+
+    EXPECT_FALSE(json.Truncated());
+    EXPECT_STREQ(json.CStr(), "{\"count\":3,\"mean\":2.00,\"std\":0.82,\"min\":1.00,\"max\":3.00}");
+}
+
+TEST(FixedJsonBuilder, ReportsTruncationWithoutOverflow)
+{
+    Utils::FixedJsonBuilder<8> json;
+
+    EXPECT_FALSE(json.Append("0123456789"));
+    EXPECT_TRUE(json.Truncated());
+    EXPECT_STREQ(json.CStr(), "01234567");
 }
 
 int main(int argc, char **argv)
