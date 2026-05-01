@@ -27,9 +27,13 @@
 #include "scheduler.hpp"
 #include "app.hpp"
 #include "bsp/board.hpp"
+#include "dw1000_radio_config.hpp"
 #include "uwb_frontend_littlefs.hpp"
 #include "tdoa_anchor_model.hpp"
 #include "tdoa_anchor_model_commands.hpp"
+#include "tdoa_common.hpp"
+#include "tdoa_measurement_buffer.hpp"
+#include "utils/running_stats.hpp"
 
 namespace {
 
@@ -83,75 +87,8 @@ static FAST_CODE void rxCallback(dwDevice_t *dev);
 static FAST_CODE void rxTimeoutCallback(dwDevice_t *dev);
 static FAST_CODE void rxFailedCallback(dwDevice_t *dev);
 
-// Helper function to get DW1000 mode array by index
-static const uint8_t* getDwModeByIndex(uint8_t idx) {
-    switch(idx) {
-        case 0: return MODE_SHORTDATA_FAST_ACCURACY;   // 6.8Mb/s, 64MHz PRF, 128 preamble (DEFAULT)
-        case 1: return MODE_LONGDATA_FAST_ACCURACY;    // 6.8Mb/s, 64MHz PRF, 1024 preamble
-        case 2: return MODE_SHORTDATA_FAST_LOWPOWER;   // 6.8Mb/s, 16MHz PRF, 128 preamble
-        case 3: return MODE_LONGDATA_FAST_LOWPOWER;    // 6.8Mb/s, 16MHz PRF, 1024 preamble
-        case 4: return MODE_SHORTDATA_MID_ACCURACY;    // 850kb/s, 64MHz PRF, 128 preamble
-        case 5: return MODE_LONGDATA_MID_ACCURACY;     // 850kb/s, 64MHz PRF, 1024 preamble
-        case 6: return MODE_LONGDATA_RANGE_ACCURACY;   // 110kb/s, 64MHz PRF, 2048 preamble
-        case 7: return MODE_LONGDATA_RANGE_LOWPOWER;   // 110kb/s, 16MHz PRF, 2048 preamble
-        default: return MODE_SHORTDATA_FAST_ACCURACY;
-    }
-}
-
-// Helper function to check if mode uses 64MHz PRF (for preamble code selection)
-static bool isDwMode64MHzPRF(uint8_t idx) {
-    // Modes 2, 3, 7 use 16MHz PRF; others use 64MHz PRF
-    return (idx != 2 && idx != 3 && idx != 7);
-}
-
-// Helper function to apply TX power settings
-static void applyTxPower(dwDevice_t* dev, uint8_t powerLevel, uint8_t smartPowerEnable) {
-    if (smartPowerEnable) {
-        dwUseSmartPower(dev, true);
-    } else {
-        dwUseSmartPower(dev, false);
-        switch(powerLevel) {
-            case 0: // Low power
-                dwSetTxPower(dev, 0x07070707ul);
-                break;
-            case 1: // Medium-low
-                dwSetTxPower(dev, 0x0F0F0F0Ful);
-                break;
-            case 2: // Medium-high
-                dwSetTxPower(dev, 0x17171717ul);
-                break;
-            case 3: // High (large power) - default
-            default:
-                dwEnableLargePower(dev);
-                break;
-        }
-    }
-}
-
-static bool parseTdoaAnchorId(const UWBShortAddr& shortAddr, uint8_t& outAnchorId) {
-    if (shortAddr[0] < '0' || shortAddr[0] > '9') {
-        return false;
-    }
-
-    uint8_t value = static_cast<uint8_t>(shortAddr[0] - '0');
-    if (shortAddr[1] != '\0') {
-        if (shortAddr[1] < '0' || shortAddr[1] > '9') {
-            return false;
-        }
-        value = static_cast<uint8_t>(value * 10 + static_cast<uint8_t>(shortAddr[1] - '0'));
-    }
-
-    if (value > 7) {
-        return false;
-    }
-
-    outAnchorId = value;
-    return true;
-}
-
 static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa);
 static bool anchorModelTofCallback(uint8_t fromAnchor, uint8_t toAnchor, uint16_t rawDistanceTimestampUnits, uint16_t fromAntennaDelay, uint16_t toAntennaDelay, uint16_t* outDistanceTimestampUnits);
-Eigen::MatrixXd spanToMatrix(etl::span<const UWBAnchorParam> data, int rows);
 static void estimatorProcess();
 
 // 8 anchors → 8C2 = 28 unique unordered pairs. Each pair has its own slot,
@@ -160,32 +97,9 @@ static void estimatorProcess();
 static constexpr uint8_t kNumAnchors = 8;
 static constexpr uint8_t kNumPairs = (kNumAnchors * (kNumAnchors - 1)) / 2;
 
-// Pair-index lookup: index for canonical pair (a < b).
-//   pair_index(a, b) = a*(2*kNumAnchors - a - 3)/2 + (b - 1)
-// Compile-time table avoids the arithmetic at runtime and keeps the producer
-// path branch-free.
-static constexpr auto kPairIndexTable = []() {
-    etl::array<etl::array<uint8_t, kNumAnchors>, kNumAnchors> t{};
-    uint8_t idx = 0;
-    for (uint8_t a = 0; a < kNumAnchors; ++a) {
-        for (uint8_t b = a + 1; b < kNumAnchors; ++b) {
-            t[a][b] = idx;
-            t[b][a] = idx;  // symmetric for reverse-order callbacks
-            ++idx;
-        }
-    }
-    return t;
-}();
+using PairSlot = tdoa::MeasurementSlot;
 
-struct PairSlot {
-    float tdoa;             // canonical: distance(a) - distance(b) with a < b
-    uint64_t timestamp_us;  // esp_timer_get_time() when last updated
-    uint8_t anchor_a;       // canonical (smaller) anchor id
-    uint8_t anchor_b;       // canonical (larger) anchor id
-    bool fresh;             // true if updated since last consume
-};
-
-static etl::array<PairSlot, kNumPairs> pair_slots = {};
+static etl::array<tdoa::MeasurementSlot, kNumPairs> pair_slots = {};
 static SemaphoreHandle_t measurements_mtx = xSemaphoreCreateMutex();
 static etl::array<UWBAnchorParam, 8> anchor_positions;
 static etl::array<bool, 8> configured_anchor_ids = {};
@@ -214,13 +128,7 @@ static TDoAAnchorModel s_anchorModel;
 static constexpr size_t kEstimatorPositionWindow = 128;
 static constexpr size_t kEstimatorPairCount = 6;
 
-struct RunningStats {
-    uint32_t count = 0;
-    double mean = 0.0;
-    double m2 = 0.0;
-    double minValue = 0.0;
-    double maxValue = 0.0;
-};
+using Utils::RunningStats;
 
 struct PairInputStats {
     uint8_t a = 0;
@@ -254,65 +162,9 @@ struct EstimatorStats {
 static EstimatorStats* s_estimatorStats = nullptr;
 static SemaphoreHandle_t estimator_stats_mtx = nullptr;
 
-static void updateRunningStats(RunningStats& stats, double value)
-{
-    stats.count++;
-    if (stats.count == 1) {
-        stats.mean = value;
-        stats.m2 = 0.0;
-        stats.minValue = value;
-        stats.maxValue = value;
-        return;
-    }
-
-    if (value < stats.minValue) {
-        stats.minValue = value;
-    }
-    if (value > stats.maxValue) {
-        stats.maxValue = value;
-    }
-
-    const double delta = value - stats.mean;
-    stats.mean += delta / static_cast<double>(stats.count);
-    const double delta2 = value - stats.mean;
-    stats.m2 += delta * delta2;
-}
-
-static double runningStatsStd(const RunningStats& stats)
-{
-    if (stats.count <= 1) {
-        return 0.0;
-    }
-    return std::sqrt(stats.m2 / static_cast<double>(stats.count));
-}
-
-static void appendRunningStatsJson(String& out, const RunningStats& stats, uint8_t decimals)
-{
-    const unsigned int places = static_cast<unsigned int>(decimals);
-    out += "{\"count\":";
-    out += String(stats.count);
-    out += ",\"mean\":";
-    out += String(stats.mean, places);
-    out += ",\"std\":";
-    out += String(runningStatsStd(stats), places);
-    out += ",\"min\":";
-    out += String(stats.count == 0 ? 0.0 : stats.minValue, places);
-    out += ",\"max\":";
-    out += String(stats.count == 0 ? 0.0 : stats.maxValue, places);
-    out += "}";
-}
-
 static int8_t estimatorPairIndex(uint8_t anchorA, uint8_t anchorB)
 {
-    const uint8_t lo = std::min(anchorA, anchorB);
-    const uint8_t hi = std::max(anchorA, anchorB);
-    if (lo == 0 && hi == 1) return 0;
-    if (lo == 0 && hi == 2) return 1;
-    if (lo == 0 && hi == 3) return 2;
-    if (lo == 1 && hi == 2) return 3;
-    if (lo == 1 && hi == 3) return 4;
-    if (lo == 2 && hi == 3) return 5;
-    return -1;
+    return tdoa::PairIndex(anchorA, anchorB, 4);
 }
 
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
@@ -349,12 +201,10 @@ static uint8_t configuredMatcherPolicy()
 
 static void initEstimatorStatsPairs(EstimatorStats& stats)
 {
-    constexpr uint8_t pairs[kEstimatorPairCount][2] = {
-        {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}
-    };
     for (size_t i = 0; i < kEstimatorPairCount; i++) {
-        stats.pairInputs[i].a = pairs[i][0];
-        stats.pairInputs[i].b = pairs[i][1];
+        const tdoa::AnchorPair pair = tdoa::PairByIndex<4>(static_cast<uint8_t>(i));
+        stats.pairInputs[i].a = pair.a;
+        stats.pairInputs[i].b = pair.b;
     }
 }
 
@@ -398,7 +248,7 @@ static void recordEstimatorInputTdoa(uint8_t anchorA, uint8_t anchorB, float dis
     if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(1)) != pdTRUE) {
         return;
     }
-    updateRunningStats(s_estimatorStats->pairInputs[pairIndex].distanceDiffCm,
+    Utils::UpdateRunningStats(s_estimatorStats->pairInputs[pairIndex].distanceDiffCm,
                        static_cast<double>(normalizedDiffMeters) * 100.0);
     xSemaphoreGive(estimator_stats_mtx);
 }
@@ -428,11 +278,11 @@ static void recordEstimatorAccepted(float x, float y, float z, double rmse, size
         ? static_cast<uint32_t>((rmse * 1000.0) + 0.5)
         : 0;
     recordMeasurementCountLocked(measurementCount);
-    updateRunningStats(s_estimatorStats->xCmFull, static_cast<double>(x) * 100.0);
-    updateRunningStats(s_estimatorStats->yCmFull, static_cast<double>(y) * 100.0);
-    updateRunningStats(s_estimatorStats->zCmFull, static_cast<double>(z) * 100.0);
-    updateRunningStats(s_estimatorStats->rmseMmFull, rmse * 1000.0);
-    updateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
+    Utils::UpdateRunningStats(s_estimatorStats->xCmFull, static_cast<double>(x) * 100.0);
+    Utils::UpdateRunningStats(s_estimatorStats->yCmFull, static_cast<double>(y) * 100.0);
+    Utils::UpdateRunningStats(s_estimatorStats->zCmFull, static_cast<double>(z) * 100.0);
+    Utils::UpdateRunningStats(s_estimatorStats->rmseMmFull, rmse * 1000.0);
+    Utils::UpdateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
 
     if (s_estimatorStats->x != nullptr && s_estimatorStats->y != nullptr && s_estimatorStats->z != nullptr) {
         s_estimatorStats->x[s_estimatorStats->positionIndex] = x;
@@ -465,7 +315,7 @@ static void recordEstimatorRejected(bool rmse, bool nan, bool insufficient, size
         s_estimatorStats->rejectInsufficient++;
     }
     recordMeasurementCountLocked(measurementCount);
-    updateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
+    Utils::UpdateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
 
     xSemaphoreGive(estimator_stats_mtx);
 }
@@ -610,11 +460,11 @@ static String estimatorStatsJson()
     out += ",\"z\":";
     out += String(zCmFull.mean, 2);
     out += "},\"stdCm\":{\"x\":";
-    out += String(runningStatsStd(xCmFull), 2);
+    out += String(Utils::RunningStatsStd(xCmFull), 2);
     out += ",\"y\":";
-    out += String(runningStatsStd(yCmFull), 2);
+    out += String(Utils::RunningStatsStd(yCmFull), 2);
     out += ",\"z\":";
-    out += String(runningStatsStd(zCmFull), 2);
+    out += String(Utils::RunningStatsStd(zCmFull), 2);
     out += "},\"minCm\":{\"x\":";
     out += String(xCmFull.count == 0 ? 0.0 : xCmFull.minValue, 2);
     out += ",\"y\":";
@@ -632,9 +482,9 @@ static String estimatorStatsJson()
                                              + (yCmFull.count > 1 ? yCmFull.m2 / static_cast<double>(yCmFull.count) : 0.0));
     out += String(fullHorizontalRms, 2);
     out += "},\"rmseMm\":";
-    appendRunningStatsJson(out, rmseMmFull, 2);
+    Utils::AppendRunningStatsJson(out, rmseMmFull, 2);
     out += ",\"measurementCount\":";
-    appendRunningStatsJson(out, measurementCountFull, 2);
+    Utils::AppendRunningStatsJson(out, measurementCountFull, 2);
     out += ",\"tdoaPairs\":[";
     for (size_t i = 0; i < kEstimatorPairCount; i++) {
         if (i > 0) out += ",";
@@ -642,7 +492,7 @@ static String estimatorStatsJson()
         out += String(static_cast<unsigned int>(pairInputs[i].a));
         out += String(static_cast<unsigned int>(pairInputs[i].b));
         out += "\",\"diffCm\":";
-        appendRunningStatsJson(out, pairInputs[i].distanceDiffCm, 2);
+        Utils::AppendRunningStatsJson(out, pairInputs[i].distanceDiffCm, 2);
         out += "}";
     }
     out += "]";
@@ -760,7 +610,7 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
     // Fill in anchor positions lookup table
     for (uint32_t i = 0; i < anchors.size(); i++) {
         uint8_t anchorId = 0;
-        if (!parseTdoaAnchorId(anchors[i].shortAddr, anchorId)) {
+        if (!tdoa::ParseAnchorId(anchors[i].shortAddr, anchorId)) {
             LOG_WARN("Ignoring invalid configured anchor short address '%c%c' (expected 0-7)",
                      anchors[i].shortAddr[0], anchors[i].shortAddr[1]);
             continue;
@@ -813,18 +663,7 @@ UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, et
 
     // Get UWB radio settings from parameters
     const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
-    const uint8_t* dwMode = getDwModeByIndex(uwbParams.dwMode);
-    dwEnableMode(&m_Device, dwMode);
-    dwSetChannel(&m_Device, uwbParams.channel);
-    // Select preamble code based on PRF (16MHz vs 64MHz)
-    if (isDwMode64MHzPRF(uwbParams.dwMode)) {
-        dwSetPreambleCode(&m_Device, PREAMBLE_CODE_64MHZ_9);
-    } else {
-        dwSetPreambleCode(&m_Device, PREAMBLE_CODE_16MHZ_4);
-    }
-
-    // Apply TX power settings
-    applyTxPower(&m_Device, uwbParams.txPowerLevel, uwbParams.smartPowerEnable);
+    dw1000_radio::ApplyTdoaRadioParams(&m_Device, uwbParams);
 
     dwSetReceiveWaitTimeout(&m_Device, 10000);
 
@@ -991,16 +830,21 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
         return;
     }
 
-    // Canonicalize: smaller id is "a", larger is "b". Sign of tdoa flips if
-    // the callback's order is reversed relative to canonical.
-    uint8_t a = tdoa->anchorIdA;
-    uint8_t b = tdoa->anchorIdB;
+    tdoa::AnchorPair pair;
+    bool reversed = false;
+    if (!tdoa::CanonicalizePair(tdoa->anchorIdA, tdoa->anchorIdB, kNumAnchors, pair, reversed)) {
+        return;
+    }
+
     float canonical_tdoa = tdoa->distanceDiff;
-    if (a > b) {
-        std::swap(a, b);
+    if (reversed) {
         canonical_tdoa = -canonical_tdoa;
     }
-    const uint8_t idx = kPairIndexTable[a][b];
+    const int8_t pairIndex = tdoa::PairIndex(pair.a, pair.b, kNumAnchors);
+    if (pairIndex < 0) {
+        return;
+    }
+    const uint8_t idx = static_cast<uint8_t>(pairIndex);
     const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
 
     // Bounded mutex wait — if the consumer is mid-solve we drop this sample
@@ -1017,8 +861,8 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
     const bool was_fresh = slot.fresh;
     slot.tdoa = canonical_tdoa;
     slot.timestamp_us = now_us;
-    slot.anchor_a = a;
-    slot.anchor_b = b;
+    slot.anchor_a = pair.a;
+    slot.anchor_b = pair.b;
     slot.fresh = true;
     // Update fresh-pair count INSIDE the mutex so it stays serialized with
     // the slot.fresh transition. Doing this outside the mutex races against
@@ -1213,50 +1057,33 @@ static void estimatorProcess() {
     size_t copy_count = 0;
     size_t measurement_count_for_stats = 0;
     PairSlot snapshot[kNumPairs];
+    etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
 
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) == pdTRUE) {
         const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+        const tdoa::MeasurementSnapshotResult snapshotResult =
+            tdoa::SnapshotFreshMeasurements(pair_slots,
+                                             configured_anchor_ids,
+                                             now_us,
+                                             kStaleThresholdUs,
+                                             MIN_MEASUREMENTS,
+                                             snapshot,
+                                             kNumPairs);
 
-        // Pass 1: drop stale / unconfigured fresh slots, count usable ones.
-        uint32_t expired = 0;
-        size_t usable_fresh = 0;
-        for (uint8_t i = 0; i < kNumPairs; ++i) {
-            PairSlot& slot = pair_slots[i];
-            if (!slot.fresh) continue;
-            if ((now_us - slot.timestamp_us) > kStaleThresholdUs
-                || !configured_anchor_ids[slot.anchor_a]
-                || !configured_anchor_ids[slot.anchor_b]) {
-                slot.fresh = false;
-                ++expired;
+        have_enough = snapshotResult.haveEnough;
+        copy_count = snapshotResult.copied;
+        measurement_count_for_stats = snapshotResult.measurementCountForStats;
+        recordStaleRemoved(snapshotResult.expired);
 #if TDOA_STATS_LOGGING == ENABLE
-                stats_stale_removed++;
+        stats_stale_removed += snapshotResult.expired;
 #endif
-                continue;
-            }
-            ++usable_fresh;
+
+        const uint32_t fresh_delta = snapshotResult.consumed + snapshotResult.expired;
+        if (fresh_delta > 0) {
+            fresh_pair_count.fetch_sub(fresh_delta, std::memory_order_relaxed);
         }
-        recordStaleRemoved(expired);
-
-        have_enough = (usable_fresh >= MIN_MEASUREMENTS);
-        measurement_count_for_stats = usable_fresh;
-
-        // Pass 2: only consume if we'll solve. Otherwise leave fresh slots
-        // intact so they accumulate across watchdog wakes.
         if (have_enough) {
-            uint32_t consumed = 0;
-            for (uint8_t i = 0; i < kNumPairs && copy_count < kNumPairs; ++i) {
-                PairSlot& slot = pair_slots[i];
-                if (!slot.fresh) continue;
-                snapshot[copy_count++] = slot;
-                slot.fresh = false;
-                ++consumed;
-            }
-            if (consumed + expired > 0) {
-                fresh_pair_count.fetch_sub(consumed + expired, std::memory_order_relaxed);
-            }
-            measurement_count_for_stats = copy_count;
-        } else if (expired > 0) {
-            fresh_pair_count.fetch_sub(expired, std::memory_order_relaxed);
+            anchor_snapshot = anchor_positions;
         }
 
         xSemaphoreGive(measurements_mtx);
@@ -1277,12 +1104,12 @@ static void estimatorProcess() {
 
         for (size_t i = 0; i < copy_count; ++i) {
             const PairSlot& s = snapshot[i];
-            anchors_left.row(i) << static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_a].x),
-                                   static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_a].y),
-                                   static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_a].z);
-            anchors_right.row(i) << static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_b].x),
-                                    static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_b].y),
-                                    static_cast<tdoa_estimator::Scalar>(anchor_positions[s.anchor_b].z);
+            anchors_left.row(i) << static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].x),
+                                   static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].y),
+                                   static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].z);
+            anchors_right.row(i) << static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].x),
+                                    static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].y),
+                                    static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].z);
             // Slot stores canonical tdoa = d(b) - d(a) (matching tdoaMeasurement_t's
             // "right - left" convention with right=b, left=a). The solver's
             // residual is d(L) - d(R) - tdoas(i) with L=a, R=b, so flip sign.
