@@ -49,14 +49,11 @@ using TelemetryCallback = etl::delegate<DeviceTelemetry()>;
 /**
  * @brief UDP Heartbeat Backend for RTLS-Link devices.
  *
- * Sends periodic heartbeat packets to the configured GCS IP address.
- * The heartbeat contains device information in JSON format.
+ * Sends periodic binary heartbeat packets to the configured GCS IP address.
  *
  * Protocol:
  * - Send heartbeat every 2 seconds to GCS IP on configured port
- * - Heartbeat payload (JSON):
- *   {"device":"rtls-link","id":"XX","role":"anchor|tag|...","ip":"X.X.X.X","mac":"XX:XX:XX:XX:XX:XX","uwb_short":"XX","mav_sysid":1,"fw":"X.X.X",
- *    "sending_pos":true,"anchors_seen":4,"origin_sent":true}
+ * - Payload is an RTLS binary protocol Heartbeat frame.
  */
 class WifiDiscovery : public WifiBackend {
 public:
@@ -72,7 +69,7 @@ public:
 
 private:
     void SendHeartbeat();
-    const char* ModeToRoleString(uint8_t mode);
+    uint8_t ModeToRoleId(uint8_t mode);
 
 private:
     static constexpr uint32_t kHeartbeatIntervalMs = 2000; // 2 seconds

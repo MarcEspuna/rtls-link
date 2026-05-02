@@ -112,7 +112,6 @@ void Logger::formatAndOutput(LogLevel level, const char* tag,
 #ifdef USE_LOGGING_UDP
     // UDP output
     if (s_udpEnabled) {
-        // Send as JSON for easier parsing by rtls-link-manager
         LogUdpBackend::send(timestamp_ms, level, tag, messageBuffer);
     }
 #endif

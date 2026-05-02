@@ -34,8 +34,6 @@
 #include "tdoa_common.hpp"
 #include "tdoa_measurement_buffer.hpp"
 #include "tdoa_pairs.hpp"
-#include "utils/fixed_json_builder.hpp"
-#include "utils/running_stats.hpp"
 
 namespace {
 
@@ -127,19 +125,6 @@ static volatile bool isr_flag = false;
 static uint8_t cached_anchors_seen = 0;
 static TDoAAnchorModel s_anchorModel;
 
-static constexpr size_t kEstimatorPositionWindow = 128;
-static constexpr uint8_t kEstimatorAnchorCount = 4;
-static constexpr size_t kEstimatorPairCount = tdoa::PairCount(kEstimatorAnchorCount);
-static constexpr size_t kEstimatorStatsJsonCapacity = 2048;
-
-using Utils::RunningStats;
-
-struct PairInputStats {
-    uint8_t a = 0;
-    uint8_t b = 0;
-    RunningStats distanceDiffCm;
-};
-
 struct EstimatorStats {
     uint32_t samplesSent = 0;
     uint32_t samplesRejected = 0;
@@ -148,28 +133,13 @@ struct EstimatorStats {
     uint32_t rejectInsufficient = 0;
     uint32_t staleRemoved = 0;
     uint32_t lastRmseMm = 0;
+    uint8_t lastMeasurementCount = 0;
     uint8_t minMeasurementCount = UINT8_MAX;
     uint8_t maxMeasurementCount = 0;
-    RunningStats xCmFull;
-    RunningStats yCmFull;
-    RunningStats zCmFull;
-    RunningStats rmseMmFull;
-    RunningStats measurementCountFull;
-    PairInputStats pairInputs[kEstimatorPairCount];
-    float* x = nullptr;
-    float* y = nullptr;
-    float* z = nullptr;
-    size_t positionIndex = 0;
-    size_t positionCount = 0;
 };
 
 static EstimatorStats* s_estimatorStats = nullptr;
 static SemaphoreHandle_t estimator_stats_mtx = nullptr;
-
-static int8_t estimatorPairIndex(uint8_t anchorA, uint8_t anchorB)
-{
-    return tdoa::PairIndex(anchorA, anchorB, kEstimatorAnchorCount);
-}
 
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
 {
@@ -203,23 +173,10 @@ static uint8_t configuredMatcherPolicy()
 #endif
 }
 
-static void initEstimatorStatsPairs(EstimatorStats& stats)
-{
-    for (size_t i = 0; i < kEstimatorPairCount; i++) {
-        const tdoa::AnchorPair pair =
-            tdoa::PairByIndex<kEstimatorAnchorCount>(static_cast<uint8_t>(i));
-        stats.pairInputs[i].a = pair.a;
-        stats.pairInputs[i].b = pair.b;
-    }
-}
-
 static void ensureEstimatorStatsMutex()
 {
     if (s_estimatorStats == nullptr) {
         s_estimatorStats = new EstimatorStats();
-        if (s_estimatorStats != nullptr) {
-            initEstimatorStatsPairs(*s_estimatorStats);
-        }
     }
     if (s_estimatorStats == nullptr) {
         return;
@@ -227,35 +184,13 @@ static void ensureEstimatorStatsMutex()
     if (estimator_stats_mtx == nullptr) {
         estimator_stats_mtx = xSemaphoreCreateMutex();
     }
-    if (s_estimatorStats->x == nullptr) {
-        s_estimatorStats->x = new float[kEstimatorPositionWindow]();
-    }
-    if (s_estimatorStats->y == nullptr) {
-        s_estimatorStats->y = new float[kEstimatorPositionWindow]();
-    }
-    if (s_estimatorStats->z == nullptr) {
-        s_estimatorStats->z = new float[kEstimatorPositionWindow]();
-    }
 }
 
 static void recordEstimatorInputTdoa(uint8_t anchorA, uint8_t anchorB, float distanceDiffMeters)
 {
-    const int8_t pairIndex = estimatorPairIndex(anchorA, anchorB);
-    if (pairIndex < 0) {
-        return;
-    }
-
-    const float normalizedDiffMeters = anchorA <= anchorB
-        ? distanceDiffMeters
-        : -distanceDiffMeters;
-
-    ensureEstimatorStatsMutex();
-    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(1)) != pdTRUE) {
-        return;
-    }
-    Utils::UpdateRunningStats(s_estimatorStats->pairInputs[pairIndex].distanceDiffCm,
-                       static_cast<double>(normalizedDiffMeters) * 100.0);
-    xSemaphoreGive(estimator_stats_mtx);
+    (void)anchorA;
+    (void)anchorB;
+    (void)distanceDiffMeters;
 }
 
 static void recordMeasurementCountLocked(size_t measurementCount)
@@ -282,22 +217,13 @@ static void recordEstimatorAccepted(float x, float y, float z, double rmse, size
     s_estimatorStats->lastRmseMm = rmse > 0.0
         ? static_cast<uint32_t>((rmse * 1000.0) + 0.5)
         : 0;
+    s_estimatorStats->lastMeasurementCount = measurementCount > UINT8_MAX
+        ? UINT8_MAX
+        : static_cast<uint8_t>(measurementCount);
     recordMeasurementCountLocked(measurementCount);
-    Utils::UpdateRunningStats(s_estimatorStats->xCmFull, static_cast<double>(x) * 100.0);
-    Utils::UpdateRunningStats(s_estimatorStats->yCmFull, static_cast<double>(y) * 100.0);
-    Utils::UpdateRunningStats(s_estimatorStats->zCmFull, static_cast<double>(z) * 100.0);
-    Utils::UpdateRunningStats(s_estimatorStats->rmseMmFull, rmse * 1000.0);
-    Utils::UpdateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
-
-    if (s_estimatorStats->x != nullptr && s_estimatorStats->y != nullptr && s_estimatorStats->z != nullptr) {
-        s_estimatorStats->x[s_estimatorStats->positionIndex] = x;
-        s_estimatorStats->y[s_estimatorStats->positionIndex] = y;
-        s_estimatorStats->z[s_estimatorStats->positionIndex] = z;
-        s_estimatorStats->positionIndex = (s_estimatorStats->positionIndex + 1) % kEstimatorPositionWindow;
-        if (s_estimatorStats->positionCount < kEstimatorPositionWindow) {
-            s_estimatorStats->positionCount++;
-        }
-    }
+    (void)x;
+    (void)y;
+    (void)z;
 
     xSemaphoreGive(estimator_stats_mtx);
 }
@@ -319,8 +245,10 @@ static void recordEstimatorRejected(bool rmse, bool nan, bool insufficient, size
     if (insufficient) {
         s_estimatorStats->rejectInsufficient++;
     }
+    s_estimatorStats->lastMeasurementCount = measurementCount > UINT8_MAX
+        ? UINT8_MAX
+        : static_cast<uint8_t>(measurementCount);
     recordMeasurementCountLocked(measurementCount);
-    Utils::UpdateRunningStats(s_estimatorStats->measurementCountFull, static_cast<double>(measurementCount));
 
     xSemaphoreGive(estimator_stats_mtx);
 }
@@ -339,173 +267,6 @@ static void recordStaleRemoved(size_t count)
     xSemaphoreGive(estimator_stats_mtx);
 }
 
-static uint32_t metersToCentimeters(float meters)
-{
-    const float centimeters = meters * 100.0f;
-    if (centimeters <= 0.0f) {
-        return 0;
-    }
-    return static_cast<uint32_t>(centimeters + 0.5f);
-}
-
-static String estimatorStatsJson()
-{
-    ensureEstimatorStatsMutex();
-    if (s_estimatorStats == nullptr || estimator_stats_mtx == nullptr || xSemaphoreTake(estimator_stats_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return "{\"error\":\"estimator stats unavailable\"}";
-    }
-
-    const bool havePositionStats = s_estimatorStats->x != nullptr
-        && s_estimatorStats->y != nullptr
-        && s_estimatorStats->z != nullptr;
-    const size_t positionCount = havePositionStats ? s_estimatorStats->positionCount : 0;
-    float meanX = 0.0f;
-    float meanY = 0.0f;
-    float meanZ = 0.0f;
-    for (size_t i = 0; i < positionCount; i++) {
-        meanX += s_estimatorStats->x[i];
-        meanY += s_estimatorStats->y[i];
-        meanZ += s_estimatorStats->z[i];
-    }
-    if (positionCount > 0) {
-        const float invCount = 1.0f / static_cast<float>(positionCount);
-        meanX *= invCount;
-        meanY *= invCount;
-        meanZ *= invCount;
-    }
-
-    float sumSqX = 0.0f;
-    float sumSqY = 0.0f;
-    float sumSqZ = 0.0f;
-    float sumSqHorizontal = 0.0f;
-    for (size_t i = 0; i < positionCount; i++) {
-        const float dx = s_estimatorStats->x[i] - meanX;
-        const float dy = s_estimatorStats->y[i] - meanY;
-        const float dz = s_estimatorStats->z[i] - meanZ;
-        sumSqX += dx * dx;
-        sumSqY += dy * dy;
-        sumSqZ += dz * dz;
-        sumSqHorizontal += dx * dx + dy * dy;
-    }
-
-    float stdX = 0.0f;
-    float stdY = 0.0f;
-    float stdZ = 0.0f;
-    float rmsHorizontal = 0.0f;
-    if (positionCount > 1) {
-        const float invCount = 1.0f / static_cast<float>(positionCount);
-        stdX = std::sqrt(sumSqX * invCount);
-        stdY = std::sqrt(sumSqY * invCount);
-        stdZ = std::sqrt(sumSqZ * invCount);
-        rmsHorizontal = std::sqrt(sumSqHorizontal * invCount);
-    }
-
-    const uint32_t samplesSent = s_estimatorStats->samplesSent;
-    const uint32_t samplesRejected = s_estimatorStats->samplesRejected;
-    const uint32_t rejectRmse = s_estimatorStats->rejectRmse;
-    const uint32_t rejectNan = s_estimatorStats->rejectNan;
-    const uint32_t rejectInsufficient = s_estimatorStats->rejectInsufficient;
-    const uint32_t staleRemoved = s_estimatorStats->staleRemoved;
-    const uint32_t lastRmseMm = s_estimatorStats->lastRmseMm;
-    const uint8_t minMeasurementCount = s_estimatorStats->minMeasurementCount;
-    const uint8_t maxMeasurementCount = s_estimatorStats->maxMeasurementCount;
-    const RunningStats xCmFull = s_estimatorStats->xCmFull;
-    const RunningStats yCmFull = s_estimatorStats->yCmFull;
-    const RunningStats zCmFull = s_estimatorStats->zCmFull;
-    const RunningStats rmseMmFull = s_estimatorStats->rmseMmFull;
-    const RunningStats measurementCountFull = s_estimatorStats->measurementCountFull;
-    PairInputStats pairInputs[kEstimatorPairCount];
-    for (size_t i = 0; i < kEstimatorPairCount; i++) {
-        pairInputs[i] = s_estimatorStats->pairInputs[i];
-    }
-    xSemaphoreGive(estimator_stats_mtx);
-
-    Utils::FixedJsonBuilder<kEstimatorStatsJsonCapacity> out;
-    out.Append("{\"sent\":");
-    out.AppendUnsigned(samplesSent);
-    out.Append(",\"rejected\":");
-    out.AppendUnsigned(samplesRejected);
-    out.Append(",\"rejectRmse\":");
-    out.AppendUnsigned(rejectRmse);
-    out.Append(",\"rejectNan\":");
-    out.AppendUnsigned(rejectNan);
-    out.Append(",\"rejectInsufficient\":");
-    out.AppendUnsigned(rejectInsufficient);
-    out.Append(",\"staleRemoved\":");
-    out.AppendUnsigned(staleRemoved);
-    out.Append(",\"lastRmseMm\":");
-    out.AppendUnsigned(lastRmseMm);
-    out.Append(",\"measurementMin\":");
-    out.AppendUnsigned(minMeasurementCount == UINT8_MAX ? 0 : minMeasurementCount);
-    out.Append(",\"measurementMax\":");
-    out.AppendUnsigned(maxMeasurementCount);
-    out.Append(",\"positionWindow\":");
-    out.AppendUnsigned(static_cast<unsigned long>(positionCount));
-    out.Append(",\"meanCm\":{\"x\":");
-    out.AppendDouble(meanX * 100.0f, 1);
-    out.Append(",\"y\":");
-    out.AppendDouble(meanY * 100.0f, 1);
-    out.Append(",\"z\":");
-    out.AppendDouble(meanZ * 100.0f, 1);
-    out.Append("},\"stdCm\":{\"x\":");
-    out.AppendDouble(stdX * 100.0f, 1);
-    out.Append(",\"y\":");
-    out.AppendDouble(stdY * 100.0f, 1);
-    out.Append(",\"z\":");
-    out.AppendDouble(stdZ * 100.0f, 1);
-    out.Append("},\"horizontalRmsCm\":");
-    out.AppendUnsigned(metersToCentimeters(rmsHorizontal));
-    out.Append(",\"fullWindow\":{\"count\":");
-    out.AppendUnsigned(xCmFull.count);
-    out.Append(",\"meanCm\":{\"x\":");
-    out.AppendDouble(xCmFull.mean, 2);
-    out.Append(",\"y\":");
-    out.AppendDouble(yCmFull.mean, 2);
-    out.Append(",\"z\":");
-    out.AppendDouble(zCmFull.mean, 2);
-    out.Append("},\"stdCm\":{\"x\":");
-    out.AppendDouble(Utils::RunningStatsStd(xCmFull), 2);
-    out.Append(",\"y\":");
-    out.AppendDouble(Utils::RunningStatsStd(yCmFull), 2);
-    out.Append(",\"z\":");
-    out.AppendDouble(Utils::RunningStatsStd(zCmFull), 2);
-    out.Append("},\"minCm\":{\"x\":");
-    out.AppendDouble(xCmFull.count == 0 ? 0.0 : xCmFull.minValue, 2);
-    out.Append(",\"y\":");
-    out.AppendDouble(yCmFull.count == 0 ? 0.0 : yCmFull.minValue, 2);
-    out.Append(",\"z\":");
-    out.AppendDouble(zCmFull.count == 0 ? 0.0 : zCmFull.minValue, 2);
-    out.Append("},\"maxCm\":{\"x\":");
-    out.AppendDouble(xCmFull.count == 0 ? 0.0 : xCmFull.maxValue, 2);
-    out.Append(",\"y\":");
-    out.AppendDouble(yCmFull.count == 0 ? 0.0 : yCmFull.maxValue, 2);
-    out.Append(",\"z\":");
-    out.AppendDouble(zCmFull.count == 0 ? 0.0 : zCmFull.maxValue, 2);
-    out.Append("},\"horizontalRmsCm\":");
-    const double fullHorizontalRms = std::sqrt((xCmFull.count > 1 ? xCmFull.m2 / static_cast<double>(xCmFull.count) : 0.0)
-                                             + (yCmFull.count > 1 ? yCmFull.m2 / static_cast<double>(yCmFull.count) : 0.0));
-    out.AppendDouble(fullHorizontalRms, 2);
-    out.Append("},\"rmseMm\":");
-    Utils::AppendRunningStatsJson(out, rmseMmFull, 2);
-    out.Append(",\"measurementCount\":");
-    Utils::AppendRunningStatsJson(out, measurementCountFull, 2);
-    out.Append(",\"tdoaPairs\":[");
-    for (size_t i = 0; i < kEstimatorPairCount; i++) {
-        if (i > 0) out.Append(',');
-        out.Append("{\"pair\":\"");
-        out.AppendUnsigned(pairInputs[i].a);
-        out.AppendUnsigned(pairInputs[i].b);
-        out.Append("\",\"diffCm\":");
-        Utils::AppendRunningStatsJson(out, pairInputs[i].distanceDiffCm, 2);
-        out.Append("}");
-    }
-    out.Append("]}");
-    if (out.Truncated()) {
-        return "{\"error\":\"estimator_stats_json_truncated\"}";
-    }
-    return String(out.CStr());
-}
-
 static void resetEstimatorStats()
 {
     ensureEstimatorStatsMutex();
@@ -513,40 +274,14 @@ static void resetEstimatorStats()
         return;
     }
 
-    float* x = s_estimatorStats->x;
-    float* y = s_estimatorStats->y;
-    float* z = s_estimatorStats->z;
     *s_estimatorStats = EstimatorStats();
-    initEstimatorStatsPairs(*s_estimatorStats);
-    s_estimatorStats->x = x;
-    s_estimatorStats->y = y;
-    s_estimatorStats->z = z;
-    if (x != nullptr) {
-        std::fill(x, x + kEstimatorPositionWindow, 0.0f);
-    }
-    if (y != nullptr) {
-        std::fill(y, y + kEstimatorPositionWindow, 0.0f);
-    }
-    if (z != nullptr) {
-        std::fill(z, z + kEstimatorPositionWindow, 0.0f);
-    }
 
     xSemaphoreGive(estimator_stats_mtx);
 }
 
-static String anchorModelStatusWithEstimatorJson()
+static String anchorModelStatus()
 {
-    String out = s_anchorModel.StatusJson();
-    if (out.endsWith("}")) {
-        out.remove(out.length() - 1);
-        out += ",\"matcherPolicy\":\"";
-        out += matcherPolicyName(matcherPolicyFromParam(configuredMatcherPolicy()));
-        out += "\"";
-        out += ",\"estimator\":";
-        out += estimatorStatsJson();
-        out += "}";
-    }
-    return out;
+    return s_anchorModel.StatusJson();
 }
 
 #if TDOA_STATS_LOGGING == ENABLE
@@ -931,7 +666,7 @@ bool UWBTagTDoA::LockAnchorModel()
 
 String UWBTagTDoA::GetAnchorModelStatusJson()
 {
-    return anchorModelStatusWithEstimatorJson();
+    return anchorModelStatus();
 }
 
 String UWBTagTDoA::GetAnchorModelCollectStatusJson()
@@ -946,7 +681,7 @@ String UWBTagTDoA::ExportAnchorModelJson()
 
 String UWBTagTDoA::GetEstimatorStatsJson()
 {
-    return estimatorStatsJson();
+    return String();
 }
 
 void UWBTagTDoA::ResetEstimatorStats()
@@ -981,7 +716,7 @@ bool Lock()
 
 String StatusJson()
 {
-    return anchorModelStatusWithEstimatorJson();
+    return anchorModelStatus();
 }
 
 String CollectStatusJson()
@@ -996,7 +731,12 @@ String ExportJson()
 
 String EstimatorStatsJson()
 {
-    return estimatorStatsJson();
+    return String();
+}
+
+void AppendBinaryStatus(rtls::protocol::BinaryFrameBuilder<2048>& outFrame, uint8_t view)
+{
+    s_anchorModel.AppendBinaryStatus(outFrame, view);
 }
 
 void ResetEstimatorStats()

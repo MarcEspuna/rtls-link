@@ -72,7 +72,7 @@
 
 // --- OTA Update Subsystem ---
 #define USE_OTA                       // Master OTA toggle
-#define USE_OTA_WEB                   // Web-based OTA upload via webserver
+#define USE_OTA_WEB                   // HTTP OTA upload via webserver
 
 // --- Miscellaneous ---
 #define USE_STATUS_LED_TASK

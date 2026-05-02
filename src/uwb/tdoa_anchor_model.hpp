@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 
+#include "protocol/rtls_binary_protocol.hpp"
 #include "uwb_params.hpp"
 
 class TDoAAnchorModel {
@@ -43,6 +44,7 @@ public:
     String StatusJson() const;
     String ExportJson() const;
     String CollectStatusJson() const;
+    void AppendBinaryStatus(rtls::protocol::BinaryFrameBuilder<2048>& outFrame, uint8_t view) const;
 
 private:
     static constexpr uint8_t kAnchorCount = 4;

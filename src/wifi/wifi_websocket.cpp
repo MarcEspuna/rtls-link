@@ -52,10 +52,14 @@ static void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEve
             AwsFrameInfo *info = (AwsFrameInfo*)arg;
             if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
                 data[len] = 0;
-                String result = CommandHandler::ExecuteCommand((char*)data);
-                // Send back result to the client
                 if(client != nullptr) {
-                    client->text(result);
+                    CommandBinaryFrame binaryResponse;
+                    if (CommandHandler::TryExecuteBinaryCommand((char*)data, binaryResponse)) {
+                        client->binary(binaryResponse.Data(), binaryResponse.Size());
+                    } else {
+                        String result = CommandHandler::ExecuteCommand((char*)data);
+                        client->text(result);
+                    }
                 }
             }
             break;

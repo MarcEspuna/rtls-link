@@ -8,10 +8,10 @@
 #ifdef USE_LOGGING_UDP
 
 #include "log_udp_backend.hpp"
+#include "protocol/rtls_binary_protocol.hpp"
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#include <cstdio>
 #include <cstring>
 
 namespace rtls {
@@ -25,9 +25,7 @@ uint16_t LogUdpBackend::s_targetPort = LogUdpBackend::DEFAULT_LOG_PORT;
 // UDP socket (static, module-level)
 static WiFiUDP s_udp;
 
-// JSON output buffer
-static constexpr size_t UDP_BUFFER_SIZE = 512;
-static char s_udpBuffer[UDP_BUFFER_SIZE];
+static rtls::protocol::BinaryFrameBuilder<512> s_logFrame;
 
 void LogUdpBackend::init() {
     if (s_initialized) {
@@ -71,44 +69,15 @@ void LogUdpBackend::send(uint32_t timestamp_ms, LogLevel level,
         return;
     }
 
-    // Escape special JSON characters in message
-    // For simplicity, we just replace quotes and backslashes
-    char escapedMsg[256];
-    size_t j = 0;
-    for (size_t i = 0; message[i] && j < sizeof(escapedMsg) - 2; i++) {
-        if (message[i] == '"' || message[i] == '\\') {
-            escapedMsg[j++] = '\\';
-        }
-        if (message[i] == '\n') {
-            escapedMsg[j++] = '\\';
-            escapedMsg[j++] = 'n';
-        } else if (message[i] == '\r') {
-            escapedMsg[j++] = '\\';
-            escapedMsg[j++] = 'r';
-        } else if (message[i] == '\t') {
-            escapedMsg[j++] = '\\';
-            escapedMsg[j++] = 't';
-        } else {
-            escapedMsg[j++] = message[i];
-        }
-    }
-    escapedMsg[j] = '\0';
+    s_logFrame.Begin(rtls::protocol::FrameType::LogMessage);
+    s_logFrame.AppendU32(timestamp_ms);
+    s_logFrame.AppendU8(static_cast<uint8_t>(level));
+    s_logFrame.AppendString(tag);
+    s_logFrame.AppendString(message);
+    s_logFrame.Finish();
 
-    // Format as JSON
-    int len = snprintf(s_udpBuffer, UDP_BUFFER_SIZE,
-                       "{\"ts\":%lu,\"lvl\":\"%s\",\"tag\":\"%s\",\"msg\":\"%s\"}",
-                       static_cast<unsigned long>(timestamp_ms),
-                       logLevelToString(level),
-                       tag,
-                       escapedMsg);
-
-    if (len <= 0 || len >= static_cast<int>(UDP_BUFFER_SIZE)) {
-        return; // Buffer overflow or error
-    }
-
-    // Send UDP packet
     s_udp.beginPacket(targetIp, s_targetPort);
-    s_udp.write(reinterpret_cast<const uint8_t*>(s_udpBuffer), len);
+    s_udp.write(s_logFrame.Data(), s_logFrame.Size());
     s_udp.endPacket();
 }
 
