@@ -8,7 +8,7 @@
 ;   - Full WiFi stack for configuration and debugging
 ;   - Full MAVLink stack for ArduPilot integration
 ;   - Full console with all management features
-;   - TDoA tag mode with calibration support
+;   - TDoA tag mode
 ;   - Rangefinder support (ESP32S3)
 ;   - Status LED and rate statistics
 ;
@@ -41,12 +41,10 @@
 -D USE_CONSOLE
 -D USE_CONSOLE_PARAM_RW
 -D USE_CONSOLE_CONFIG_MGMT
--D USE_CONSOLE_UWB_CONTROL
 -D USE_CONSOLE_LED_CONTROL
 
-; TDoA tag + calibration
+; TDoA tag
 -D USE_UWB_MODE_TDOA_TAG
--D USE_UWB_CALIBRATION
 
 ; All extras
 -D USE_STATUS_LED_TASK

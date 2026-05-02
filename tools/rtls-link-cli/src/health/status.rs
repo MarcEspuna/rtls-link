@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_anchor_always_healthy() {
-        let device = make_device(DeviceRole::Anchor);
+        let device = make_device(DeviceRole::AnchorTdoa);
         let health = calculate_device_health(&device);
         assert_eq!(health.level, HealthLevel::Healthy);
         assert!(health.issues.is_empty());
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_tag_no_telemetry_unknown() {
-        let device = make_device(DeviceRole::Tag);
+        let device = make_device(DeviceRole::TagTdoa);
         let health = calculate_device_health(&device);
         assert_eq!(health.level, HealthLevel::Unknown);
     }

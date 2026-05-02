@@ -1,5 +1,0 @@
-uwb.mode: 0
-uwb.devShortAddr: 83
-uwb.anchorCount: 4
-uwb.ADelay: 16580
-uwb.calDistance: 3.0

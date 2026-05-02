@@ -6,13 +6,10 @@
 
 #include "utils/utils.hpp"
 
-enum class UWBMode : uint8_t {      // Added mode to names since the UWBLibrary leaks ANCHOR and TAG defines
-    ANCHOR_MODE_TWR,
-    TAG_MODE_TWR,
-    CALIBRATION_MODE,
-    ANCHOR_TDOA,
-    TAG_TDOA,
-    UNKNOWN
+enum class UWBMode : uint8_t {
+    ANCHOR_TDOA = 3,
+    TAG_TDOA = 4,
+    UNKNOWN = 255
 };
 
 enum class ZCalcMode : uint8_t {
@@ -76,7 +73,6 @@ struct UWBParams {
     float y6;
     float z6;
     uint16_t ADelay;            // Antenna delay    
-    float calDistance;          // Calibration distance settings
     double originLat;           // Origin Latitude
     double originLon;           // Origin Longitude
     float originAlt;            // Origin Altitude
@@ -126,12 +122,6 @@ struct UWBParams {
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 6;
 }ULS_PACKED;
-
-// Parameters that we do not expect to need to change in the future. 
-namespace UWBConstParam {
-    // Starts the calibration with the specified antenna delay
-    static constexpr uint32_t calibr_starting_adelay = 16580;
-}
 
 /**
  * @todo We need to add array and custom structs to parameter system in the future to avoid this mess.

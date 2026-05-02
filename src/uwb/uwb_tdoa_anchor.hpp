@@ -27,7 +27,7 @@ extern "C" {
 
 class UWBAnchorTDoA : public UWBBackend {
 public:
-    UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay);
+    UWBAnchorTDoA(const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay);
 
     template <libDw1000::IsrFlags TFlags>
     void OnEvent();             // Called outside ISR context

@@ -72,16 +72,10 @@ pub struct Device {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceRole {
-    /// TWR Anchor mode (0)
-    Anchor,
-    /// TWR Tag mode (1)
-    Tag,
     /// TDoA Anchor mode (3)
     AnchorTdoa,
     /// TDoA Tag mode (4)
     TagTdoa,
-    /// Calibration mode (2)
-    Calibration,
     /// Unknown/unrecognized mode
     Unknown,
 }
@@ -90,33 +84,27 @@ impl DeviceRole {
     /// Parse a role string from device heartbeat
     pub fn from_str(s: &str) -> Self {
         match s {
-            "anchor" => DeviceRole::Anchor,
-            "tag" => DeviceRole::Tag,
             "anchor_tdoa" => DeviceRole::AnchorTdoa,
             "tag_tdoa" => DeviceRole::TagTdoa,
-            "calibration" => DeviceRole::Calibration,
             _ => DeviceRole::Unknown,
         }
     }
 
     /// Check if role is an anchor type
     pub fn is_anchor(&self) -> bool {
-        matches!(self, DeviceRole::Anchor | DeviceRole::AnchorTdoa)
+        matches!(self, DeviceRole::AnchorTdoa)
     }
 
     /// Check if role is a tag type
     pub fn is_tag(&self) -> bool {
-        matches!(self, DeviceRole::Tag | DeviceRole::TagTdoa)
+        matches!(self, DeviceRole::TagTdoa)
     }
 
     /// Get display name
     pub fn display_name(&self) -> &'static str {
         match self {
-            DeviceRole::Anchor => "Anchor",
-            DeviceRole::Tag => "Tag",
             DeviceRole::AnchorTdoa => "Anchor (TDoA)",
             DeviceRole::TagTdoa => "Tag (TDoA)",
-            DeviceRole::Calibration => "Calibration",
             DeviceRole::Unknown => "Unknown",
         }
     }
@@ -187,7 +175,7 @@ pub struct WifiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UwbConfig {
-    /// UWB mode: 0=TWR_ANCHOR, 1=TWR_TAG, 2=CALIBRATION, 3=TDOA_ANCHOR, 4=TDOA_TAG
+    /// UWB mode: 3=TDOA_ANCHOR, 4=TDOA_TAG
     pub mode: u8,
     /// Device's UWB short address
     pub dev_short_addr: String,

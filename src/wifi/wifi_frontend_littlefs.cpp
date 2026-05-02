@@ -300,26 +300,6 @@ void WifiLittleFSFrontend::StationConnectionThread() {
     }
 }
 
-void WifiLittleFSFrontend::UpdateLastTWRSample(float x, float y, float z, uint32_t update_rate) {
-    // Send latest tag position through dbg socket
-    char buffer[100] = {};
-    float lastTwrSample[3] = {x, y, z};
-
-    // Do not send nan values
-    for (int i = 0; i < 3; i++) {
-        if (std::isnan(lastTwrSample[i])) {
-            lastTwrSample[i] = 0.0f;
-        }
-    }
-
-    snprintf(buffer, 100, "%.2f %.2f %.2f %u hz", lastTwrSample[0], lastTwrSample[1], lastTwrSample[2], update_rate);
-    if (m_TcpLoggingServer) {
-        m_TcpLoggingServer->AddForSending(buffer);
-    }
-}
-
-
-
 void WifiLittleFSFrontend::ClearBackends() {
     BackendsLockGuard lock(m_backendsMutex);
     if (!lock.IsLocked()) {

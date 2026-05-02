@@ -210,11 +210,11 @@ mod tests {
 
     #[test]
     fn test_parse_minimal_heartbeat() {
-        let json = r#"{"id": "test", "role": "anchor"}"#;
+        let json = r#"{"id": "test", "role": "anchor_tdoa"}"#;
         let device = parse_heartbeat(json.as_bytes(), "10.0.0.1".to_string()).unwrap();
 
         assert_eq!(device.ip, "10.0.0.1");
         assert_eq!(device.id, "test");
-        assert_eq!(device.role, DeviceRole::Anchor);
+        assert_eq!(device.role, DeviceRole::AnchorTdoa);
     }
 }

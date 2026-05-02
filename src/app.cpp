@@ -336,14 +336,6 @@ void App::StatusLedTask()
 }
 #endif
 
-#ifdef USE_BEACON_PROTOCOL
-// --- Only used for TWR (legacy)---
-void App::AnchorsToEcho(const etl::array<double, 12>& anchor_locations)
-{
-  bcn_konex::BeaconProtocol::SetAnchorsToEcho(anchor_locations);
-}
-#endif
-
 // Helper function to correct for yaw orientation
 // Note: This function works correctly with negative values of kRotationDegrees
 // because the standard 2D rotation matrix is used:
@@ -737,13 +729,6 @@ void App::SendSample(float x_m, float y_m, float z_m,
 #endif // USE_MAVLINK && USE_MAVLINK_POSITION
 }
 #endif // HAS_POSITION_OUTPUT
-
-#ifdef USE_BEACON_PROTOCOL
-void App::SendRangeSample(uint8_t id, float range)
-{
-  bcn_konex::BeaconProtocol::SendRangeSample(id, range);
-}
-#endif
 
 void App::Start()
 {

@@ -38,7 +38,6 @@ uwb.x6: 5.000000
 uwb.y6: 5.000000
 uwb.z6: 2.000000
 uwb.ADelay: 16580
-uwb.calDistance: 1.000000
 uwb.originLat: 41.503293
 uwb.originLon: 2.166796
 uwb.originAlt: 72.139999
