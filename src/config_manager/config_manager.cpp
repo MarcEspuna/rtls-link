@@ -355,6 +355,23 @@ String ConfigManager::GetActiveConfig() {
     return String(s_ActiveConfig.c_str());
 }
 
+size_t ConfigManager::GetConfigCount() {
+    if (!s_Initialized) {
+        Init();
+    }
+    return s_Configs.size();
+}
+
+const char* ConfigManager::GetConfigName(size_t index) {
+    if (!s_Initialized) {
+        Init();
+    }
+    if (index >= s_Configs.size()) {
+        return "";
+    }
+    return s_Configs[index].name.c_str();
+}
+
 ConfigError ConfigManager::SetActiveConfig(const char* name) {
     if (!s_Initialized) {
         Init();

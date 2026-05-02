@@ -67,10 +67,10 @@
 
 ; -----------------------------------------------------------------------------
 ; OTA UPDATE SUBSYSTEM
-; Web-based firmware updates via the web interface
+; HTTP firmware upload endpoint for the desktop manager
 ; -----------------------------------------------------------------------------
 -D USE_OTA
--D USE_OTA_WEB                  ; Web-based OTA upload at /update
+-D USE_OTA_WEB                  ; HTTP OTA upload at /update
 
 ; -----------------------------------------------------------------------------
 ; MISCELLANEOUS FEATURES

@@ -3,7 +3,7 @@
  * @brief UDP backend for the RTLS-Link logging subsystem
  *
  * Sends log messages over UDP for remote debugging via rtls-link-manager.
- * Messages are formatted as JSON for easy parsing.
+ * Messages are sent as RTLS-Link binary protocol frames.
  */
 
 #pragma once
@@ -21,7 +21,7 @@ namespace log {
 /**
  * @brief UDP backend for log message transmission
  *
- * Sends log messages to a configured target IP/port as JSON packets.
+ * Sends log messages to a configured target IP/port as binary packets.
  * Thread-safe through use of the main Logger mutex.
  */
 class LogUdpBackend {
@@ -47,8 +47,7 @@ public:
     /**
      * @brief Send a log message over UDP
      *
-     * Formats the message as JSON and sends to the configured target.
-     * Format: {"ts":123456,"lvl":"INFO","tag":"module","msg":"message text"}
+     * Formats the message as a binary LogMessage frame and sends to the configured target.
      *
      * @param timestamp_ms Timestamp in milliseconds
      * @param level Log level

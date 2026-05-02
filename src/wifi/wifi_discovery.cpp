@@ -6,6 +6,7 @@
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "version.hpp"
 #include "logging/logging.hpp"
+#include "protocol/rtls_binary_protocol.hpp"
 
 #include <esp_mac.h>
 
@@ -38,7 +39,7 @@ void WifiDiscovery::SendHeartbeat() {
         return; // No valid GCS IP configured
     }
 
-    char response[896];  // Increased buffer for telemetry + logging + dynamic anchors
+    rtls::protocol::BinaryFrameBuilder<512> frame;
 
     // Get IP and MAC based on WiFi mode
     bool isAP = (WiFi.getMode() == WIFI_AP);
@@ -78,130 +79,72 @@ void WifiDiscovery::SendHeartbeat() {
     uint8_t logLevel = 0; // Disabled
 #endif
 
-    // Build main JSON (without closing brace, so we can append dynamic anchors)
-    int written = snprintf(response, sizeof(response),
-        "{\"device\":\"%s\",\"id\":\"%s\",\"role\":\"%s\","
-        "\"ip\":\"%d.%d.%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
-        "\"uwb_short\":\"%s\",\"mav_sysid\":%u,\"fw\":\"%s\","
-        "\"sending_pos\":%s,\"anchors_seen\":%u,\"origin_sent\":%s,"
-        "\"rf_enabled\":%s,\"rf_healthy\":%s,"
-        "\"uwb_enabled\":%s,\"rf_forward_enabled\":%s,"
-        "\"avg_rate_cHz\":%u,\"min_rate_cHz\":%u,\"max_rate_cHz\":%u,"
-        "\"log_level\":%u,\"log_udp_port\":%u,"
-        "\"log_serial_enabled\":%s,\"log_udp_enabled\":%s",
-        DEVICE_TYPE,
-        shortAddrStr,
-        ModeToRoleString(static_cast<uint8_t>(uwbParams.mode)),
-        deviceIp[0], deviceIp[1], deviceIp[2], deviceIp[3],
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-        shortAddrStr,
-        uwbParams.mavlinkTargetSystemId,
-        FIRMWARE_VERSION,
-        telemetry.sending_pos ? "true" : "false",
-        static_cast<unsigned int>(telemetry.anchors_seen),
-        telemetry.origin_sent ? "true" : "false",
-        telemetry.rf_enabled ? "true" : "false",
-        telemetry.rf_healthy ? "true" : "false",
-        telemetry.uwb_enabled ? "true" : "false",
-        telemetry.rf_forward_enabled ? "true" : "false",
-        static_cast<unsigned int>(telemetry.avg_rate_cHz),
-        static_cast<unsigned int>(telemetry.min_rate_cHz),
-        static_cast<unsigned int>(telemetry.max_rate_cHz),
-        logLevel,
-        m_WifiParams.logUdpPort,
-        m_WifiParams.logSerialEnabled ? "true" : "false",
-        m_WifiParams.logUdpEnabled ? "true" : "false");
-
-    if (written < 0) {
-        response[0] = '\0';
-        return;
-    }
-
-    bool truncated = false;
-    if (written >= static_cast<int>(sizeof(response))) {
-        written = static_cast<int>(sizeof(response) - 1);
-        response[written] = '\0';
-        truncated = true;
-    }
+    uint16_t flags = 0;
+    if (telemetry.sending_pos) flags |= (1u << 0);
+    if (telemetry.origin_sent) flags |= (1u << 1);
+    if (telemetry.rf_enabled) flags |= (1u << 2);
+    if (telemetry.rf_healthy) flags |= (1u << 3);
+    if (telemetry.uwb_enabled) flags |= (1u << 4);
+    if (telemetry.rf_forward_enabled) flags |= (1u << 5);
+    if (m_WifiParams.logSerialEnabled) flags |= (1u << 6);
+    if (m_WifiParams.logUdpEnabled) flags |= (1u << 7);
 
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
-    // Append dynamic anchor positions if enabled and available
-    if (!truncated && telemetry.dynamic_anchors_enabled && telemetry.dynamic_anchor_count > 0) {
-        int remaining = sizeof(response) - written;
-        int added = snprintf(response + written, remaining, ",\"dyn_anchors\":[");
-        if (added < 0) {
-            truncated = true;
-        } else if (added >= remaining) {
-            written = static_cast<int>(sizeof(response) - 1);
-            response[written] = '\0';
-            truncated = true;
-        } else {
-            written += added;
-        }
-
-        for (uint8_t i = 0; i < telemetry.dynamic_anchor_count && !truncated; i++) {
-            remaining = sizeof(response) - written;
-            added = snprintf(response + written, remaining,
-                "%s{\"id\":%u,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}",
-                i > 0 ? "," : "",
-                telemetry.dynamic_anchors[i].id,
-                telemetry.dynamic_anchors[i].x,
-                telemetry.dynamic_anchors[i].y,
-                telemetry.dynamic_anchors[i].z);
-            if (added < 0) {
-                truncated = true;
-            } else if (added >= remaining) {
-                written = static_cast<int>(sizeof(response) - 1);
-                response[written] = '\0';
-                truncated = true;
-            } else {
-                written += added;
-            }
-        }
-
-        if (!truncated) {
-            remaining = sizeof(response) - written;
-            added = snprintf(response + written, remaining, "]");
-            if (added < 0) {
-                truncated = true;
-            } else if (added >= remaining) {
-                written = static_cast<int>(sizeof(response) - 1);
-                response[written] = '\0';
-                truncated = true;
-            } else {
-                written += added;
-            }
-        }
-    }
+    if (telemetry.dynamic_anchors_enabled) flags |= (1u << 8);
 #endif
 
-    // Close the JSON object
-    if (!truncated && written < static_cast<int>(sizeof(response) - 1)) {
-        response[written++] = '}';
-        response[written] = '\0';
-    } else {
-        truncated = true;
-    }
+    frame.Begin(rtls::protocol::FrameType::Heartbeat);
+    frame.AppendU8(ModeToRoleId(static_cast<uint8_t>(uwbParams.mode)));
+    frame.AppendU16(flags);
+    frame.AppendU8(telemetry.anchors_seen);
+    frame.AppendU8(static_cast<uint8_t>(uwbParams.mavlinkTargetSystemId));
+    frame.AppendU16(telemetry.avg_rate_cHz);
+    frame.AppendU16(telemetry.min_rate_cHz);
+    frame.AppendU16(telemetry.max_rate_cHz);
+    frame.AppendU8(logLevel);
+    frame.AppendU16(m_WifiParams.logUdpPort);
+    frame.AppendBytes(mac, sizeof(mac));
+    frame.AppendU8(deviceIp[0]);
+    frame.AppendU8(deviceIp[1]);
+    frame.AppendU8(deviceIp[2]);
+    frame.AppendU8(deviceIp[3]);
+    frame.AppendString(DEVICE_TYPE);
+    frame.AppendString(shortAddrStr);
+    frame.AppendString(shortAddrStr);
+    frame.AppendString(FIRMWARE_VERSION);
 
-    // Log truncation warning once
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    const uint8_t dynamicCount = telemetry.dynamic_anchors_enabled
+        ? telemetry.dynamic_anchor_count
+        : 0;
+    frame.AppendU8(dynamicCount);
+    for (uint8_t i = 0; i < dynamicCount; i++) {
+        frame.AppendU8(telemetry.dynamic_anchors[i].id);
+        frame.AppendI32(rtls::protocol::MetersToMillimeters(telemetry.dynamic_anchors[i].x));
+        frame.AppendI32(rtls::protocol::MetersToMillimeters(telemetry.dynamic_anchors[i].y));
+        frame.AppendI32(rtls::protocol::MetersToMillimeters(telemetry.dynamic_anchors[i].z));
+    }
+#else
+    frame.AppendU8(0);
+#endif
+    frame.Finish();
+
     static bool truncation_warned = false;
-    if (truncated && !truncation_warned) {
-        LOG_WARN("WifiDiscovery: heartbeat JSON truncated!");
+    if (frame.Truncated() && !truncation_warned) {
+        LOG_WARN("WifiDiscovery: binary heartbeat truncated");
         truncation_warned = true;
     }
 
     m_Udp.beginPacket(gcsIp, m_Port);
-    m_Udp.write((uint8_t*)response, strlen(response));
+    m_Udp.write(frame.Data(), frame.Size());
     m_Udp.endPacket();
 }
 
-const char* WifiDiscovery::ModeToRoleString(uint8_t mode) {
-    // Maps UWBMode enum values to human-readable strings
-    // UWBMode: ANCHOR_TDOA=3, TAG_TDOA=4
+uint8_t WifiDiscovery::ModeToRoleId(uint8_t mode) {
     switch (mode) {
-        case 3: return "anchor_tdoa";
-        case 4: return "tag_tdoa";
-        default: return "unknown";
+        case 3: return 3; // anchor_tdoa
+        case 4: return 4; // tag_tdoa
+        default: return 0;
     }
 }
 
