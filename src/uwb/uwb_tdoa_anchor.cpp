@@ -24,8 +24,8 @@ static FAST_CODE void rxFailedCallback(dwDevice_t *dev);
 
 static volatile bool isr_flag = false;
 
-UWBAnchorTDoA::UWBAnchorTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay)
-    : UWBBackend(front, uwb_config)
+UWBAnchorTDoA::UWBAnchorTDoA(const bsp::UWBConfig& uwb_config, UWBShortAddr shortAddr, uint16_t antennaDelay)
+    : UWBBackend(uwb_config)
 {
     // NOTE: Look into short data fast accuracy...
     // Using a lambda to attach the class method as an interrupt handler

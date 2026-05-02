@@ -77,11 +77,8 @@ pub struct DiscoverArgs {
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum RoleFilter {
-    Anchor,
-    Tag,
     AnchorTdoa,
     TagTdoa,
-    Calibration,
 }
 
 // ==================== Calibrate ====================

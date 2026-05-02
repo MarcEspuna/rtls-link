@@ -26,7 +26,6 @@ public:
         return m_Params;
     }
 
-    void UpdateLastTWRSample(float x, float y, float z, uint32_t update_rate);
     void StationConnectionThread();
 
 private:

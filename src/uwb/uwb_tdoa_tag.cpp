@@ -602,8 +602,8 @@ static StaticTaskHolder<etl::delegate<void()>, 16384, TaskType::CONTINUOUS> pos_
 };
 
 
-UWBTagTDoA::UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
-    : UWBBackend(front, uwb_config)
+UWBTagTDoA::UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors)
+    : UWBBackend(uwb_config)
 {
     // NOTE: Look into short data fast accuracy...
     // Using a lambda to attach the class method as an interrupt handler
@@ -1375,8 +1375,8 @@ void UWBTagTDoA::onInterAnchorDistance(uint8_t fromAnchor, uint8_t toAnchor, uin
     // Look up the "to" anchor's antenna delay from previously received packets
     uint16_t toAntennaDelay = uwbTdoa2TagGetAnchorAntennaDelay(toAnchor);
 
-    // Correct TWR distance: subtract both endpoints' antenna delays
-    // The raw TWR distance includes uncorrected antenna delays from both anchors
+    // Correct inter-anchor ToF distance: subtract both endpoints' antenna delays.
+    // The raw distance includes uncorrected antenna delays from both anchors.
     // because TDoA anchors set dwSetAntenaDelay(0) in the DW1000
     int32_t corrected = static_cast<int32_t>(distanceTimestampUnits)
                       - static_cast<int32_t>(fromAntennaDelay)

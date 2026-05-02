@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-#include <EEPROM.h>
 
 #include <etl/array.h>
 #include <etl/string.h>
@@ -41,4 +40,3 @@ struct WifiParams {
     uint8_t logSerialEnabled = 1;   // Runtime: enable Serial log output (default: on)
     uint8_t logUdpEnabled = 0;      // Runtime: enable UDP log streaming (default: off)
 }ULS_PACKED;
-

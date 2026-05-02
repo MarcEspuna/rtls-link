@@ -170,7 +170,6 @@ def validate_features(flags, board_define=None):
     console_features = [
         'USE_CONSOLE_PARAM_RW',
         'USE_CONSOLE_CONFIG_MGMT',
-        'USE_CONSOLE_UWB_CONTROL',
         'USE_CONSOLE_LED_CONTROL'
     ]
     for feat in console_features:
@@ -184,7 +183,7 @@ def validate_features(flags, board_define=None):
         errors.append("USE_OTA_WEB requires USE_WIFI_WEBSERVER")
 
     # === TAG MODE REQUIRES OUTPUT ===
-    tag_modes = ['USE_UWB_MODE_TWR_TAG', 'USE_UWB_MODE_TDOA_TAG']
+    tag_modes = ['USE_UWB_MODE_TDOA_TAG']
     has_tag_mode = any(m in flag_set for m in tag_modes)
     has_output = 'USE_MAVLINK' in flag_set or 'USE_BEACON_PROTOCOL' in flag_set
 
@@ -193,15 +192,12 @@ def validate_features(flags, board_define=None):
 
     # === AT LEAST ONE UWB MODE ===
     uwb_modes = [
-        'USE_UWB_MODE_TWR_ANCHOR',
-        'USE_UWB_MODE_TWR_TAG',
         'USE_UWB_MODE_TDOA_ANCHOR',
-        'USE_UWB_MODE_TDOA_TAG',
-        'USE_UWB_CALIBRATION'
+        'USE_UWB_MODE_TDOA_TAG'
     ]
     if flag_set and not any(m in flag_set for m in uwb_modes):
         # Only error if user explicitly defined features but forgot UWB modes
-        warnings.append("No UWB mode enabled - at least one USE_UWB_MODE_* is recommended")
+        warnings.append("No TDoA UWB mode enabled - at least one USE_UWB_MODE_TDOA_* is recommended")
 
     # === BOARD-SPECIFIC COMPATIBILITY ===
     if board_define is not None:

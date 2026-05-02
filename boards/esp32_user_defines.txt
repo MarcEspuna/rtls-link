@@ -46,15 +46,12 @@
 ; UWB OPERATIONAL MODES
 ; Enable only the modes you need to save flash space
 ; -----------------------------------------------------------------------------
--D USE_UWB_MODE_TWR_ANCHOR      ; Two-Way Ranging anchor mode
--D USE_UWB_MODE_TWR_TAG         ; Two-Way Ranging tag mode
 -D USE_UWB_MODE_TDOA_ANCHOR     ; Time Difference of Arrival anchor mode
 -D USE_UWB_MODE_TDOA_TAG        ; Time Difference of Arrival tag mode
--D USE_UWB_CALIBRATION          ; Antenna delay calibration mode
 
 ; -----------------------------------------------------------------------------
 ; DYNAMIC ANCHOR POSITIONING (TDoA Tags)
-; Calculate anchor positions from inter-anchor TWR measurements
+; Calculate anchor positions from inter-anchor ToF measurements
 ; Requires: USE_UWB_MODE_TDOA_TAG
 ; NOT SUPPORTED: Insufficient DRAM on ESP32 for Eigen-based position calculator
 ; -----------------------------------------------------------------------------
@@ -67,7 +64,6 @@
 -D USE_CONSOLE
 -D USE_CONSOLE_PARAM_RW         ; read/write/readall parameter commands
 -D USE_CONSOLE_CONFIG_MGMT      ; save-config/load-config/backup commands
--D USE_CONSOLE_UWB_CONTROL      ; start/calibrate UWB commands
 -D USE_CONSOLE_LED_CONTROL      ; LED control commands (if board supports)
 
 ; -----------------------------------------------------------------------------

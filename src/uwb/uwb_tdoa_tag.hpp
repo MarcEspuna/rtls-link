@@ -29,7 +29,7 @@ struct DynamicAnchorTelemetry;
 
 class UWBTagTDoA : public UWBBackend {
 public:
-    UWBTagTDoA(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors);
+    UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnchorParam> anchors);
 
     template <libDw1000::IsrFlags TFlags>
     void OnEvent();             // Called outside ISR context
