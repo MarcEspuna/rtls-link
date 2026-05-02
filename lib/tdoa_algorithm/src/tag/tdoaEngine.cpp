@@ -218,6 +218,45 @@ static bool matchYoungestAnchor(tdoaEngineState_t* engineState, tdoaAnchorContex
     return false;
 }
 
+static bool isMatchingCandidateValid(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const uint8_t candidateAnchorId, const uint8_t candidateSeqNr) {
+  const uint32_t now_ms = anchorCtx->currentTime_ms;
+
+  if (!tdoaStorageGetRemoteTimeOfFlight(anchorCtx, candidateAnchorId)) {
+    return false;
+  }
+  if (!tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, candidateAnchorId, now_ms, otherAnchorCtx)) {
+    return false;
+  }
+
+  return candidateSeqNr == tdoaStorageGetSeqNr(otherAnchorCtx);
+}
+
+static bool enqueueAllMatchingAnchors(tdoaEngineState_t* engineState, const tdoaAnchorContext_t* anchorCtx, const int64_t txAn_in_cl_An, const int64_t rxAn_by_T_in_cl_T, const bool doExcludeId, const uint8_t excludedId) {
+  if (tdoaStorageGetClockCorrection(anchorCtx) <= 0.0) {
+    return false;
+  }
+
+  int remoteCount = 0;
+  tdoaStorageGetRemoteSeqNrList(anchorCtx, &remoteCount, engineState->matching.seqNr, engineState->matching.id);
+
+  bool emitted = false;
+  for (int index = 0; index < remoteCount; index++) {
+    const uint8_t candidateAnchorId = engineState->matching.id[index];
+    if (doExcludeId && excludedId == candidateAnchorId) {
+      continue;
+    }
+
+    tdoaAnchorContext_t otherAnchorCtx;
+    if (isMatchingCandidateValid(engineState, &otherAnchorCtx, anchorCtx, candidateAnchorId, engineState->matching.seqNr[index])) {
+      const double tdoaDistDiff = calcDistanceDiff(&otherAnchorCtx, anchorCtx, txAn_in_cl_An, rxAn_by_T_in_cl_T, engineState->locodeckTsFreq);
+      enqueueTDOA(&otherAnchorCtx, anchorCtx, tdoaDistDiff, engineState);
+      emitted = true;
+    }
+  }
+
+  return emitted;
+}
+
 static bool findSuitableAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const bool doExcludeId, const uint8_t excludedId) {
   bool result = false;
 
@@ -254,10 +293,14 @@ void tdoaEngineProcessPacket(tdoaEngineState_t* engineState, tdoaAnchorContext_t
 bool tdoaEngineProcessPacketFiltered(tdoaEngineState_t* engineState, tdoaAnchorContext_t* anchorCtx, const int64_t txAn_in_cl_An, const int64_t rxAn_by_T_in_cl_T, const bool doExcludeId, const uint8_t excludedId) {
   bool timeIsGood = updateClockCorrection(anchorCtx, txAn_in_cl_An, rxAn_by_T_in_cl_T, &engineState->stats);
   if (timeIsGood) {
-    tdoaAnchorContext_t otherAnchorCtx;
-    if (findSuitableAnchor(engineState, &otherAnchorCtx, anchorCtx, doExcludeId, excludedId)) {
-      double tdoaDistDiff = calcDistanceDiff(&otherAnchorCtx, anchorCtx, txAn_in_cl_An, rxAn_by_T_in_cl_T, engineState->locodeckTsFreq);
-      enqueueTDOA(&otherAnchorCtx, anchorCtx, tdoaDistDiff, engineState);
+    if (engineState->matchingAlgorithm == TdoaEngineMatchingAlgorithmAllEligible) {
+      enqueueAllMatchingAnchors(engineState, anchorCtx, txAn_in_cl_An, rxAn_by_T_in_cl_T, doExcludeId, excludedId);
+    } else {
+      tdoaAnchorContext_t otherAnchorCtx;
+      if (findSuitableAnchor(engineState, &otherAnchorCtx, anchorCtx, doExcludeId, excludedId)) {
+        double tdoaDistDiff = calcDistanceDiff(&otherAnchorCtx, anchorCtx, txAn_in_cl_An, rxAn_by_T_in_cl_T, engineState->locodeckTsFreq);
+        enqueueTDOA(&otherAnchorCtx, anchorCtx, tdoaDistDiff, engineState);
+      }
     }
   }
   return timeIsGood;

@@ -111,7 +111,9 @@ void uwbTdoa2TagSetTofCallback(InterAnchorTofCallback callback) {
 
 #ifdef ESP32S3_UWB_BOARD
 void uwbTdoa2TagSetMatchingAlgorithm(tdoaEngineMatchingAlgorithm_t algorithm) {
-  if (algorithm != TdoaEngineMatchingAlgorithmRandom && algorithm != TdoaEngineMatchingAlgorithmYoungest) {
+  if (algorithm != TdoaEngineMatchingAlgorithmRandom
+      && algorithm != TdoaEngineMatchingAlgorithmYoungest
+      && algorithm != TdoaEngineMatchingAlgorithmAllEligible) {
     algorithm = TdoaEngineMatchingAlgorithmYoungest;
   }
   s_matchingAlgorithm = algorithm;

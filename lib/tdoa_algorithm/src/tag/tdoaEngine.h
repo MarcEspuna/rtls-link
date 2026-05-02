@@ -16,6 +16,7 @@ typedef enum {
   TdoaEngineMatchingAlgorithmNone = 0,
   TdoaEngineMatchingAlgorithmRandom,
   TdoaEngineMatchingAlgorithmYoungest,
+  TdoaEngineMatchingAlgorithmAllEligible,
 } tdoaEngineMatchingAlgorithm_t;
 
 typedef struct {
