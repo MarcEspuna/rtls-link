@@ -22,6 +22,10 @@
 #include "mavlink/uart_comm.hpp"
 #endif
 
+#if defined(USE_MAVLINK) && defined(USE_UWB_MODE_TDOA_TAG)
+#include "ardupilot/rtls_link_beacon_protocol.hpp"
+#endif
+
 #ifdef HAS_RANGEFINDER
 #include "mavlink/rangefinder_sensor.hpp"
 #endif
@@ -59,6 +63,10 @@ void App::Init()
     last_heartbeat_system_id_ = system_id;
   });
 #endif // USE_MAVLINK_HEARTBEAT
+
+#ifdef USE_UWB_MODE_TDOA_TAG
+  ardupilot::RTLSLinkBeaconProtocol::Init();
+#endif
 #endif // USE_MAVLINK
 
   // Initialize timestamp
@@ -151,6 +159,7 @@ void App::Update()
   uint32_t buffer_index = 0;
   uint64_t now_ms = millis();
 
+  if (UseMAVLinkOutput()) {
   // ********** SENDING **********
 
 #ifdef USE_MAVLINK_HEARTBEAT
@@ -300,8 +309,15 @@ void App::Update()
 
   // Process the buffer
   local_position_sensor_.process_received_bytes(buffer, buffer_index);
+  }
 
 #endif // USE_MAVLINK
+
+#if defined(USE_MAVLINK) && defined(USE_UWB_MODE_TDOA_TAG)
+  if (UseBeaconOutput()) {
+    ardupilot::RTLSLinkBeaconProtocol::Update();
+  }
+#endif
 
 #ifdef USE_BEACON_PROTOCOL
   AddAnchorEcho();
@@ -417,6 +433,20 @@ bool App::IsOriginSent() {
   return app.is_origin_position_sent_;
 }
 #endif // USE_MAVLINK && USE_MAVLINK_ORIGIN
+
+#ifdef USE_MAVLINK
+bool App::UseMAVLinkOutput() {
+  return Front::uwbLittleFSFront.GetParams().apOutputMode == APOutputMode::MAVLINK;
+}
+
+bool App::UseBeaconOutput() {
+#ifdef USE_UWB_MODE_TDOA_TAG
+  return Front::uwbLittleFSFront.GetParams().apOutputMode == APOutputMode::BEACON_TDOA;
+#else
+  return false;
+#endif
+}
+#endif // USE_MAVLINK
 
 #ifdef USE_RATE_STATISTICS
 // --- Update rate tracking (microsecond-precision via esp_timer) ---
@@ -671,6 +701,17 @@ void App::SendSample(float x_m, float y_m, float z_m,
 #endif
 
 #if defined(USE_MAVLINK) && defined(USE_MAVLINK_POSITION)
+  if (UseBeaconOutput()) {
+#ifdef USE_UWB_MODE_TDOA_TAG
+    ardupilot::RTLSLinkBeaconProtocol::SendPosition(x_m, y_m, z_m);
+#endif
+    app.last_sample_timestamp_ms_ = millis();
+#ifdef USE_RATE_STATISTICS
+    app.RecordSampleTimestamp();
+#endif
+    return;
+  }
+
   // Determine Z coordinate based on zCalcMode parameter
   ZCalcMode mode = Front::uwbLittleFSFront.GetParams().zCalcMode;
   float final_z;

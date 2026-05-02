@@ -135,6 +135,8 @@ etl::vector<UWBAnchorParam, UWBParams::maxAnchorCount> UWBLittleFSFrontend::GetA
     if (anchorCount >= 4) anchors.push_back({m_Params.devId4, m_Params.x4, m_Params.y4, m_Params.z4});
     if (anchorCount >= 5) anchors.push_back({m_Params.devId5, m_Params.x5, m_Params.y5, m_Params.z5});
     if (anchorCount >= 6) anchors.push_back({m_Params.devId6, m_Params.x6, m_Params.y6, m_Params.z6});
+    if (anchorCount >= 7) anchors.push_back({m_Params.devId7, m_Params.x7, m_Params.y7, m_Params.z7});
+    if (anchorCount >= 8) anchors.push_back({m_Params.devId8, m_Params.x8, m_Params.y8, m_Params.z8});
     
     return anchors;
 }

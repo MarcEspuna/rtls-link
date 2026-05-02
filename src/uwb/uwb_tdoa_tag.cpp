@@ -26,6 +26,7 @@
 
 #include "scheduler.hpp"
 #include "app.hpp"
+#include "ardupilot/rtls_link_beacon_protocol.hpp"
 #include "bsp/board.hpp"
 #include "dw1000_radio_config.hpp"
 #include "uwb_frontend_littlefs.hpp"
@@ -625,6 +626,10 @@ UWBTagTDoA::UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnch
         configured_anchor_ids[anchorId] = true;
     }
 
+#ifdef USE_MAVLINK
+    ardupilot::RTLSLinkBeaconProtocol::SetAnchors(anchors);
+#endif
+
 #ifdef USE_BEACON_PROTOCOL
     // --- Echo anchor positions to the App (for beacon protocol) ---
     etl::array<double, 12> anchors_to_echo = {};
@@ -878,6 +883,14 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
     xSemaphoreGive(measurements_mtx);
 
     recordEstimatorInputTdoa(tdoa->anchorIdA, tdoa->anchorIdB, tdoa->distanceDiff);
+#ifdef USE_MAVLINK
+    if (App::UseBeaconOutput()) {
+        ardupilot::RTLSLinkBeaconProtocol::SendTDoA(tdoa->anchorIdA,
+                                                    tdoa->anchorIdB,
+                                                    tdoa->distanceDiff,
+                                                    tdoa->stdDev);
+    }
+#endif
 
     // Notify the estimator task once we have enough fresh pairs and the
     // debounce window has elapsed. Prevents per-callback wake storms when
