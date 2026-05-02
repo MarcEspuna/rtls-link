@@ -23,6 +23,14 @@ This project uses PlatformIO for build management with multiple environments:
 - `pio run -e esp32_application -t upload` - Upload to ESP32
 - `pio run -e esp32s3_application -t upload` - Upload to ESP32S3
 
+### OTA Upload (Preferred)
+Most deployments update devices over WiFi (OTA), not USB serial. Use the CLI from the `tools/rtls-link-manager` submodule so automation and the desktop app share the same Rust backend implementation:
+
+- Build CLI: `cd tools/rtls-link-manager && cargo build --release -p rtls-link-cli`
+- Discover devices (UDP heartbeat): `./target/release/rtls-link-cli discover`
+- OTA update (single device): `./target/release/rtls-link-cli ota update <ip> .pio/build/<env>/firmware.bin`
+- OTA update (all devices): `./target/release/rtls-link-cli ota update all .pio/build/<env>/firmware.bin`
+
 ### Compilation Testing Requirements
 **CRITICAL**: Before pushing any changes to remote branches, ALWAYS verify compilation:
 - `pio run -e esp32_application` - Must compile successfully
@@ -38,6 +46,7 @@ The desktop application is located in `tools/rtls-link-manager` and is a Tauri a
 - `cd tools/rtls-link-manager && npm run tauri build` - Build production release
 - `cd tools/rtls-link-manager && npm run dev` - Run in development mode
 - `cd tools/rtls-link-manager && cargo check --manifest-path src-tauri/Cargo.toml` - Quick Rust type check (faster than full build)
+- `cd tools/rtls-link-manager && cargo build --release -p rtls-link-cli` - Build the shared CLI tool
 
 ### Compilation Testing Requirements
 **CRITICAL**: When modifying code in `tools/rtls-link-manager`, ALWAYS verify compilation before pushing:
