@@ -200,6 +200,18 @@ pub struct UwbConfig {
     /// Coordinate rotation in degrees
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rotation_degrees: Option<f64>,
+    /// ArduPilot output mode: 0=MAVLink external nav, 1=beacon TDoA
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ap_output_mode: Option<u8>,
+    /// Beacon position feed mode: 0=disabled, 1=startup window, 2=continuous
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ap_beacon_position_mode: Option<u8>,
+    /// Startup position feed window in milliseconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ap_beacon_position_startup_ms: Option<u32>,
+    /// Position seed error estimate in millimeters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ap_beacon_position_error_mm: Option<u16>,
     /// Z calculation mode: 0=None (TDoA Z), 1=Rangefinder, 2=UWB (reserved)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub z_calc_mode: Option<u8>,

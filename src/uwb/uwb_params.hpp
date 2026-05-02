@@ -29,6 +29,17 @@ enum class AnchorLayout : uint8_t {
     CUSTOM = 255              // Reserved for future custom layouts
 };
 
+enum class APOutputMode : uint8_t {
+    MAVLINK = 0,
+    BEACON_TDOA = 1
+};
+
+enum class APBeaconPositionMode : uint8_t {
+    POSITION_DISABLED = 0,
+    STARTUP_WINDOW = 1,
+    CONTINUOUS = 2
+};
+
 using UWBShortAddr = etl::array<char, 2>;
 
 /**
@@ -72,6 +83,14 @@ struct UWBParams {
     float x6;
     float y6;
     float z6;
+    UWBShortAddr devId7;
+    float x7;
+    float y7;
+    float z7;
+    UWBShortAddr devId8;
+    float x8;
+    float y8;
+    float z8;
     uint16_t ADelay;            // Antenna delay    
     double originLat;           // Origin Latitude
     double originLon;           // Origin Longitude
@@ -79,6 +98,10 @@ struct UWBParams {
     uint8_t mavlinkTargetSystemId; // MAVLink Target System ID
     float rotationDegrees;      // Rotation degrees to NED frame
     ZCalcMode zCalcMode;        // Z calculation mode (0=None/TDoA, 1=Rangefinder, 2=UWB-reserved)
+    APOutputMode apOutputMode = APOutputMode::MAVLINK; // 0=MAVLink external nav, 1=ArduPilot beacon TDoA protocol
+    APBeaconPositionMode apBeaconPositionMode = APBeaconPositionMode::STARTUP_WINDOW; // NR position frame behavior for beacon mode
+    uint32_t apBeaconPositionStartupMs = 10000; // Startup window after ArduPilot config ACK
+    uint16_t apBeaconPositionErrorMm = 500;     // 1-sigma error reported with NR position frames
     // Rangefinder forwarding parameters
     uint8_t rfForwardEnable = 0;        // 0=disabled, 1=enabled (forward DISTANCE_SENSOR to ArduPilot)
     uint8_t rfForwardSensorId = 0xFF;   // Sensor ID override (0xFF = preserve source value)
@@ -120,7 +143,7 @@ struct UWBParams {
     uint8_t tdoaAnchorModelHealthQuorum = 5;
 
     // static constant values that will be useful for parameter reading & writing
-    static constexpr uint8_t maxAnchorCount = 6;
+    static constexpr uint8_t maxAnchorCount = 8;
 }ULS_PACKED;
 
 /**

@@ -78,6 +78,11 @@ public:
     static bool IsOriginSent();        // True if GPS origin sent to ArduPilot
 #endif
 
+#ifdef USE_MAVLINK
+    static bool UseMAVLinkOutput();
+    static bool UseBeaconOutput();
+#endif
+
 #ifdef HAS_RANGEFINDER
     static bool IsRangefinderEnabled(); // True if zCalcMode == RANGEFINDER
     static bool IsRangefinderHealthy(); // True if receiving non-stale rangefinder data
