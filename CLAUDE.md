@@ -26,10 +26,14 @@ This project uses PlatformIO for build management with multiple environments:
 ### OTA Upload (Preferred)
 Most deployments update devices over WiFi (OTA), not USB serial. Use the CLI from the `tools/rtls-link-manager` submodule so automation and the desktop app share the same Rust backend implementation:
 
-- Build CLI: `cd tools/rtls-link-manager && cargo build --release -p rtls-link-cli`
-- Discover devices (UDP heartbeat): `./target/release/rtls-link-cli discover`
-- OTA update (single device): `./target/release/rtls-link-cli ota update <ip> .pio/build/<env>/firmware.bin`
-- OTA update (all devices): `./target/release/rtls-link-cli ota update all .pio/build/<env>/firmware.bin`
+```bash
+git submodule update --init tools/rtls-link-manager
+cd tools/rtls-link-manager
+cargo build --release -p rtls-link-cli
+./target/release/rtls-link-cli discover
+./target/release/rtls-link-cli ota update <ip> ../../.pio/build/<env>/firmware.bin
+./target/release/rtls-link-cli ota update all ../../.pio/build/<env>/firmware.bin
+```
 
 ### Compilation Testing Requirements
 **CRITICAL**: Before pushing any changes to remote branches, ALWAYS verify compilation:
@@ -51,7 +55,7 @@ The desktop application is located in `tools/rtls-link-manager` and is a Tauri a
 ### Compilation Testing Requirements
 **CRITICAL**: When modifying code in `tools/rtls-link-manager`, ALWAYS verify compilation before pushing:
 - `cd tools/rtls-link-manager && cargo check --manifest-path src-tauri/Cargo.toml` - Rust backend must compile
-- `cd tools/rtls-link-manager && npm run build` - Frontend must build successfully
+- `cd tools/rtls-link-manager && npm run build` - Desktop app must build successfully
 - Both checks must pass before any git push operation to the rtls-link-manager repository
 
 ### Board Support

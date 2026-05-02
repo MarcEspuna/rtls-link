@@ -56,6 +56,7 @@ TDoA anchors can report inter-anchor ToF (raw DW1000 ticks) via the console/webs
 The CLI lives inside the `tools/rtls-link-manager` submodule so the desktop app and automation use the same Rust backend implementation:
 
 ```bash
+git submodule update --init tools/rtls-link-manager
 cd tools/rtls-link-manager
 cargo build --release -p rtls-link-cli
 ./target/release/rtls-link-cli calibrate anchors --x <m> --y <m>
