@@ -360,25 +360,9 @@ UWBTagTDoA::UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnch
         configured_anchor_ids[anchorId] = true;
     }
 
-#ifdef USE_BEACON_PROTOCOL
-    // --- Echo anchor positions to the App (for beacon protocol) ---
-    etl::array<double, 12> anchors_to_echo = {};
-    // Fill the anchor positions from id 0 up to 3 (max 4 anchors for echoing)
-    for (uint32_t i = 0; i < anchor_positions.size() && i < anchors_to_echo.size()/3 ; i++) {
-        anchors_to_echo[i*3] = anchor_positions[i].x;
-        anchors_to_echo[i*3 + 1] = anchor_positions[i].y;
-        anchors_to_echo[i*3 + 2] = anchor_positions[i].z;
-    }
-    // --- Logging ---
-    LOG_INFO("Echoing Anchor Positions:");
-    for (uint32_t i = 0; i < anchors_to_echo.size() / 3; ++i) {
-        LOG_INFO("  Anchor %u: X=%.2f, Y=%.2f, Z=%.2f",
-                 i, anchors_to_echo[i*3], anchors_to_echo[i*3+1], anchors_to_echo[i*3+2]);
-    }
-    // ---------------
-    App::AnchorsToEcho(anchors_to_echo);
+#ifdef USE_RTLSLINK_BEACON_BACKEND
+    App::ConfigureRtlslinkBeaconAnchors(anchors);
 #endif
-    // --------------------------------------
 
     // Spi pins already setup on uwb_backend
     dwInit(&m_Device, &m_Ops);          // Initialize the driver. Init resets user data!
@@ -611,6 +595,10 @@ static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa)
         fresh = fresh_pair_count.load(std::memory_order_relaxed);
     }
     xSemaphoreGive(measurements_mtx);
+
+#ifdef USE_RTLSLINK_BEACON_BACKEND
+    App::SendTdoaMeasurement(pair.a, pair.b, canonical_tdoa, tdoa->stdDev, tdoa->solvedTimestampUs);
+#endif
 
     recordEstimatorInputTdoa(tdoa->anchorIdA, tdoa->anchorIdB, tdoa->distanceDiff);
 
