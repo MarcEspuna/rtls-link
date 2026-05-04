@@ -105,6 +105,9 @@ private:
     bool PopPendingTdoa(PendingTdoa& out);
     void SendTdoa(const PendingTdoa& tdoa);
     void SendFrame(MsgId msg_id, const uint8_t* payload, uint8_t payload_len);
+    bool TakeTxMutex(TickType_t timeout_ticks);
+    void GiveTxMutex();
+    void WriteFrameLocked(MsgId msg_id, const uint8_t* payload, uint8_t payload_len);
     uint16_t ComputeAgeMs(uint64_t solved_us, size_t frame_len) const;
     uint32_t EstimateSerialDrainUs(size_t frame_len) const;
 

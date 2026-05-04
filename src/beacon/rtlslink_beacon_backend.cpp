@@ -392,24 +392,49 @@ void RTLSLinkBeaconBackend::SendTdoa(const PendingTdoa& tdoa)
     WriteI32Le(&payload[2], tdoa.distance_diff_mm);
     WriteU16Le(&payload[6], tdoa.sigma_mm);
 
+    if (!TakeTxMutex(pdMS_TO_TICKS(5))) {
+        return;
+    }
+
     constexpr size_t frame_len = 2 + 3 + sizeof(payload) + 2;
     const uint16_t age_ms = ComputeAgeMs(tdoa.solved_us, frame_len);
     if (age_ms > kMaxTdoaAgeMs) {
         dropped_stale_++;
+        GiveTxMutex();
         return;
     }
 
     WriteU16Le(&payload[8], age_ms);
-    SendFrame(MsgId::TDOA, payload, sizeof(payload));
+    WriteFrameLocked(MsgId::TDOA, payload, sizeof(payload));
+    GiveTxMutex();
 }
 
 void RTLSLinkBeaconBackend::SendFrame(MsgId msg_id, const uint8_t* payload, uint8_t payload_len)
 {
-    if (tx_mutex_ == nullptr || xSemaphoreTake(tx_mutex_, pdMS_TO_TICKS(5)) != pdTRUE) {
-        dropped_tx_busy_++;
+    if (!TakeTxMutex(pdMS_TO_TICKS(5))) {
         return;
     }
 
+    WriteFrameLocked(msg_id, payload, payload_len);
+    GiveTxMutex();
+}
+
+bool RTLSLinkBeaconBackend::TakeTxMutex(TickType_t timeout_ticks)
+{
+    if (tx_mutex_ == nullptr || xSemaphoreTake(tx_mutex_, timeout_ticks) != pdTRUE) {
+        dropped_tx_busy_++;
+        return false;
+    }
+    return true;
+}
+
+void RTLSLinkBeaconBackend::GiveTxMutex()
+{
+    xSemaphoreGive(tx_mutex_);
+}
+
+void RTLSLinkBeaconBackend::WriteFrameLocked(MsgId msg_id, const uint8_t* payload, uint8_t payload_len)
+{
     uint8_t frame[2 + 3 + kPayloadLenMax + 2];
     uint8_t len = 0;
     frame[len++] = kFrameMagic1;
@@ -430,7 +455,6 @@ void RTLSLinkBeaconBackend::SendFrame(MsgId msg_id, const uint8_t* payload, uint
     len += 2;
 
     serial_.write(frame, len);
-    xSemaphoreGive(tx_mutex_);
 }
 
 uint16_t RTLSLinkBeaconBackend::ComputeAgeMs(uint64_t solved_us, size_t frame_len) const
