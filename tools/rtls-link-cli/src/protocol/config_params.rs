@@ -89,6 +89,18 @@ pub fn config_to_params(config: &DeviceConfig) -> Vec<(String, String, String)> 
     if let Some(v) = config.uwb.rotation_degrees {
         params.push(("uwb".to_string(), "rotationDegrees".to_string(), v.to_string()));
     }
+    if let Some(v) = config.uwb.ap_output_mode {
+        params.push(("uwb".to_string(), "apOutputMode".to_string(), v.to_string()));
+    }
+    if let Some(v) = config.uwb.ap_beacon_position_mode {
+        params.push(("uwb".to_string(), "apBeaconPositionMode".to_string(), v.to_string()));
+    }
+    if let Some(v) = config.uwb.ap_beacon_position_startup_ms {
+        params.push(("uwb".to_string(), "apBeaconPositionStartupMs".to_string(), v.to_string()));
+    }
+    if let Some(v) = config.uwb.ap_beacon_position_error_mm {
+        params.push(("uwb".to_string(), "apBeaconPositionErrorMm".to_string(), v.to_string()));
+    }
     if let Some(v) = config.uwb.z_calc_mode {
         params.push(("uwb".to_string(), "zCalcMode".to_string(), v.to_string()));
     }
@@ -184,6 +196,10 @@ mod tests {
                 origin_alt: Some(100.0),
                 mavlink_target_system_id: Some(1),
                 rotation_degrees: Some(0.0),
+                ap_output_mode: Some(1),
+                ap_beacon_position_mode: Some(1),
+                ap_beacon_position_startup_ms: Some(10000),
+                ap_beacon_position_error_mm: Some(500),
                 z_calc_mode: Some(1),
                 channel: None,
                 dw_mode: None,
@@ -210,5 +226,9 @@ mod tests {
         // Check other params
         assert!(params.iter().any(|(g, n, v)| g == "wifi" && n == "mode" && v == "1"));
         assert!(params.iter().any(|(g, n, v)| g == "wifi" && n == "ssidST" && v == "TestNetwork"));
+        assert!(params.iter().any(|(g, n, v)| g == "uwb" && n == "apOutputMode" && v == "1"));
+        assert!(params.iter().any(|(g, n, v)| g == "uwb" && n == "apBeaconPositionMode" && v == "1"));
+        assert!(params.iter().any(|(g, n, v)| g == "uwb" && n == "apBeaconPositionStartupMs" && v == "10000"));
+        assert!(params.iter().any(|(g, n, v)| g == "uwb" && n == "apBeaconPositionErrorMm" && v == "500"));
     }
 }
