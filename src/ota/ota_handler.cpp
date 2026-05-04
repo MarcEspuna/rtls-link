@@ -16,13 +16,40 @@
 
 namespace ota {
 
-// Safety timeout for reboot (10 seconds)
-static constexpr uint32_t REBOOT_SAFETY_TIMEOUT_MS = 10000;
+// Delay reboot long enough for the HTTP response to leave the TCP stack.
+static constexpr uint32_t REBOOT_DELAY_MS = 1500;
 static TimerHandle_t rebootTimer = nullptr;
 
 static void rebootTimerCallback(TimerHandle_t timer) {
-    LOG_WARN("[OTA] Safety timeout reached, rebooting...");
+    LOG_INFO("[OTA] Reboot timer elapsed, rebooting...");
+    if (rebootTimer != nullptr) {
+        xTimerDelete(rebootTimer, 0);
+        rebootTimer = nullptr;
+    }
     ESP.restart();
+}
+
+static void scheduleReboot() {
+    if (rebootTimer != nullptr) {
+        xTimerStop(rebootTimer, 0);
+        xTimerDelete(rebootTimer, 0);
+        rebootTimer = nullptr;
+    }
+
+    rebootTimer = xTimerCreate(
+        "rebootTimer",
+        pdMS_TO_TICKS(REBOOT_DELAY_MS),
+        pdFALSE,
+        nullptr,
+        rebootTimerCallback
+    );
+
+    if (rebootTimer != nullptr) {
+        xTimerStart(rebootTimer, 0);
+        LOG_INFO("[OTA] Update complete, reboot scheduled in %lums", REBOOT_DELAY_MS);
+    } else {
+        LOG_ERROR("[OTA] Failed to create reboot timer");
+    }
 }
 
 void initOtaRoutes(AsyncWebServer& server) {
@@ -60,32 +87,7 @@ void initOtaRoutes(AsyncWebServer& server) {
             request->send(response);
 
             if (success) {
-                // Register onDisconnect callback to reboot after client receives response
-                request->onDisconnect([]() {
-                    LOG_INFO("[OTA] Client disconnected, rebooting...");
-                    // Cancel safety timer if still running
-                    if (rebootTimer != nullptr) {
-                        xTimerStop(rebootTimer, 0);
-                        xTimerDelete(rebootTimer, 0);
-                        rebootTimer = nullptr;
-                    }
-                    ESP.restart();
-                });
-
-                // Start safety timer in case client doesn't disconnect
-                if (rebootTimer == nullptr) {
-                    rebootTimer = xTimerCreate(
-                        "rebootTimer",
-                        pdMS_TO_TICKS(REBOOT_SAFETY_TIMEOUT_MS),
-                        pdFALSE,  // one-shot
-                        nullptr,
-                        rebootTimerCallback
-                    );
-                }
-                if (rebootTimer != nullptr) {
-                    xTimerStart(rebootTimer, 0);
-                    LOG_INFO("[OTA] Update complete, waiting for client disconnect (timeout: %lums)", REBOOT_SAFETY_TIMEOUT_MS);
-                }
+                scheduleReboot();
             }
         },
         // File upload handler (called for each chunk)
