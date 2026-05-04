@@ -168,7 +168,9 @@ private:
 #endif
 
 private:
-    static constexpr uint64_t kDeviceHealtyMinDurationMs = 100;     // If no packet sent for more than 100ms, consider device as unhealthy
+    // App::Update runs at 10 Hz, so a 100 ms freshness window races normal
+    // scheduler jitter and can keep the 16 s origin timer from ever maturing.
+    static constexpr uint64_t kDeviceHealtyMinDurationMs = 500;
     static constexpr uint32_t kArdupilotSerialBaudrate = 921600;
     static constexpr size_t kArdupilotSerialTxBufferSize = 1024;
 
