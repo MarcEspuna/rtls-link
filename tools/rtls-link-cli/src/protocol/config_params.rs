@@ -104,6 +104,9 @@ pub fn config_to_params(config: &DeviceConfig) -> Vec<(String, String, String)> 
     if let Some(v) = config.uwb.smart_power_enable {
         params.push(("uwb".to_string(), "smartPowerEnable".to_string(), v.to_string()));
     }
+    if let Some(v) = config.uwb.tdoa_matcher_policy {
+        params.push(("uwb".to_string(), "tdoaMatcherPolicy".to_string(), v.to_string()));
+    }
 
     // App params
     if let Some(v) = config.app.led2_pin {
@@ -189,6 +192,7 @@ mod tests {
                 dw_mode: None,
                 tx_power_level: None,
                 smart_power_enable: None,
+                tdoa_matcher_policy: Some(2),
             },
             app: AppConfig {
                 led2_pin: Some(2),
@@ -210,5 +214,6 @@ mod tests {
         // Check other params
         assert!(params.iter().any(|(g, n, v)| g == "wifi" && n == "mode" && v == "1"));
         assert!(params.iter().any(|(g, n, v)| g == "wifi" && n == "ssidST" && v == "TestNetwork"));
+        assert!(params.iter().any(|(g, n, v)| g == "uwb" && n == "tdoaMatcherPolicy" && v == "2"));
     }
 }

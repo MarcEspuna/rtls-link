@@ -215,6 +215,9 @@ pub struct UwbConfig {
     /// Smart power enable (0=disabled, 1=enabled)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smart_power_enable: Option<u8>,
+    /// TDoA tag matcher policy: 0=youngest, 1=random, 2=all eligible
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tdoa_matcher_policy: Option<u8>,
 }
 
 /// Single anchor configuration.

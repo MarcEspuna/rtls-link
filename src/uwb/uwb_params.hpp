@@ -99,7 +99,7 @@ struct UWBParams {
     uint8_t tdoaSlotCount = 0;          // Active TDMA slots per frame (2-8), 0=legacy (8)
     uint16_t tdoaSlotDurationUs = 0;    // Slot duration in microseconds, 0=legacy (~2ms)
 #ifdef ESP32S3_UWB_BOARD
-    uint8_t tdoaMatcherPolicy = 0;      // 0=YOUNGEST, 1=RANDOM/rotating eligible candidate
+    uint8_t tdoaMatcherPolicy = 0;      // 0=YOUNGEST, 1=RANDOM/rotating eligible candidate, 2=ALL_ELIGIBLE
 #endif
 
     // Dynamic anchor positioning (TDoA tags)

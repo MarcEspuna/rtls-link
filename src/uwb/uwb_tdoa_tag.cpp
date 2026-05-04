@@ -174,9 +174,15 @@ static int8_t estimatorPairIndex(uint8_t anchorA, uint8_t anchorB)
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
 {
 #ifdef ESP32S3_UWB_BOARD
-    return policy == 1
-        ? TdoaEngineMatchingAlgorithmRandom
-        : TdoaEngineMatchingAlgorithmYoungest;
+    switch (policy) {
+        case 1:
+            return TdoaEngineMatchingAlgorithmRandom;
+        case 2:
+            return TdoaEngineMatchingAlgorithmAllEligible;
+        case 0:
+        default:
+            return TdoaEngineMatchingAlgorithmYoungest;
+    }
 #else
     (void)policy;
     return TdoaEngineMatchingAlgorithmYoungest;
@@ -188,6 +194,8 @@ static const char* matcherPolicyName(tdoaEngineMatchingAlgorithm_t policy)
     switch (policy) {
         case TdoaEngineMatchingAlgorithmRandom:
             return "RANDOM";
+        case TdoaEngineMatchingAlgorithmAllEligible:
+            return "ALL_ELIGIBLE";
         case TdoaEngineMatchingAlgorithmYoungest:
         default:
             return "YOUNGEST";
