@@ -21,6 +21,11 @@ enum class ZCalcMode : uint8_t {
     UWB = 2          // Reserved for future UWB-based Z calculation
 };
 
+enum class OutputBackend : uint8_t {
+    MAVLINK = 0,          // Current/default ArduPilot integration path
+    RTLSLINK_BEACON = 1   // ArduPilot AP_Beacon_RTLSLink serial backend
+};
+
 // Anchor layout configurations for dynamic position calculation
 // A0 is always at origin. The layout number determines which anchors
 // define the +X and +Y axes.
@@ -81,8 +86,10 @@ struct UWBParams {
     double originLon;           // Origin Longitude
     float originAlt;            // Origin Altitude
     uint8_t mavlinkTargetSystemId; // MAVLink Target System ID
+    OutputBackend outputBackend = OutputBackend::MAVLINK; // Runtime output transport
     float rotationDegrees;      // Rotation degrees to NED frame
     ZCalcMode zCalcMode;        // Z calculation mode (0=None/TDoA, 1=Rangefinder, 2=UWB-reserved)
+    uint8_t rtlsBeaconAgeBiasMs = 2; // Additional TDoA age bias for AP-side UART/scheduler latency
     // Rangefinder forwarding parameters
     uint8_t rfForwardEnable = 0;        // 0=disabled, 1=enabled (forward DISTANCE_SENSOR to ArduPilot)
     uint8_t rfForwardSensorId = 0xFF;   // Sensor ID override (0xFF = preserve source value)

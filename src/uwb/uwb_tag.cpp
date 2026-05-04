@@ -119,16 +119,6 @@ UWBTag::UWBTag(IUWBFrontend& front, const bsp::UWBConfig& uwb_config, etl::span<
   // start as tag, do not assign random short address
   DW1000Ranging.startAsTag(tag_addr, DW1000.MODE_LONGDATA_FAST_ACCURACY, false); 
 
-#ifdef USE_BEACON_PROTOCOL
-  etl::array<double, 12> anchors_to_echo = {};
-  // Fill the anchor positions from id 0 to 3:
-  for (uint32_t i = 0; i < anchor_coordinates.rows() && i < anchors_to_echo.size()/3 ; i++) {
-    anchors_to_echo[i*3] = anchor_coordinates(i, 0);
-    anchors_to_echo[i*3 + 1] = anchor_coordinates(i, 1);
-    anchors_to_echo[i*3 + 2] = anchor_coordinates(i, 2);
-  }
-  App::AnchorsToEcho(anchors_to_echo);
-#endif
 }
 
 void UWBTag::Update()
@@ -162,11 +152,6 @@ static void newRange()
       last_anchor_update[index - 1] = 0;   //sanity check, ignore this measurement
     } 
     else {
-      // Send range sample to ardupilot
-      uint8_t id = index-1;
-#ifdef USE_BEACON_PROTOCOL
-      App::SendRangeSample(id, range);
-#endif
       LOG_DEBUG("Range %d: %.2f m", index, range);
     } 
   }
