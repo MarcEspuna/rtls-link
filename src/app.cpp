@@ -26,6 +26,16 @@
 #include "mavlink/rangefinder_sensor.hpp"
 #endif
 
+namespace {
+
+uint32_t AgeMsClampFuture(uint32_t now_ms, uint32_t timestamp_ms)
+{
+  const uint32_t age_ms = now_ms - timestamp_ms;
+  return age_ms <= 0x7FFFFFFFUL ? age_ms : 0;
+}
+
+} // namespace
+
 #if defined(USE_MAVLINK) && defined(USE_RTLSLINK_BEACON_BACKEND)
 App::App()
   : uart_comm_(App::GetArdupilotSerial())
@@ -65,7 +75,7 @@ void App::Init()
 #ifdef USE_MAVLINK_HEARTBEAT
   local_position_sensor_.set_heartbeat_callback([this](uint8_t system_id, uint8_t component_id) {
     (void)component_id;
-    last_heartbeat_received_timestamp_ms_ = millis();
+    last_heartbeat_received_timestamp_ms_.store(millis(), std::memory_order_relaxed);
     last_heartbeat_system_id_ = system_id;
   });
 #endif // USE_MAVLINK_HEARTBEAT
@@ -160,7 +170,7 @@ void App::Update()
 
 #ifdef USE_MAVLINK
   const bool mavlink_output_selected = IsMavlinkOutputSelected();
-  uint64_t now_ms = millis();
+  uint32_t now_ms = millis();
 
 #ifdef HAS_RANGEFINDER
   // Keep rangefinder state fresh even when RTLSLink Beacon is the selected
@@ -177,8 +187,8 @@ void App::Update()
   // App health stats (static to persist across calls)
   static uint32_t app_stats_healthy_cycles = 0;
   static uint32_t app_stats_unhealthy_cycles = 0;
-  static uint64_t app_stats_last_log_ms = 0;
-  static constexpr uint64_t APP_STATS_LOG_INTERVAL_MS = 1000;
+  static uint32_t app_stats_last_log_ms = 0;
+  static constexpr uint32_t APP_STATS_LOG_INTERVAL_MS = 1000;
 
   uint8_t buffer[1024];
   uint32_t buffer_index = 0;
@@ -194,7 +204,13 @@ void App::Update()
 #endif // USE_MAVLINK_HEARTBEAT
 
   // Check if device is healthy
-  if (now_ms - last_sample_timestamp_ms_ > kDeviceHealtyMinDurationMs) {
+  const uint32_t last_sample_timestamp_ms =
+      last_sample_timestamp_ms_.load(std::memory_order_relaxed);
+  const bool sample_seen = last_sample_timestamp_ms != 0;
+  const uint32_t sample_age_ms = sample_seen
+      ? AgeMsClampFuture(now_ms, last_sample_timestamp_ms)
+      : UINT32_MAX;
+  if (sample_age_ms > kDeviceHealtyMinDurationMs) {
     // Device is unhealthy
     device_unhealthy_timestamp_ms_ = now_ms;
     app_stats_unhealthy_cycles++;
@@ -204,7 +220,11 @@ void App::Update()
 #ifdef USE_MAVLINK_ORIGIN
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
 #ifdef USE_MAVLINK_HEARTBEAT
-    uint64_t time_since_rcv_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
+    const uint32_t last_heartbeat_received_timestamp_ms =
+        last_heartbeat_received_timestamp_ms_.load(std::memory_order_relaxed);
+    uint32_t time_since_rcv_heartbeat = last_heartbeat_received_timestamp_ms != 0
+        ? AgeMsClampFuture(now_ms, last_heartbeat_received_timestamp_ms)
+        : UINT32_MAX;
     bool heartbeat_recent = time_since_rcv_heartbeat < kHeartbeatRcvTimeoutMs;
 #else
     bool heartbeat_recent = true;
@@ -269,7 +289,11 @@ void App::Update()
   if (now_ms - app_stats_last_log_ms >= APP_STATS_LOG_INTERVAL_MS) {
     uint64_t time_since_unhealthy = now_ms - device_unhealthy_timestamp_ms_;
 #ifdef USE_MAVLINK_HEARTBEAT
-    uint64_t time_since_heartbeat = now_ms - last_heartbeat_received_timestamp_ms_;
+    const uint32_t last_heartbeat_received_timestamp_ms =
+        last_heartbeat_received_timestamp_ms_.load(std::memory_order_relaxed);
+    uint32_t time_since_heartbeat = last_heartbeat_received_timestamp_ms != 0
+        ? AgeMsClampFuture(now_ms, last_heartbeat_received_timestamp_ms)
+        : UINT32_MAX;
 #else
     uint64_t time_since_heartbeat = 0;
 #endif
@@ -294,8 +318,10 @@ void App::Update()
   {
     const auto& params = Front::uwbLittleFSFront.GetParams();
     bool explicit_forwarding = (params.rfForwardEnable != 0);
-    bool uwb_silent = (last_sample_timestamp_ms_ == 0)
-                    || ((now_ms - last_sample_timestamp_ms_) > kUwbDropoutForwardMs);
+    const uint32_t last_sample_timestamp_ms =
+        last_sample_timestamp_ms_.load(std::memory_order_relaxed);
+    bool uwb_silent = (last_sample_timestamp_ms == 0)
+                    || (AgeMsClampFuture(now_ms, last_sample_timestamp_ms) > kUwbDropoutForwardMs);
 
     if (!explicit_forwarding && uwb_silent && IsRangefinderHealthy()) {
       // Re-emit the last received DISTANCE_SENSOR using the same override/
@@ -417,11 +443,13 @@ bool App::IsRangefinderHealthy() {
 #if defined(USE_MAVLINK) && defined(USE_MAVLINK_POSITION)
 bool App::IsSendingPositions() {
   // Guard for initial boot (last_sample_timestamp_ms_ starts at 0)
-  if (app.last_sample_timestamp_ms_ == 0) {
+  const uint32_t last_sample_timestamp_ms =
+      app.last_sample_timestamp_ms_.load(std::memory_order_relaxed);
+  if (last_sample_timestamp_ms == 0) {
     return false;
   }
   // Use 2s window to match heartbeat interval (avoids flapping)
-  return (millis() - app.last_sample_timestamp_ms_) < 2000;
+  return AgeMsClampFuture(millis(), last_sample_timestamp_ms) < 2000;
 }
 #endif // USE_MAVLINK && USE_MAVLINK_POSITION
 
@@ -698,7 +726,8 @@ void App::SendSample(float x_m, float y_m, float z_m,
 #ifdef USE_RTLSLINK_BEACON_BACKEND
   if (IsRtlslinkBeaconOutputSelected()) {
     app.rtlslink_beacon_backend_.SendPosition(rotated_vector.x, rotated_vector.y, rotated_vector.z);
-    app.last_sample_timestamp_ms_ = millis();
+    const uint32_t now_ms = millis();
+    app.last_sample_timestamp_ms_.store(now_ms, std::memory_order_relaxed);
 #ifdef USE_RATE_STATISTICS
     app.RecordSampleTimestamp();
 #endif
@@ -713,7 +742,10 @@ void App::SendSample(float x_m, float y_m, float z_m,
 
   // Check if we have received a heartbeat recently
 #ifdef USE_MAVLINK_HEARTBEAT
-  bool heartbeatOk = (millis() - app.last_heartbeat_received_timestamp_ms_ < kHeartbeatRcvTimeoutMs);
+  const uint32_t last_heartbeat_received_timestamp_ms =
+      app.last_heartbeat_received_timestamp_ms_.load(std::memory_order_relaxed);
+  bool heartbeatOk = last_heartbeat_received_timestamp_ms != 0
+      && AgeMsClampFuture(millis(), last_heartbeat_received_timestamp_ms) < kHeartbeatRcvTimeoutMs;
 #else
   bool heartbeatOk = true;  // Always send if no heartbeat checking
 #endif
@@ -744,7 +776,8 @@ void App::SendSample(float x_m, float y_m, float z_m,
           rotated_vector.x, rotated_vector.y, rotated_vector.z,
           0, 0, 0);
     }
-    app.last_sample_timestamp_ms_ = millis();
+    const uint32_t now_ms = millis();
+    app.last_sample_timestamp_ms_.store(now_ms, std::memory_order_relaxed);
 #ifdef USE_RATE_STATISTICS
     app.RecordSampleTimestamp();  // Track for rate statistics
 #endif

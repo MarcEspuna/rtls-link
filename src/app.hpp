@@ -25,6 +25,7 @@
 #include <cmath> // For sin and cos functions
 #include <optional>
 #include <array>
+#include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -108,7 +109,7 @@ private:
     LocalPositionSensor local_position_sensor_;
 #ifdef USE_MAVLINK_HEARTBEAT
     uint64_t last_heartbeat_timestamp_ms_ = 0;
-    uint64_t last_heartbeat_received_timestamp_ms_ = 0;
+    std::atomic<uint32_t> last_heartbeat_received_timestamp_ms_{0};
     uint8_t last_heartbeat_system_id_ = 0;
 #endif // USE_MAVLINK_HEARTBEAT
 #ifdef USE_MAVLINK_ORIGIN
@@ -125,7 +126,7 @@ private:
     RTLSLinkBeaconBackend rtlslink_beacon_backend_;
 #endif
 
-    uint64_t last_sample_timestamp_ms_ = 0;
+    std::atomic<uint32_t> last_sample_timestamp_ms_{0};
     uint64_t device_unhealthy_timestamp_ms_ = 0;
 
 #ifdef HAS_RANGEFINDER
