@@ -46,6 +46,9 @@ public:
     // Get active configuration name
     static String GetActiveConfig();
 
+    static size_t GetConfigCount();
+    static const char* GetConfigName(size_t index);
+
     // Set active configuration (updates metadata only)
     static ConfigError SetActiveConfig(const char* name);
 

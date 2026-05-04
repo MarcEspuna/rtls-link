@@ -369,6 +369,72 @@ String TDoAAnchorModel::CollectStatusJson() const
     return out;
 }
 
+void TDoAAnchorModel::AppendBinaryStatus(rtls::protocol::BinaryFrameBuilder<2048>& outFrame, uint8_t view) const
+{
+    outFrame.Begin(rtls::protocol::FrameType::TdoaEstimatorStatus);
+
+    if (xSemaphoreTake(m_mutex, portMAX_DELAY) != pdTRUE) {
+        outFrame.AppendU8(view);
+        outFrame.AppendU8(MODE_OFF);
+        outFrame.AppendU8(DOMAIN_RAW_EFFECTIVE);
+        outFrame.AppendU16(0);
+        outFrame.AppendU32(0);
+        outFrame.AppendU8(COLLECT_FAILED);
+        outFrame.AppendU32(0);
+        outFrame.AppendU32(0);
+        outFrame.AppendU16(0);
+        outFrame.AppendU8(0);
+        outFrame.AppendString("anchor model mutex unavailable");
+        outFrame.AppendU8(0);
+        outFrame.Finish();
+        return;
+    }
+
+    uint32_t elapsed = 0;
+    if (m_collectState == COLLECT_ACTIVE && m_collectStartMs != 0) {
+        elapsed = millis() - m_collectStartMs;
+    }
+
+    uint16_t flags = 0;
+    if (m_modelLocked) flags |= (1 << 0);
+    if (m_modelPersisted) flags |= (1 << 1);
+    if (m_fallbackActive) flags |= (1 << 2);
+
+    outFrame.AppendU8(view);
+    outFrame.AppendU8(static_cast<uint8_t>(m_mode));
+    outFrame.AppendU8(static_cast<uint8_t>(m_domain));
+    outFrame.AppendU16(flags);
+    outFrame.AppendU32(m_modelVersion);
+    outFrame.AppendU8(static_cast<uint8_t>(m_collectState));
+    outFrame.AppendU32(elapsed);
+    outFrame.AppendU32(m_collectWindowMs);
+    outFrame.AppendU16(m_minSamplesPerPair);
+    outFrame.AppendU8(HealthyLockedPairCountLocked());
+    outFrame.AppendString(m_lastError);
+    outFrame.AppendU8(kPairCount);
+
+    for (uint8_t i = 0; i < kPairCount; i++) {
+        const PairState& pair = m_pairs[i];
+        uint8_t pairFlags = 0;
+        if (pair.locked) pairFlags |= (1 << 0);
+        if (pair.healthy) pairFlags |= (1 << 1);
+
+        outFrame.AppendU8(pair.a);
+        outFrame.AppendU8(pair.b);
+        outFrame.AppendU16(pair.sampleCount);
+        outFrame.AppendU32(pair.totalSamples);
+        outFrame.AppendU16(pair.lockedTof);
+        outFrame.AppendU16(pair.mad);
+        outFrame.AppendU8(pairFlags);
+        outFrame.AppendU16(pair.residualCount);
+        outFrame.AppendU16(pair.residualBad);
+        outFrame.AppendU32(pair.residualAbsMax);
+    }
+
+    outFrame.Finish();
+    xSemaphoreGive(m_mutex);
+}
+
 bool TDoAAnchorModel::FindPair(uint8_t a, uint8_t b, uint8_t& index, bool& reversed)
 {
     tdoa::AnchorPair pair;
