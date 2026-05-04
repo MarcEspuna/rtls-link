@@ -4,6 +4,7 @@
 
 #include <etl/array.h>
 
+#include "config/features.hpp"
 #include "utils/utils.hpp"
 
 enum class UWBMode : uint8_t {      // Added mode to names since the UWBLibrary leaks ANCHOR and TAG defines
@@ -86,7 +87,15 @@ struct UWBParams {
     double originLon;           // Origin Longitude
     float originAlt;            // Origin Altitude
     uint8_t mavlinkTargetSystemId; // MAVLink Target System ID
-    OutputBackend outputBackend = OutputBackend::MAVLINK; // Runtime output transport
+    // Runtime output transport. Keep MAVLink as the default when it is compiled,
+    // otherwise select the compiled RTLSLink beacon backend.
+#ifdef USE_MAVLINK
+    OutputBackend outputBackend = OutputBackend::MAVLINK;
+#elif defined(USE_RTLSLINK_BEACON_BACKEND)
+    OutputBackend outputBackend = OutputBackend::RTLSLINK_BEACON;
+#else
+    OutputBackend outputBackend = OutputBackend::MAVLINK;
+#endif
     float rotationDegrees;      // Rotation degrees to NED frame
     ZCalcMode zCalcMode;        // Z calculation mode (0=None/TDoA, 1=Rangefinder, 2=UWB-reserved)
     uint8_t rtlsBeaconAgeBiasMs = 2; // Additional TDoA age bias for AP-side UART/scheduler latency

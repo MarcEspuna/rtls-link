@@ -17,9 +17,23 @@ RTLSLinkBeaconBackend::RTLSLinkBeaconBackend(HardwareSerial& serial)
 
 void RTLSLinkBeaconBackend::Init(uint32_t baudrate, size_t tx_buffer_size)
 {
+    if (initialized_) {
+        return;
+    }
+
     baudrate_ = baudrate;
     tx_buffer_size_ = tx_buffer_size;
-    queue_mutex_ = xSemaphoreCreateMutex();
+    if (queue_mutex_ == nullptr) {
+        queue_mutex_ = xSemaphoreCreateMutex();
+    }
+    if (tx_mutex_ == nullptr) {
+        tx_mutex_ = xSemaphoreCreateMutex();
+    }
+    if (queue_mutex_ == nullptr || tx_mutex_ == nullptr) {
+        LOG_ERROR("RTLSLink beacon backend mutex allocation failed");
+        return;
+    }
+
     initialized_ = true;
     LOG_INFO("RTLSLink beacon backend ready at %lu baud", static_cast<unsigned long>(baudrate));
 }
@@ -60,6 +74,11 @@ void RTLSLinkBeaconBackend::ConfigureAnchors(etl::span<const UWBAnchorParam> anc
     LOG_INFO("RTLSLink beacon configured %u anchors (count=%u)",
              static_cast<unsigned int>(configured),
              static_cast<unsigned int>(anchor_count_));
+    if (configured != anchor_count_) {
+        LOG_WARN("RTLSLink beacon requires contiguous anchor ids 0..%u; configured=%u",
+                 static_cast<unsigned int>(anchor_count_ - 1),
+                 static_cast<unsigned int>(configured));
+    }
 }
 
 void RTLSLinkBeaconBackend::Update()
@@ -386,6 +405,11 @@ void RTLSLinkBeaconBackend::SendTdoa(const PendingTdoa& tdoa)
 
 void RTLSLinkBeaconBackend::SendFrame(MsgId msg_id, const uint8_t* payload, uint8_t payload_len)
 {
+    if (tx_mutex_ == nullptr || xSemaphoreTake(tx_mutex_, pdMS_TO_TICKS(5)) != pdTRUE) {
+        dropped_tx_busy_++;
+        return;
+    }
+
     uint8_t frame[2 + 3 + kPayloadLenMax + 2];
     uint8_t len = 0;
     frame[len++] = kFrameMagic1;
@@ -406,6 +430,7 @@ void RTLSLinkBeaconBackend::SendFrame(MsgId msg_id, const uint8_t* payload, uint
     len += 2;
 
     serial_.write(frame, len);
+    xSemaphoreGive(tx_mutex_);
 }
 
 uint16_t RTLSLinkBeaconBackend::ComputeAgeMs(uint64_t solved_us, size_t frame_len) const

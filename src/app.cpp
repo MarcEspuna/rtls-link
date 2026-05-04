@@ -787,7 +787,11 @@ HardwareSerial& App::GetArdupilotSerial()
 bool App::IsMavlinkOutputSelected()
 {
 #ifdef USE_MAVLINK
+#ifdef USE_RTLSLINK_BEACON_BACKEND
   return Front::uwbLittleFSFront.GetParams().outputBackend == OutputBackend::MAVLINK;
+#else
+  return true;
+#endif
 #else
   return false;
 #endif
@@ -796,7 +800,11 @@ bool App::IsMavlinkOutputSelected()
 bool App::IsRtlslinkBeaconOutputSelected()
 {
 #ifdef USE_RTLSLINK_BEACON_BACKEND
+#ifdef USE_MAVLINK
   return Front::uwbLittleFSFront.GetParams().outputBackend == OutputBackend::RTLSLINK_BEACON;
+#else
+  return true;
+#endif
 #else
   return false;
 #endif

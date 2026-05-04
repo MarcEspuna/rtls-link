@@ -33,6 +33,7 @@ public:
     bool IsConfigured() const { return config_accepted_; }
     uint32_t DroppedQueueFull() const { return dropped_queue_full_; }
     uint32_t DroppedStale() const { return dropped_stale_; }
+    uint32_t DroppedTxBusy() const { return dropped_tx_busy_; }
 
 private:
     static constexpr uint8_t kFrameMagic1 = 0x52; // 'R'
@@ -118,9 +119,11 @@ private:
     etl::array<Anchor, kMaxAnchors> anchors_ = {};
 
     SemaphoreHandle_t queue_mutex_ = nullptr;
+    SemaphoreHandle_t tx_mutex_ = nullptr;
     etl::queue<PendingTdoa, kTdoaQueueDepth> tdoa_queue_;
     uint32_t dropped_queue_full_ = 0;
     uint32_t dropped_stale_ = 0;
+    uint32_t dropped_tx_busy_ = 0;
 
     ParseState parse_state_ = ParseState::MAGIC_1;
     uint8_t rx_msg_id_ = 0;
