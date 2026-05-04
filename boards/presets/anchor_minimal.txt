@@ -13,8 +13,7 @@
 ; Stripped features:
 ;   - MAVLink output (not needed for anchors)
 ;   - Beacon protocol
-;   - All tag modes (TWR/TDoA)
-;   - Calibration mode
+;   - TDoA tag mode
 ;   - Rate statistics
 ;   - Status LED task
 ;

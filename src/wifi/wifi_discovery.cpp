@@ -197,11 +197,8 @@ void WifiDiscovery::SendHeartbeat() {
 
 const char* WifiDiscovery::ModeToRoleString(uint8_t mode) {
     // Maps UWBMode enum values to human-readable strings
-    // UWBMode: ANCHOR_MODE_TWR=0, TAG_MODE_TWR=1, CALIBRATION_MODE=2, ANCHOR_TDOA=3, TAG_TDOA=4
+    // UWBMode: ANCHOR_TDOA=3, TAG_TDOA=4
     switch (mode) {
-        case 0: return "anchor";
-        case 1: return "tag";
-        case 2: return "calibration";
         case 3: return "anchor_tdoa";
         case 4: return "tag_tdoa";
         default: return "unknown";

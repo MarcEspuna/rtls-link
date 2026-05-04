@@ -87,10 +87,10 @@ void setup() {
      * 
      * NOTE: 
      *  -  You can connect through USB to any device and configure it locally. Specifically useful for configuring network settings.
-     *  -  There needs to be an EEPROM for configuring global settings. 
+     *  -  LittleFS stores runtime parameter configuration.
      *  -  The wifi module should allow for calibration of ANCHOR devices. It should also allow to specify the device as anchor or tag.
      * 
-     * 2. UWB-TWR module setup
+     * 2. UWB-TDoA module setup
      * 
      * 3. Mavlink forwarding of messages.
      *    3.1 First usecase(Only on tag): A single first output through a IP address. 1 address 1 arducopter mavlink connection. 

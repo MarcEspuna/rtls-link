@@ -4,19 +4,6 @@
 #include "logging/logging.hpp"
 #include <cstring>
 
-// Conditional includes based on feature flags
-#ifdef USE_UWB_MODE_TWR_ANCHOR
-#include "uwb_anchor.hpp"
-#endif
-
-#ifdef USE_UWB_MODE_TWR_TAG
-#include "uwb_tag.hpp"
-#endif
-
-#ifdef USE_UWB_CALIBRATION
-#include "uwb_calibration.hpp"
-#endif
-
 #ifdef USE_UWB_MODE_TDOA_TAG
 #include "uwb_tdoa_tag.hpp"
 #endif
@@ -31,37 +18,16 @@ void UWBLittleFSFrontend::InitBackendForCurrentMode() {
     }
     auto anchors = GetAnchors();
     switch (m_Params.mode) {
-    case UWBMode::ANCHOR_MODE_TWR:
-#ifdef USE_UWB_MODE_TWR_ANCHOR
-        m_Backend = new UWBAnchor(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
-#else
-        LOG_WARN("TWR Anchor mode requested but USE_UWB_MODE_TWR_ANCHOR not compiled");
-#endif
-        break;
-    case UWBMode::TAG_MODE_TWR:
-#ifdef USE_UWB_MODE_TWR_TAG
-        m_Backend = new UWBTag(*this, bsp::kBoardConfig.uwb, anchors);
-#else
-        LOG_WARN("TWR Tag mode requested but USE_UWB_MODE_TWR_TAG not compiled");
-#endif
-        break;
-    case UWBMode::CALIBRATION_MODE:
-#ifdef USE_UWB_CALIBRATION
-        m_Backend = new UWBCalibration(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.calDistance);
-#else
-        LOG_WARN("Calibration mode requested but USE_UWB_CALIBRATION not compiled");
-#endif
-        break;
     case UWBMode::ANCHOR_TDOA:
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
-        m_Backend = new UWBAnchorTDoA(*this, bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
+        m_Backend = new UWBAnchorTDoA(bsp::kBoardConfig.uwb, m_Params.devShortAddr, m_Params.ADelay);
 #else
         LOG_WARN("TDoA Anchor mode requested but USE_UWB_MODE_TDOA_ANCHOR not compiled");
 #endif
         break;
     case UWBMode::TAG_TDOA:
 #ifdef USE_UWB_MODE_TDOA_TAG
-        m_Backend = new UWBTagTDoA(*this, bsp::kBoardConfig.uwb, anchors);
+        m_Backend = new UWBTagTDoA(bsp::kBoardConfig.uwb, anchors);
 #else
         LOG_WARN("TDoA Tag mode requested but USE_UWB_MODE_TDOA_TAG not compiled");
 #endif
@@ -155,27 +121,6 @@ uint32_t UWBLittleFSFrontend::GetConnectedDevices() {
         return m_Backend->GetNumberOfConnectedDevices();
     }
     return 0;
-}
-
-bool UWBLittleFSFrontend::StartTag() {
-#ifdef USE_RUNTIME_SUBSYSTEM_TOGGLES
-    if (m_Params.uwbEnable == 0) {
-        return false;
-    }
-#endif
-
-    if (m_Backend) {
-        return m_Backend->Start();
-    }
-    return false;
-}
-
-void UWBLittleFSFrontend::PerformAnchorCalibration() {
-    // Set uwb mode to calibration and reboot.
-    m_Params.mode = UWBMode::CALIBRATION_MODE;
-    SaveParams();
-    // Reboot
-    ESP.restart();
 }
 
 etl::vector<UWBAnchorParam, UWBParams::maxAnchorCount> UWBLittleFSFrontend::GetAnchors() {

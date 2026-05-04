@@ -52,18 +52,9 @@ public:
     void StatusLedTask();
 #endif
     
-#ifdef USE_BEACON_PROTOCOL
-    // Setup the anchors to echo
-    static void AnchorsToEcho(const etl::array<double, 12>& anchor_locations);
-#endif
-
 #ifdef HAS_POSITION_OUTPUT
     static void SendSample(float x_m, float y_m, float z_m,
                            std::optional<std::array<float, 6>> positionCovariance = std::nullopt);
-#endif
-
-#ifdef USE_BEACON_PROTOCOL
-    static void SendRangeSample(uint8_t id, float range);
 #endif
 
     static void Start();

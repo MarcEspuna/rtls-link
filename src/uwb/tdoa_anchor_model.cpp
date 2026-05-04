@@ -13,6 +13,8 @@
 #include <LittleFS.h>
 
 #include "logging/logging.hpp"
+#include "tdoa_common.hpp"
+#include "tdoa_pairs.hpp"
 
 namespace {
 constexpr const char* kPersistedModelPath = "/tdoa_anchor_model.bin";
@@ -48,12 +50,10 @@ TDoAAnchorModel::TDoAAnchorModel()
 {
     m_mutex = xSemaphoreCreateMutex();
 
-    constexpr uint8_t pairs[kPairCount][2] = {
-        {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}
-    };
     for (uint8_t i = 0; i < kPairCount; i++) {
-        m_pairs[i].a = pairs[i][0];
-        m_pairs[i].b = pairs[i][1];
+        const tdoa::AnchorPair pair = tdoa::PairByIndex<kAnchorCount>(i);
+        m_pairs[i].a = pair.a;
+        m_pairs[i].b = pair.b;
     }
 }
 
@@ -371,25 +371,17 @@ String TDoAAnchorModel::CollectStatusJson() const
 
 bool TDoAAnchorModel::FindPair(uint8_t a, uint8_t b, uint8_t& index, bool& reversed)
 {
-    if (a >= kAnchorCount || b >= kAnchorCount || a == b) {
+    tdoa::AnchorPair pair;
+    if (!tdoa::CanonicalizePair(a, b, kAnchorCount, pair, reversed)) {
         return false;
     }
 
-    const uint8_t lo = std::min(a, b);
-    const uint8_t hi = std::max(a, b);
-    reversed = (a != lo);
-
-    constexpr uint8_t pairs[kPairCount][2] = {
-        {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}
-    };
-
-    for (uint8_t i = 0; i < kPairCount; i++) {
-        if (pairs[i][0] == lo && pairs[i][1] == hi) {
-            index = i;
-            return true;
-        }
+    const uint8_t pairIndex = tdoa::PairIndexCanonical(pair, kAnchorCount);
+    if (pairIndex >= kPairCount) {
+        return false;
     }
-    return false;
+    index = pairIndex;
+    return true;
 }
 
 uint16_t TDoAAnchorModel::DomainValue(Domain domain, uint16_t rawDistanceTimestampUnits, uint16_t fromAntennaDelay, uint16_t toAntennaDelay)

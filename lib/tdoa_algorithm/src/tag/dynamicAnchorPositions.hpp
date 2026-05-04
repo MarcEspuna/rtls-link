@@ -1,13 +1,13 @@
 /**
  * @file dynamicAnchorPositions.hpp
- * @brief Dynamic anchor position calculation from inter-anchor TWR measurements
+ * @brief Dynamic anchor position calculation from inter-anchor ToF measurements
  *
  * This module calculates anchor positions dynamically from the inter-anchor
  * distance measurements broadcast in TDoA packets. It supports rectangular
  * 4-anchor layouts and provides averaging/filtering of distance measurements.
  *
  * The calculator uses the distances array from TDoA anchor packets, which
- * contains the TWR-measured distances between anchors.
+ * contains the measured time-of-flight distances between anchors.
  */
 
 #pragma once

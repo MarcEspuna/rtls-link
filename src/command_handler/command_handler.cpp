@@ -38,11 +38,6 @@ static void readAllCallback(cmd* c);
 static void writeCallback(cmd* c);
 #endif
 
-#ifdef USE_CONSOLE_UWB_CONTROL
-static void startCallback(cmd* c);
-static void calibrateCallback(cmd* c);
-#endif
-
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
 static void tdoaDistancesCallback(cmd* c);
 #endif
@@ -229,11 +224,6 @@ void CommandHandler::Init()
     simpleCLI.addCommand("tdoa-anchor-model-export", tdoaAnchorModelExportCallback);
     simpleCLI.addCommand("tdoa-estimator-stats-reset", tdoaEstimatorStatsResetCallback);
 #endif
-
-#ifdef USE_CONSOLE_UWB_CONTROL
-    Command startCmd = simpleCLI.addCommand("start", startCallback);
-    Command calibrateCmd = simpleCLI.addCommand("calibrate", calibrateCallback);
-#endif // USE_CONSOLE_UWB_CONTROL
 
 #ifdef USE_CONSOLE_CONFIG_MGMT
     // LittleFS parameter management commands
@@ -468,25 +458,6 @@ static void readAllCallback(cmd* c)
     }
 }
 #endif // USE_CONSOLE_PARAM_RW
-
-#ifdef USE_CONSOLE_UWB_CONTROL
-static void startCallback(cmd* c)
-{
-    if (Front::uwbLittleFSFront.StartTag())
-    {
-        commandResult = "UWB Tag started";
-    }
-    else
-    {
-        commandResult = "Failed to start UWB Tag";
-    }
-}
-
-static void calibrateCallback(cmd* c)
-{
-    Front::uwbLittleFSFront.PerformAnchorCalibration();
-}
-#endif // USE_CONSOLE_UWB_CONTROL
 
 #ifdef USE_UWB_MODE_TDOA_ANCHOR
 static void tdoaDistancesCallback(cmd* c)

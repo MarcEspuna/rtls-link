@@ -1,7 +1,7 @@
 # Future work
 
 1. Automatic position calculation of anchors
-    - We can suppose a rectangular shape and use TWR on anchors in order to calculate it's position.
+    - We can suppose a rectangular shape and use inter-anchor ToF on anchors in order to calculate its position.
 2. OTA
     - Special care needs to be taken regarding partitions. Keep in mind
 3. Move current board definition to json objects that will define hw pinout and a file for preprocessor definitions.

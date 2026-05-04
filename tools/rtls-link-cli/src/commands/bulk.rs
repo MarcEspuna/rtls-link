@@ -175,14 +175,6 @@ async fn get_target_ips(target: &BulkTargetArgs) -> Result<Vec<String>, CliError
 
 fn filter_devices_by_role(devices: Vec<Device>, filter: Option<RoleFilter>) -> Vec<Device> {
     match filter {
-        Some(RoleFilter::Anchor) => devices
-            .into_iter()
-            .filter(|d| d.role == DeviceRole::Anchor)
-            .collect(),
-        Some(RoleFilter::Tag) => devices
-            .into_iter()
-            .filter(|d| d.role == DeviceRole::Tag)
-            .collect(),
         Some(RoleFilter::AnchorTdoa) => devices
             .into_iter()
             .filter(|d| d.role == DeviceRole::AnchorTdoa)
@@ -190,10 +182,6 @@ fn filter_devices_by_role(devices: Vec<Device>, filter: Option<RoleFilter>) -> V
         Some(RoleFilter::TagTdoa) => devices
             .into_iter()
             .filter(|d| d.role == DeviceRole::TagTdoa)
-            .collect(),
-        Some(RoleFilter::Calibration) => devices
-            .into_iter()
-            .filter(|d| d.role == DeviceRole::Calibration)
             .collect(),
         None => devices,
     }

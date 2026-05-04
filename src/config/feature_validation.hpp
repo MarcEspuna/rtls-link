@@ -99,10 +99,6 @@
     #error "USE_CONSOLE_CONFIG_MGMT requires USE_CONSOLE to be defined"
 #endif
 
-#if defined(USE_CONSOLE_UWB_CONTROL) && !defined(USE_CONSOLE)
-    #error "USE_CONSOLE_UWB_CONTROL requires USE_CONSOLE to be defined"
-#endif
-
 #if defined(USE_CONSOLE_LED_CONTROL) && !defined(USE_CONSOLE)
     #error "USE_CONSOLE_LED_CONTROL requires USE_CONSOLE to be defined"
 #endif
@@ -111,10 +107,6 @@
 // TAG MODE OUTPUT REQUIREMENTS
 // =============================================================================
 // Tag modes need an output protocol to send position data
-
-#if defined(USE_UWB_MODE_TWR_TAG) && !defined(USE_MAVLINK) && !defined(USE_BEACON_PROTOCOL)
-    #error "USE_UWB_MODE_TWR_TAG requires either USE_MAVLINK or USE_BEACON_PROTOCOL for position output"
-#endif
 
 #if defined(USE_UWB_MODE_TDOA_TAG) && !defined(USE_MAVLINK) && !defined(USE_BEACON_PROTOCOL)
     #error "USE_UWB_MODE_TDOA_TAG requires either USE_MAVLINK or USE_BEACON_PROTOCOL for position output"
@@ -137,12 +129,9 @@
 // =============================================================================
 // At least one UWB mode must be enabled for the firmware to be useful
 
-#if !defined(USE_UWB_MODE_TWR_ANCHOR) && \
-    !defined(USE_UWB_MODE_TWR_TAG) && \
-    !defined(USE_UWB_MODE_TDOA_ANCHOR) && \
-    !defined(USE_UWB_MODE_TDOA_TAG) && \
-    !defined(USE_UWB_CALIBRATION)
-    #error "At least one UWB mode must be enabled (USE_UWB_MODE_* or USE_UWB_CALIBRATION)"
+#if !defined(USE_UWB_MODE_TDOA_ANCHOR) && \
+    !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "At least one TDoA UWB mode must be enabled (USE_UWB_MODE_TDOA_ANCHOR or USE_UWB_MODE_TDOA_TAG)"
 #endif
 
 // =============================================================================
@@ -174,7 +163,7 @@
 #endif
 
 // MAVLink position feature is highly recommended when using tag mode with MAVLink
-#if defined(USE_MAVLINK) && (defined(USE_UWB_MODE_TWR_TAG) || defined(USE_UWB_MODE_TDOA_TAG))
+#if defined(USE_MAVLINK) && defined(USE_UWB_MODE_TDOA_TAG)
     #if !defined(USE_MAVLINK_POSITION)
         // Note: Uncomment below if you want a compile warning for this case
         // #warning "Tag mode with USE_MAVLINK should typically enable USE_MAVLINK_POSITION"

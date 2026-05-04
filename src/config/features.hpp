@@ -26,11 +26,8 @@
     !defined(USE_MAVLINK) && \
     !defined(USE_BEACON_PROTOCOL) && \
     !defined(USE_CONSOLE) && \
-    !defined(USE_UWB_MODE_TWR_ANCHOR) && \
-    !defined(USE_UWB_MODE_TWR_TAG) && \
     !defined(USE_UWB_MODE_TDOA_ANCHOR) && \
     !defined(USE_UWB_MODE_TDOA_TAG) && \
-    !defined(USE_UWB_CALIBRATION) && \
     !defined(USE_OTA)
     #define RTLS_USE_DEFAULT_FEATURES
 #endif
@@ -63,15 +60,11 @@
 #define USE_CONSOLE
 #define USE_CONSOLE_PARAM_RW
 #define USE_CONSOLE_CONFIG_MGMT
-#define USE_CONSOLE_UWB_CONTROL
 #define USE_CONSOLE_LED_CONTROL
 
-// --- UWB Modes (all modes available) ---
-#define USE_UWB_MODE_TWR_ANCHOR
-#define USE_UWB_MODE_TWR_TAG
+// --- UWB Modes ---
 #define USE_UWB_MODE_TDOA_ANCHOR
 #define USE_UWB_MODE_TDOA_TAG
-#define USE_UWB_CALIBRATION
 
 // --- Dynamic anchor position calculation (TDoA tags) ---
 // Enables automatic calculation of anchor positions from inter-anchor distances
@@ -135,18 +128,13 @@
 // These are automatically set based on other flags for convenience
 
 // Any tag mode enabled?
-#if defined(USE_UWB_MODE_TWR_TAG) || defined(USE_UWB_MODE_TDOA_TAG)
+#if defined(USE_UWB_MODE_TDOA_TAG)
     #define USE_UWB_TAG_MODES 1
 #endif
 
 // Any anchor mode enabled?
-#if defined(USE_UWB_MODE_TWR_ANCHOR) || defined(USE_UWB_MODE_TDOA_ANCHOR)
+#if defined(USE_UWB_MODE_TDOA_ANCHOR)
     #define USE_UWB_ANCHOR_MODES 1
-#endif
-
-// Any TWR mode enabled?
-#if defined(USE_UWB_MODE_TWR_ANCHOR) || defined(USE_UWB_MODE_TWR_TAG)
-    #define USE_UWB_TWR_MODES 1
 #endif
 
 // Any TDoA mode enabled?
