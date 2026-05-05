@@ -194,6 +194,24 @@ uint16_t RTLSLinkBeaconBackend::MetersToU16Mm(float meters)
     return static_cast<uint16_t>(mm);
 }
 
+int32_t RTLSLinkBeaconBackend::DegToDegE7(double degrees)
+{
+    if (!std::isfinite(degrees)) {
+        return 0;
+    }
+    const double scaled = degrees * 1.0e7;
+    return static_cast<int32_t>(scaled >= 0.0 ? scaled + 0.5 : scaled - 0.5);
+}
+
+int32_t RTLSLinkBeaconBackend::MetersToCm(float meters)
+{
+    if (!std::isfinite(meters)) {
+        return 0;
+    }
+    const float scaled = meters * 100.0f;
+    return static_cast<int32_t>(scaled >= 0.0f ? scaled + 0.5f : scaled - 0.5f);
+}
+
 uint16_t RTLSLinkBeaconBackend::Crc16Update(uint16_t crc, uint8_t b)
 {
     crc ^= static_cast<uint16_t>(b) << 8;
@@ -348,6 +366,18 @@ void RTLSLinkBeaconBackend::SendConfig()
         WriteI32Le(&payload[5], anchor.y_mm);
         WriteI32Le(&payload[9], anchor.z_mm);
         SendFrame(MsgId::ANCHOR_CONFIG, payload, sizeof(payload));
+    }
+
+    const auto& params = Front::uwbLittleFSFront.GetParams();
+    const int32_t origin_lat_e7 = DegToDegE7(params.originLat);
+    const int32_t origin_lon_e7 = DegToDegE7(params.originLon);
+    const int32_t origin_alt_cm = MetersToCm(params.originAlt);
+    if (origin_lat_e7 != 0 || origin_lon_e7 != 0 || origin_alt_cm != 0) {
+        uint8_t origin_payload[12];
+        WriteI32Le(&origin_payload[0], origin_lat_e7);
+        WriteI32Le(&origin_payload[4], origin_lon_e7);
+        WriteI32Le(&origin_payload[8], origin_alt_cm);
+        SendFrame(MsgId::ORIGIN_CONFIG, origin_payload, sizeof(origin_payload));
     }
 
     uint8_t config_end[1] = {anchor_count_};

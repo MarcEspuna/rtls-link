@@ -52,6 +52,7 @@ private:
         POSITION = 3,
         TDOA = 4,
         CONFIG_END = 5,
+        ORIGIN_CONFIG = 6,
         ACK = 0x80,
     };
 
@@ -92,6 +93,8 @@ private:
     static bool ParseAnchorId(const UWBShortAddr& short_addr, uint8_t& out_anchor_id);
     static int32_t MetersToMm(float meters);
     static uint16_t MetersToU16Mm(float meters);
+    static int32_t DegToDegE7(double degrees);
+    static int32_t MetersToCm(float meters);
     static uint16_t Crc16Update(uint16_t crc, uint8_t b);
     static void WriteI32Le(uint8_t* p, int32_t v);
     static void WriteU16Le(uint8_t* p, uint16_t v);
