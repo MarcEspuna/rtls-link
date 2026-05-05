@@ -23,13 +23,10 @@ void RTLSLinkBeaconBackend::Init(uint32_t baudrate, size_t tx_buffer_size)
 
     baudrate_ = baudrate;
     tx_buffer_size_ = tx_buffer_size;
-    if (queue_mutex_ == nullptr) {
-        queue_mutex_ = xSemaphoreCreateMutex();
-    }
     if (tx_mutex_ == nullptr) {
         tx_mutex_ = xSemaphoreCreateMutex();
     }
-    if (queue_mutex_ == nullptr || tx_mutex_ == nullptr) {
+    if (tx_mutex_ == nullptr) {
         LOG_ERROR("RTLSLink beacon backend mutex allocation failed");
         return;
     }
@@ -103,8 +100,6 @@ void RTLSLinkBeaconBackend::Update()
         }
         return;
     }
-
-    DrainTdoaQueue();
 }
 
 void RTLSLinkBeaconBackend::SendPosition(float x_m, float y_m, float z_m)
@@ -133,32 +128,31 @@ bool RTLSLinkBeaconBackend::EnqueueTdoa(uint8_t anchor_a,
     if (anchor_a >= anchor_count_ || anchor_b >= anchor_count_ || anchor_a == anchor_b) {
         return false;
     }
+    if (!anchors_[anchor_a].valid || !anchors_[anchor_b].valid) {
+        return false;
+    }
     if (!std::isfinite(distance_diff_m) || !std::isfinite(sigma_m)) {
         return false;
     }
 
+    if (!TdoaPassesPhysicalGuard(anchor_a, anchor_b, distance_diff_m)) {
+        return false;
+    }
+
+    const auto& params = Front::uwbLittleFSFront.GetParams();
+    const float sigma_floor_m = std::isfinite(params.rtlsBeaconTdoaSigmaFloorM)
+        ? std::max(params.rtlsBeaconTdoaSigmaFloorM, 0.0f)
+        : 0.0f;
+
     PendingTdoa pending = {
         .solved_us = solved_timestamp_us,
         .distance_diff_mm = MetersToMm(distance_diff_m),
-        .sigma_mm = MetersToU16Mm(std::max(sigma_m, 0.001f)),
+        .sigma_mm = MetersToU16Mm(std::max(std::max(sigma_m, sigma_floor_m), 0.001f)),
         .anchor_a = anchor_a,
         .anchor_b = anchor_b,
     };
 
-    if (queue_mutex_ == nullptr || xSemaphoreTake(queue_mutex_, 0) != pdTRUE) {
-        dropped_queue_full_++;
-        return false;
-    }
-
-    const bool pushed = !tdoa_queue_.full();
-    if (pushed) {
-        tdoa_queue_.push(pending);
-    } else {
-        dropped_queue_full_++;
-    }
-
-    xSemaphoreGive(queue_mutex_);
-    return pushed;
+    return SendTdoa(pending);
 }
 
 bool RTLSLinkBeaconBackend::ParseAnchorId(const UWBShortAddr& short_addr, uint8_t& out_anchor_id)
@@ -360,31 +354,7 @@ void RTLSLinkBeaconBackend::SendConfig()
     SendFrame(MsgId::CONFIG_END, config_end, sizeof(config_end));
 }
 
-void RTLSLinkBeaconBackend::DrainTdoaQueue()
-{
-    PendingTdoa pending;
-    while (PopPendingTdoa(pending)) {
-        SendTdoa(pending);
-    }
-}
-
-bool RTLSLinkBeaconBackend::PopPendingTdoa(PendingTdoa& out)
-{
-    if (queue_mutex_ == nullptr || xSemaphoreTake(queue_mutex_, pdMS_TO_TICKS(1)) != pdTRUE) {
-        return false;
-    }
-
-    const bool has_item = !tdoa_queue_.empty();
-    if (has_item) {
-        out = tdoa_queue_.front();
-        tdoa_queue_.pop();
-    }
-
-    xSemaphoreGive(queue_mutex_);
-    return has_item;
-}
-
-void RTLSLinkBeaconBackend::SendTdoa(const PendingTdoa& tdoa)
+bool RTLSLinkBeaconBackend::SendTdoa(const PendingTdoa& tdoa)
 {
     uint8_t payload[10];
     payload[0] = tdoa.anchor_a;
@@ -392,21 +362,30 @@ void RTLSLinkBeaconBackend::SendTdoa(const PendingTdoa& tdoa)
     WriteI32Le(&payload[2], tdoa.distance_diff_mm);
     WriteU16Le(&payload[6], tdoa.sigma_mm);
 
-    if (!TakeTxMutex(pdMS_TO_TICKS(5))) {
-        return;
+    if (tx_mutex_ == nullptr || xSemaphoreTake(tx_mutex_, 0) != pdTRUE) {
+        dropped_tdoa_tx_busy_++;
+        return false;
     }
 
     constexpr size_t frame_len = 2 + 3 + sizeof(payload) + 2;
+    const int available = serial_.availableForWrite();
+    if (available >= 0 && static_cast<size_t>(available) < frame_len) {
+        dropped_tdoa_serial_full_++;
+        GiveTxMutex();
+        return false;
+    }
+
     const uint16_t age_ms = ComputeAgeMs(tdoa.solved_us, frame_len);
     if (age_ms > kMaxTdoaAgeMs) {
         dropped_stale_++;
         GiveTxMutex();
-        return;
+        return false;
     }
 
     WriteU16Le(&payload[8], age_ms);
     WriteFrameLocked(MsgId::TDOA, payload, sizeof(payload));
     GiveTxMutex();
+    return true;
 }
 
 void RTLSLinkBeaconBackend::SendFrame(MsgId msg_id, const uint8_t* payload, uint8_t payload_len)
@@ -455,6 +434,49 @@ void RTLSLinkBeaconBackend::WriteFrameLocked(MsgId msg_id, const uint8_t* payloa
     len += 2;
 
     serial_.write(frame, len);
+}
+
+bool RTLSLinkBeaconBackend::TdoaPassesPhysicalGuard(uint8_t anchor_a,
+                                                    uint8_t anchor_b,
+                                                    float distance_diff_m)
+{
+    const auto& params = Front::uwbLittleFSFront.GetParams();
+    if (params.rtlsBeaconTdoaPhysicalGuardEnable == 0) {
+        return true;
+    }
+
+    float baseline_m = 0.0f;
+    if (!AnchorBaselineM(anchor_a, anchor_b, baseline_m)) {
+        dropped_tdoa_physical_guard_++;
+        return false;
+    }
+
+    const float margin_m = std::isfinite(params.rtlsBeaconTdoaPhysicalGuardMarginM)
+        ? std::max(params.rtlsBeaconTdoaPhysicalGuardMarginM, 0.0f)
+        : 0.0f;
+    if (std::fabs(distance_diff_m) > (baseline_m + margin_m)) {
+        dropped_tdoa_physical_guard_++;
+        return false;
+    }
+    return true;
+}
+
+bool RTLSLinkBeaconBackend::AnchorBaselineM(uint8_t anchor_a, uint8_t anchor_b, float& baseline_m) const
+{
+    if (anchor_a >= anchor_count_ || anchor_b >= anchor_count_) {
+        return false;
+    }
+    const Anchor& a = anchors_[anchor_a];
+    const Anchor& b = anchors_[anchor_b];
+    if (!a.valid || !b.valid) {
+        return false;
+    }
+
+    const float dx_m = static_cast<float>(a.x_mm - b.x_mm) * 0.001f;
+    const float dy_m = static_cast<float>(a.y_mm - b.y_mm) * 0.001f;
+    const float dz_m = static_cast<float>(a.z_mm - b.z_mm) * 0.001f;
+    baseline_m = std::sqrt(dx_m * dx_m + dy_m * dy_m + dz_m * dz_m);
+    return std::isfinite(baseline_m);
 }
 
 uint16_t RTLSLinkBeaconBackend::ComputeAgeMs(uint64_t solved_us, size_t frame_len) const
