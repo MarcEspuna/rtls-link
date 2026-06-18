@@ -138,7 +138,8 @@ public:
         PARAM_DEF(UWBParams, tdoaNullspacePriorSigmaM),
         PARAM_DEF(UWBParams, tdoaHonestCovarianceEnable),
         PARAM_DEF(UWBParams, tdoaIndependentNoiseFraction),
-        PARAM_DEF(UWBParams, tdoaReportHighVariance)
+        PARAM_DEF(UWBParams, tdoaReportHighVariance),
+        PARAM_DEF(UWBParams, tdoaGeometryGateEnable)
     };
 };
 

@@ -484,14 +484,6 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         || result.unique_anchors < options.min_unique_anchors) {
         return result;
     }
-    // Geometry gate (opt-in; no-op at default 0 thresholds): reject up front when
-    // the selected rows give weak geometry.
-    if (!geometryAcceptable(
-            selectedGeometryInfo(rows, result, initial_position, result.base_weights),
-            options)) {
-        return result;
-    }
-
     PosMatrix L;
     PosMatrix R;
     DynVector doas;
@@ -526,6 +518,18 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         const uint8_t source_index = result.selected_indices[i];
         result.residuals[source_index] = solve_residuals(i);
         result.final_weights[source_index] = result.base_weights[source_index];
+    }
+
+    // Geometry gate (opt-in; no-op at default 0 thresholds), evaluated at the
+    // first-pass DATA solution with its (base) weights. Every solve this function
+    // can emit is either this first-pass result or a robust re-solve; gating here
+    // makes the first-pass gate-clean, so the robust-failure fallbacks below never
+    // emit a fix that was not accepted at its data solution.
+    if (!geometryAcceptable(
+            selectedGeometryInfo(rows, result, first.dataPosition, result.base_weights),
+            options)) {
+        result.solve.valid = false;
+        return result;
     }
 
     if (!options.enable_robust_pass || !first.converged) {
