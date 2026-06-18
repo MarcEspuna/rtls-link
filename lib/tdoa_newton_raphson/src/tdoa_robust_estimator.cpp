@@ -322,8 +322,13 @@ bool computeHonestCovariance3D(const RobustTdoaRow* rows,
         return false;
     }
 
+    // DOF is the number of INDEPENDENT TDoA observations minus the 3 position
+    // params, NOT n-3: redundant/correlated rows carry no extra information, so a
+    // spanning set has only (unique_anchors - 1) independent rows. Using n-3 here
+    // divides chi^2 by far too much and re-introduces ~unique/n optimism.
     const double chi = r.dot(Sinvr);
-    const double dof = std::max(1.0, static_cast<double>(n - 3));
+    const double dof =
+        std::max(1.0, static_cast<double>(result.unique_anchors) - 1.0 - 3.0);
     const double nu = std::max(chi / dof, kHonestMinVariance);
 
     Eigen::LDLT<CovMatrix3D> mldlt(M);
@@ -346,11 +351,20 @@ void maybeApplyHonestCovariance(RobustEstimatorResult& result,
     if (!options.honest_covariance || !result.solve.valid) {
         return;
     }
+    // Evaluate at the PRE-blend data solution so the reported covariance stays
+    // data-only even when the null-space prior moved `position` (Change 2 contract).
     CovMatrix3D cov;
-    if (computeHonestCovariance3D(rows, result, result.solve.position,
+    if (computeHonestCovariance3D(rows, result, result.solve.dataPosition,
                                   options.independent_noise_fraction, cov)) {
         result.solve.positionCovariance = cov;
         result.solve.covarianceValid = true;
+        result.honest_covariance_applied = true;
+    } else {
+        // Honest covariance was requested but could not be produced. Do NOT keep
+        // the over-optimistic legacy diagonal covariance: mark it unusable so the
+        // fix is not emitted as high-confidence (and the report-high-variance path
+        // cannot fire — it requires honest_covariance_applied).
+        result.solve.covarianceValid = false;
     }
 }
 

@@ -1947,14 +1947,19 @@ static void estimatorProcess() {
             // Use the full 3D vector as the initial guess
             tdoa_estimator::PosVector3D initial_guess_3d = current_estimate_3d;
 
-            auto accept3DResult = [&](const tdoa_estimator::SolverResult& result) {
+            // allowHighVariance must be true ONLY for a result that carries an
+            // honest covariance (robust path with honest covariance applied).
+            // Legacy / compare-fallback results pass false so a high-variance fix
+            // is never emitted with the over-optimistic legacy covariance.
+            auto accept3DResult = [&](const tdoa_estimator::SolverResult& result,
+                                      bool allowHighVariance) {
                 current_estimate_3d = result.position;
                 is_valid_estimate = true;
                 solution_rmse = static_cast<float>(result.rmse);
-                if (!is3DCovarianceUsable(result, reportHighVariance)) {
+                if (!is3DCovarianceUsable(result, allowHighVariance)) {
                     solveStats.flags |= kEstimatorDiagFlagCovarianceInvalid;
                 }
-                if (enableCovMatrix && is3DCovarianceUsable(result, reportHighVariance)) {
+                if (enableCovMatrix && is3DCovarianceUsable(result, allowHighVariance)) {
                     position_covariance = pack3DCovariance(result.positionCovariance);
                 }
             };
@@ -1989,8 +1994,10 @@ static void estimatorProcess() {
                 if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
                 if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
 #endif
-                if (is3DResultAcceptable(result, enableCovMatrix, reportHighVariance)) {
-                    accept3DResult(result);
+                // Legacy path has no honest covariance, so the report-high-variance
+                // bypass must not apply here.
+                if (is3DResultAcceptable(result, enableCovMatrix, /*allowHighVariance=*/false)) {
+                    accept3DResult(result, /*allowHighVariance=*/false);
                 }
             } else if (runtimeEstimatorMode == kEstimatorModeCompare) {
                 solveStats.flags |= kEstimatorDiagFlagCompareMode;
@@ -2017,8 +2024,11 @@ static void estimatorProcess() {
                 solveStats.robustRmseMm = metersToMillimetersUnsigned(robustResult.solve.rmse);
                 copyRobustDiagnostics(solveStats, robustResult, robust_rows);
 
-                const bool legacyOk = is3DResultAcceptable(legacyResult, enableCovMatrix, reportHighVariance);
-                const bool robustOk = is3DResultAcceptable(robustResult.solve, enableCovMatrix, reportHighVariance);
+                // Only the robust result can carry an honest covariance; the legacy
+                // fallback never gets the high-variance bypass.
+                const bool robustAllowHV = reportHighVariance && robustResult.honest_covariance_applied;
+                const bool legacyOk = is3DResultAcceptable(legacyResult, enableCovMatrix, /*allowHighVariance=*/false);
+                const bool robustOk = is3DResultAcceptable(robustResult.solve, enableCovMatrix, robustAllowHV);
                 if (!robustOk) {
                     solveStats.flags |= kEstimatorDiagFlagRobustInvalid;
                 }
@@ -2029,12 +2039,12 @@ static void estimatorProcess() {
                 if (robustOk) {
                     solveStats.iterations = clampToU8(static_cast<size_t>(robustResult.solve.iterations));
                     solveStats.rmseMm = metersToMillimetersUnsigned(robustResult.solve.rmse);
-                    accept3DResult(robustResult.solve);
+                    accept3DResult(robustResult.solve, robustAllowHV);
                 } else if (legacyOk) {
                     solveStats.flags |= kEstimatorDiagFlagFallbackLegacy;
                     solveStats.iterations = clampToU8(static_cast<size_t>(legacyResult.iterations));
                     solveStats.rmseMm = metersToMillimetersUnsigned(legacyResult.rmse);
-                    accept3DResult(legacyResult);
+                    accept3DResult(legacyResult, /*allowHighVariance=*/false);
                 } else {
                     solveStats.iterations = clampToU8(static_cast<size_t>(robustResult.solve.iterations));
                     solveStats.rmseMm = metersToMillimetersUnsigned(robustResult.solve.rmse);
@@ -2069,8 +2079,9 @@ static void estimatorProcess() {
                 if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
                 if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
 #endif
-                if (is3DResultAcceptable(result.solve, enableCovMatrix, reportHighVariance)) {
-                    accept3DResult(result.solve);
+                const bool robustAllowHV = reportHighVariance && result.honest_covariance_applied;
+                if (is3DResultAcceptable(result.solve, enableCovMatrix, robustAllowHV)) {
+                    accept3DResult(result.solve, robustAllowHV);
                 }
             }
         }

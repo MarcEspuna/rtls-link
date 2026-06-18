@@ -43,11 +43,16 @@ typedef struct {
   // last tag position are pushed from the integration layer. `info` is a
   // decaying 3x3 Fisher-information accumulator (packed [xx,xy,xz,yy,yz,zz]).
   struct {
+    // Seqlock: anchor positions/prior are written by the estimator task and read
+    // by the (timing-sensitive) UWB ranging task. `seq` is even when stable, odd
+    // mid-write; readers take a consistent snapshot with a bounded retry instead
+    // of a critical section (no interrupt-disable in the ranging hot loop).
+    volatile uint32_t seq;
     uint8_t hasPrior;                              // 1 if priorPos is valid
     float priorPos[3];
     uint8_t anchorValid[TDOA_ENGINE_MAX_ANCHORS];
     float anchorPos[TDOA_ENGINE_MAX_ANCHORS][3];
-    float info[6];
+    float info[6];                                 // ranging-task-local accumulator
   } geo;
 } tdoaEngineState_t;
 

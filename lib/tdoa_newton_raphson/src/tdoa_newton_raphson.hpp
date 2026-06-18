@@ -30,7 +30,10 @@ namespace tdoa_estimator {
     using CovMatrix2D = Eigen::Matrix<double, 2, 2>;
 
     struct SolverResult {
-        PosVector3D position;            // 3D position
+        PosVector3D position;            // 3D position (reported; may be prior-blended)
+        PosVector3D dataPosition;        // pre-prior, data-only solution (Change 1/2:
+                                         // covariance must be evaluated here, never at
+                                         // the prior-blended `position`)
         Scalar rmse;                     // Root Mean Square Error of residuals (m)
         int iterations;                  // Number of iterations performed
         bool converged;                  // True if step/residual delta met threshold

@@ -16,6 +16,10 @@ namespace tdoa_estimator {
     static constexpr double kRegularizationThreshold = 1e-8;
     static constexpr double kRegularizationFactor = 1e-6;
     static constexpr double kMinGeometryEigenRatio3D = 1e-5;
+    // Change 2: a JᵀJ eigenmode is "weak" (eligible for the null-space prior) only
+    // if its eigenvalue is below this fraction of the strongest mode. Observable
+    // axes (comparable eigenvalues) are never blended, independent of RMSE.
+    static constexpr double kNullspaceWeakModeRatio = 1e-2;
     static constexpr Scalar kResidualConvergenceThreshold = static_cast<Scalar>(1e-6);
 
     // Distance floor: prevents division-by-near-zero in Jacobian rows when the
@@ -385,10 +389,17 @@ namespace tdoa_estimator {
         // JᵀJ. Well-observed directions keep the data value; the near-null axis is
         // pulled toward the prior. Pure no-op when disabled or sigma_m <= 0.
         // Does NOT touch the covariance — see NullspacePrior docs.
+        // `weights` (optional, size n) makes the information matrix the SAME
+        // weighted JᵀWJ the solve actually used, so the weak modes are identified
+        // from the real geometry. Only modes that are genuinely weak relative to
+        // the strongest mode (ratio < kNullspaceWeakModeRatio) are blended; well-
+        // observed modes are left untouched regardless of RMSE — so the blend
+        // never adds latency to observable axes.
         PosVector3D applyNullspacePrior3D(const PosMatrix& J,
                                           PosVector3D solved,
                                           double measurementVariance,
-                                          const NullspacePrior& prior)
+                                          const NullspacePrior& prior,
+                                          const DynVector* weights = nullptr)
         {
             if (!prior.enabled || !(prior.sigma_m > Scalar(0))) {
                 return solved;
@@ -400,12 +411,13 @@ namespace tdoa_estimator {
             const int n = static_cast<int>(J.rows());
             CovMatrix3D JtJ = CovMatrix3D::Zero();
             for (int i = 0; i < n; ++i) {
+                const double w = weights ? static_cast<double>(safeWeight(*weights, i)) : 1.0;
                 double j0 = static_cast<double>(J(i, 0));
                 double j1 = static_cast<double>(J(i, 1));
                 double j2 = static_cast<double>(J(i, 2));
-                JtJ(0, 0) += j0 * j0; JtJ(0, 1) += j0 * j1; JtJ(0, 2) += j0 * j2;
-                JtJ(1, 1) += j1 * j1; JtJ(1, 2) += j1 * j2;
-                JtJ(2, 2) += j2 * j2;
+                JtJ(0, 0) += w * j0 * j0; JtJ(0, 1) += w * j0 * j1; JtJ(0, 2) += w * j0 * j2;
+                JtJ(1, 1) += w * j1 * j1; JtJ(1, 2) += w * j1 * j2;
+                JtJ(2, 2) += w * j2 * j2;
             }
             JtJ(1, 0) = JtJ(0, 1);
             JtJ(2, 0) = JtJ(0, 2);
@@ -416,6 +428,10 @@ namespace tdoa_estimator {
                 return solved;
             }
 
+            const double maxEigen = std::max(0.0, es.eigenvalues().maxCoeff());
+            if (!(maxEigen > 0.0)) {
+                return solved;
+            }
             const double rhoPrior =
                 1.0 / (static_cast<double>(prior.sigma_m) * static_cast<double>(prior.sigma_m));
             const Eigen::Matrix<double, 3, 1> disp =
@@ -423,8 +439,11 @@ namespace tdoa_estimator {
             Eigen::Matrix<double, 3, 1> corrected = solved.cast<double>();
             for (int k = 0; k < 3; ++k) {
                 const double eigen = std::max(0.0, es.eigenvalues()(k));
+                // Only act on genuinely weak modes; leave observable axes alone.
+                if (eigen >= kNullspaceWeakModeRatio * maxEigen) {
+                    continue;
+                }
                 const double rhoData = eigen / measurementVariance;
-                // Shrink toward prior along this eigendirection.
                 const double shrink = rhoPrior / (rhoData + rhoPrior);
                 const Eigen::Matrix<double, 3, 1> v = es.eigenvectors().col(k);
                 corrected -= shrink * disp.dot(v) * v;
@@ -447,6 +466,7 @@ namespace tdoa_estimator {
     {
         SolverResult result;
         result.position = initialPos;
+        result.dataPosition = initialPos;
         result.converged = false;
         result.valid = true;
         result.iterations = 0;
@@ -551,7 +571,9 @@ namespace tdoa_estimator {
                 ctx.jacobian, measurementVariance, result.positionCovariance);
 
             // Change 2: stabilize the weak axis AFTER covariance (covariance stays
-            // data-only). Uses the Jacobian at the data solution.
+            // data-only). `dataPosition` preserves the pre-blend data solution so
+            // downstream (honest) covariance is evaluated there, not at the blend.
+            result.dataPosition = result.position;
             result.position = applyNullspacePrior3D(
                 ctx.jacobian, result.position, measurementVariance, prior);
         }
@@ -571,6 +593,7 @@ namespace tdoa_estimator {
     {
         SolverResult result;
         result.position = initialPos;
+        result.dataPosition = initialPos;
         result.converged = false;
         result.valid = true;
         result.iterations = 0;
@@ -667,9 +690,12 @@ namespace tdoa_estimator {
                 ctx.jacobian, weights, measurementVariance, result.positionCovariance);
 
             // Change 2: stabilize the weak axis AFTER covariance (covariance stays
-            // data-only). Uses the Jacobian at the data solution.
+            // data-only). Weak modes are identified from the weighted information
+            // matrix (the one the solve used). `dataPosition` keeps the pre-blend
+            // data solution for downstream honest covariance.
+            result.dataPosition = result.position;
             result.position = applyNullspacePrior3D(
-                ctx.jacobian, result.position, measurementVariance, prior);
+                ctx.jacobian, result.position, measurementVariance, prior, &weights);
         }
 
         return result;

@@ -64,6 +64,10 @@ struct RobustEstimatorResult {
     Scalar residual_scale_m = 0.0f;
     bool robust_pass_used = false;
     bool pair_selection_used = false;
+    // True only when the honest covariance was successfully computed for solve.
+    // Consumers must gate the report-high-variance path on this flag so a
+    // high-variance fix is never emitted with the over-optimistic legacy cov.
+    bool honest_covariance_applied = false;
 };
 
 RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
