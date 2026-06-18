@@ -158,6 +158,7 @@ struct UWBParams {
     uint8_t tdoaHonestCovarianceEnable = 0;     // 0=legacy diagonal, 1=correlation-aware covariance (Change 1)
     float tdoaIndependentNoiseFraction = 0.1f;  // kappa: per-row independent-noise floor
     uint8_t tdoaReportHighVariance = 0;         // 0=reject >ceiling fixes, 1=send with honest covariance
+    uint8_t tdoaGeometryGateEnable = 0;         // 0=off, 1=reject weak-geometry robust solves (PR #57 gate)
 
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 8;

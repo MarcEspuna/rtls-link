@@ -55,6 +55,7 @@
 -D USE_UWB_TDOA_NULLSPACE_PRIOR   ; Change 2: null-space prior (UWB_NSP_EN)
 -D USE_UWB_TDOA_HONEST_COVARIANCE ; Change 1: honest covariance (UWB_HCOV_EN / UWB_RPT_HVAR)
 -D USE_UWB_TDOA_GEOMETRIC_MATCHER ; Change 3: E-optimal matcher (UWB_MATCH_POL=2, S3 only)
+-D USE_UWB_TDOA_GEOMETRY_GATE     ; PR #57 gate: reject weak-geometry solves (UWB_GEO_GATE)
 
 ; -----------------------------------------------------------------------------
 ; DYNAMIC ANCHOR POSITIONING (TDoA Tags)

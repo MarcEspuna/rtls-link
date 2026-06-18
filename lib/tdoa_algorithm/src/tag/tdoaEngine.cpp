@@ -64,85 +64,20 @@ static uint64_t getTdoaSolvedTimestampUs()
 #include "tdoaStats.h"
 #include "clockCorrectionEngine.h"
 #include "physicalConstants.h"
-#include "tdoa_geometric_matcher.hpp"
-
-#include <atomic>
-#include <string.h>
-
-// Decay applied to the geometric matcher's Fisher-info accumulator on each
-// formed measurement, so it reflects a recent window (~1/(1-decay) samples).
-static constexpr float kTdoaGeometricInfoDecay = 0.95f;
-
-// Seqlock for the cross-task geometric-matcher state (geo.{hasPrior,priorPos,
-// anchorValid,anchorPos}): written by the estimator task, read by the UWB
-// ranging task. Readers take a consistent snapshot with a bounded retry and
-// never block or disable interrupts (the ranging loop is timing-sensitive).
-// geo.info is NOT covered: it is owned by the ranging task (accumulate path) and
-// only read while hasPrior is true.
-struct GeoSnapshot {
-  uint8_t hasPrior;
-  float priorPos[3];
-  uint8_t anchorValid[TDOA_ENGINE_MAX_ANCHORS];
-  float anchorPos[TDOA_ENGINE_MAX_ANCHORS][3];
-};
-
-// Single writer (estimator task): bracket the field stores so a concurrent
-// reader either sees the full update or retries.
-static inline void geoWriteBegin(tdoaEngineState_t* s) {
-  const uint32_t cur = s->geo.seq.load(std::memory_order_relaxed);
-  s->geo.seq.store(cur + 1, std::memory_order_relaxed);  // -> odd: write in progress
-  std::atomic_thread_fence(std::memory_order_release);   // field stores happen-after
-}
-static inline void geoWriteEnd(tdoaEngineState_t* s) {
-  const uint32_t cur = s->geo.seq.load(std::memory_order_relaxed);
-  // release-store publishes the field stores to a reader's acquire-load below.
-  s->geo.seq.store(cur + 1, std::memory_order_release);  // -> even: stable
-}
-
-// Returns false if no stable snapshot could be taken (writer too active).
-// Payload fields are read with RELAXED atomics: the seqlock discards torn
-// snapshots, and making every shared access atomic keeps the read free of a
-// C++ data race even when the copy is rejected (no UB from racing the writer).
-static bool geoSnapshot(const tdoaEngineState_t* s, GeoSnapshot* out) {
-  for (int tries = 0; tries < 8; ++tries) {
-    const uint32_t s1 = s->geo.seq.load(std::memory_order_acquire);
-    if (s1 & 1u) {                                     // mid-write
-      continue;
-    }
-    out->hasPrior = __atomic_load_n(&s->geo.hasPrior, __ATOMIC_RELAXED);
-    for (int i = 0; i < 3; ++i) {
-      __atomic_load(&s->geo.priorPos[i], &out->priorPos[i], __ATOMIC_RELAXED);
-    }
-    for (int a = 0; a < TDOA_ENGINE_MAX_ANCHORS; ++a) {
-      out->anchorValid[a] = __atomic_load_n(&s->geo.anchorValid[a], __ATOMIC_RELAXED);
-      for (int j = 0; j < 3; ++j) {
-        __atomic_load(&s->geo.anchorPos[a][j], &out->anchorPos[a][j], __ATOMIC_RELAXED);
-      }
-    }
-    // Re-read seq with acquire: if unchanged and even, the copy was consistent.
-    if (s1 == s->geo.seq.load(std::memory_order_acquire)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 void tdoaEngineInit(tdoaEngineState_t* engineState, const uint32_t now_ms, tdoaEngineSendTdoaToEstimator sendTdoaToEstimator, const double locodeckTsFreq, const tdoaEngineMatchingAlgorithm_t matchingAlgorithm) {
   tdoaStorageInitialize(engineState->anchorInfoArray);
   // tdoaStatsInit(&engineState->stats, now_ms);
   engineState->sendTdoaToEstimator = sendTdoaToEstimator;
+  engineState->scoreAnchorPair = 0;
   engineState->locodeckTsFreq = locodeckTsFreq;
   engineState->matchingAlgorithm = matchingAlgorithm;
 
   engineState->matching.offset = 0;
+}
 
-  // Zero geo without memset-ing over the std::atomic `seq`.
-  engineState->geo.seq.store(0, std::memory_order_relaxed);
-  engineState->geo.hasPrior = 0;
-  memset(engineState->geo.priorPos, 0, sizeof(engineState->geo.priorPos));
-  memset(engineState->geo.anchorValid, 0, sizeof(engineState->geo.anchorValid));
-  memset(engineState->geo.anchorPos, 0, sizeof(engineState->geo.anchorPos));
-  memset(engineState->geo.info, 0, sizeof(engineState->geo.info));
+void tdoaEngineSetAnchorPairScoreCallback(tdoaEngineState_t* engineState, tdoaEngineAnchorPairScore scoreAnchorPair) {
+  engineState->scoreAnchorPair = scoreAnchorPair;
 }
 
 static void enqueueTDOA(const tdoaAnchorContext_t* anchorACtx, const tdoaAnchorContext_t* anchorBCtx, double distanceDiff, tdoaEngineState_t* engineState) {
@@ -301,123 +236,57 @@ static bool matchYoungestAnchor(tdoaEngineState_t* engineState, tdoaAnchorContex
     return false;
 }
 
-// Change 3: E-optimal partner selection. Among valid candidates (same validity
-// conditions as matchYoungestAnchor), pick the partner B that maximizes the
-// minimum eigenvalue of the window Fisher information after adding the row
-// gradient for pair (A,B), evaluated at the last tag position. Falls back to
-// matchYoungestAnchor on cold start (no prior) or if no candidate qualifies.
 static bool matchGeometricAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const bool doExcludeId, const uint8_t excludedId) {
-  const uint8_t aId = tdoaStorageGetId(anchorCtx);
-  GeoSnapshot geo;
-  if (!geoSnapshot(engineState, &geo)
-      || !geo.hasPrior
-      || aId >= TDOA_ENGINE_MAX_ANCHORS
-      || !geo.anchorValid[aId]) {
+    if (!engineState->scoreAnchorPair) {
+      return matchYoungestAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
+    }
+
+    int remoteCount = 0;
+    tdoaStorageGetRemoteSeqNrList(anchorCtx, &remoteCount, engineState->matching.seqNr, engineState->matching.id);
+
+    uint32_t now_ms = anchorCtx->currentTime_ms;
+    const uint8_t anchorId = tdoaStorageGetId(anchorCtx);
+    float bestScore = -1.0e30f;
+    uint32_t bestUpdateTime = 0;
+    int bestId = -1;
+
+    for (int index = 0; index < remoteCount; index++) {
+      const uint8_t candidateAnchorId = engineState->matching.id[index];
+      if (doExcludeId && excludedId == candidateAnchorId) {
+        continue;
+      }
+      if (!tdoaStorageGetRemoteTimeOfFlight(anchorCtx, candidateAnchorId)) {
+        continue;
+      }
+      if (!tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, candidateAnchorId, now_ms, otherAnchorCtx)) {
+        continue;
+      }
+      if (engineState->matching.seqNr[index] != tdoaStorageGetSeqNr(otherAnchorCtx)) {
+        continue;
+      }
+
+      float score = engineState->scoreAnchorPair(candidateAnchorId, anchorId);
+      if (!(score == score) || score < -1.0e20f) {
+        continue;
+      }
+      const uint32_t updateTime = tdoaStorageGetLastUpdateTime(otherAnchorCtx);
+      if (bestId < 0 || score > bestScore || (score == bestScore && updateTime > bestUpdateTime)) {
+        bestScore = score;
+        bestUpdateTime = updateTime;
+        bestId = candidateAnchorId;
+      }
+    }
+
+    if (bestId >= 0) {
+      tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, bestId, now_ms, otherAnchorCtx);
+      return true;
+    }
+
+    // Cold start / contention: no candidate produced a valid geometric score
+    // (the score callback returns a sentinel until a reference fix exists, or
+    // when it cannot lock the shared state). Fall back to recency selection
+    // instead of dropping the measurement.
     return matchYoungestAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
-  }
-
-  int remoteCount = 0;
-  tdoaStorageGetRemoteSeqNrList(anchorCtx, &remoteCount, engineState->matching.seqNr, engineState->matching.id);
-
-  const uint32_t now_ms = anchorCtx->currentTime_ms;
-
-  const tdoa_geometric::Vec3 p{geo.priorPos[0],
-                               geo.priorPos[1],
-                               geo.priorPos[2]};
-  const tdoa_geometric::Vec3 pa{geo.anchorPos[aId][0],
-                                geo.anchorPos[aId][1],
-                                geo.anchorPos[aId][2]};
-
-  tdoa_geometric::SymInfo3 info;
-  info.xx = engineState->geo.info[0];
-  info.xy = engineState->geo.info[1];
-  info.xz = engineState->geo.info[2];
-  info.yy = engineState->geo.info[3];
-  info.yz = engineState->geo.info[4];
-  info.zz = engineState->geo.info[5];
-
-  float bestScore = -1.0f;
-  int bestId = -1;
-  for (int index = 0; index < remoteCount; index++) {
-    const uint8_t candidateAnchorId = engineState->matching.id[index];
-    if (doExcludeId && excludedId == candidateAnchorId) {
-      continue;
-    }
-    if (candidateAnchorId >= TDOA_ENGINE_MAX_ANCHORS || !geo.anchorValid[candidateAnchorId]) {
-      continue;
-    }
-    if (!tdoaStorageGetRemoteTimeOfFlight(anchorCtx, candidateAnchorId)) {
-      continue;
-    }
-    if (!tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, candidateAnchorId, now_ms, otherAnchorCtx)) {
-      continue;
-    }
-    if (engineState->matching.seqNr[index] != tdoaStorageGetSeqNr(otherAnchorCtx)) {
-      continue;
-    }
-
-    const tdoa_geometric::Vec3 pb{geo.anchorPos[candidateAnchorId][0],
-                                  geo.anchorPos[candidateAnchorId][1],
-                                  geo.anchorPos[candidateAnchorId][2]};
-    const tdoa_geometric::Vec3 g = tdoa_geometric::rowGradient(p, pa, pb);
-    const float score = tdoa_geometric::eOptimalScore(info, g);
-    if (score > bestScore) {
-      bestScore = score;
-      bestId = candidateAnchorId;
-    }
-  }
-
-  if (bestId >= 0) {
-    tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, static_cast<uint8_t>(bestId), now_ms, otherAnchorCtx);
-    return true;
-  }
-
-  // No geometric candidate qualified — fall back to youngest.
-  return matchYoungestAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
-}
-
-// Update the decaying Fisher-info accumulator with the formed pair's gradient.
-static void geometricAccumulate(tdoaEngineState_t* engineState, const tdoaAnchorContext_t* anchorCtx, const tdoaAnchorContext_t* otherAnchorCtx) {
-  if (engineState->matchingAlgorithm != TdoaEngineMatchingAlgorithmGeometric) {
-    return;
-  }
-  const uint8_t aId = tdoaStorageGetId(anchorCtx);
-  const uint8_t bId = tdoaStorageGetId(otherAnchorCtx);
-  if (aId >= TDOA_ENGINE_MAX_ANCHORS || bId >= TDOA_ENGINE_MAX_ANCHORS) {
-    return;
-  }
-  GeoSnapshot geo;
-  if (!geoSnapshot(engineState, &geo) || !geo.hasPrior) {
-    return;
-  }
-  if (!geo.anchorValid[aId] || !geo.anchorValid[bId]) {
-    return;
-  }
-  const tdoa_geometric::Vec3 p{geo.priorPos[0],
-                               geo.priorPos[1],
-                               geo.priorPos[2]};
-  const tdoa_geometric::Vec3 pa{geo.anchorPos[aId][0],
-                                geo.anchorPos[aId][1],
-                                geo.anchorPos[aId][2]};
-  const tdoa_geometric::Vec3 pb{geo.anchorPos[bId][0],
-                                geo.anchorPos[bId][1],
-                                geo.anchorPos[bId][2]};
-  const tdoa_geometric::Vec3 g = tdoa_geometric::rowGradient(p, pa, pb);
-
-  tdoa_geometric::SymInfo3 info;
-  info.xx = engineState->geo.info[0];
-  info.xy = engineState->geo.info[1];
-  info.xz = engineState->geo.info[2];
-  info.yy = engineState->geo.info[3];
-  info.yz = engineState->geo.info[4];
-  info.zz = engineState->geo.info[5];
-  info.accumulate(g, kTdoaGeometricInfoDecay);
-  engineState->geo.info[0] = info.xx;
-  engineState->geo.info[1] = info.xy;
-  engineState->geo.info[2] = info.xz;
-  engineState->geo.info[3] = info.yy;
-  engineState->geo.info[4] = info.yz;
-  engineState->geo.info[5] = info.zz;
 }
 
 static bool findSuitableAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const bool doExcludeId, const uint8_t excludedId) {
@@ -464,39 +333,7 @@ bool tdoaEngineProcessPacketFiltered(tdoaEngineState_t* engineState, tdoaAnchorC
     if (findSuitableAnchor(engineState, &otherAnchorCtx, anchorCtx, doExcludeId, excludedId)) {
       double tdoaDistDiff = calcDistanceDiff(&otherAnchorCtx, anchorCtx, txAn_in_cl_An, rxAn_by_T_in_cl_T, engineState->locodeckTsFreq);
       enqueueTDOA(&otherAnchorCtx, anchorCtx, tdoaDistDiff, engineState);
-      geometricAccumulate(engineState, anchorCtx, &otherAnchorCtx);
     }
   }
   return timeIsGood;
-}
-
-void tdoaEngineSetAnchorPosition(tdoaEngineState_t* engineState, uint8_t anchorId, float x, float y, float z) {
-  if (anchorId >= TDOA_ENGINE_MAX_ANCHORS) {
-    return;
-  }
-  geoWriteBegin(engineState);
-  __atomic_store(&engineState->geo.anchorPos[anchorId][0], &x, __ATOMIC_RELAXED);
-  __atomic_store(&engineState->geo.anchorPos[anchorId][1], &y, __ATOMIC_RELAXED);
-  __atomic_store(&engineState->geo.anchorPos[anchorId][2], &z, __ATOMIC_RELAXED);
-  __atomic_store_n(&engineState->geo.anchorValid[anchorId], static_cast<uint8_t>(1), __ATOMIC_RELAXED);
-  geoWriteEnd(engineState);
-}
-
-void tdoaEngineSetPriorPosition(tdoaEngineState_t* engineState, float x, float y, float z) {
-  geoWriteBegin(engineState);
-  __atomic_store(&engineState->geo.priorPos[0], &x, __ATOMIC_RELAXED);
-  __atomic_store(&engineState->geo.priorPos[1], &y, __ATOMIC_RELAXED);
-  __atomic_store(&engineState->geo.priorPos[2], &z, __ATOMIC_RELAXED);
-  __atomic_store_n(&engineState->geo.hasPrior, static_cast<uint8_t>(1), __ATOMIC_RELAXED);
-  geoWriteEnd(engineState);
-}
-
-void tdoaEngineClearPrior(tdoaEngineState_t* engineState) {
-  // Only flip hasPrior (seqlock-protected). The Fisher accumulator `info` is
-  // owned by the ranging task; it is never used while hasPrior == 0 and decays
-  // (kTdoaGeometricInfoDecay) once a new prior is set, so we do not write it
-  // from this (estimator) task — that would be an unsynchronized cross-task store.
-  geoWriteBegin(engineState);
-  __atomic_store_n(&engineState->geo.hasPrior, static_cast<uint8_t>(0), __ATOMIC_RELAXED);
-  geoWriteEnd(engineState);
 }

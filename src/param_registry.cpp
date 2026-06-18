@@ -115,6 +115,7 @@ static constexpr RegistryEntry kEntries[] = {
     {"UWB_HCOV_EN", "uwb", "tdoaHonestCovarianceEnable"},
     {"UWB_HCOV_KAP", "uwb", "tdoaIndependentNoiseFraction"},
     {"UWB_RPT_HVAR", "uwb", "tdoaReportHighVariance"},
+    {"UWB_GEO_GATE", "uwb", "tdoaGeometryGateEnable"},
 };
 
 } // namespace

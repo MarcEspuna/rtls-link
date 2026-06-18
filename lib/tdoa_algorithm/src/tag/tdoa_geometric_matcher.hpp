@@ -100,4 +100,17 @@ inline float eOptimalScore(const SymInfo3& info, const Vec3& g) {
     return minEigenvalue(trial);
 }
 
+// Symmetric 2x2 accumulator (XY only) for the 2D estimator's E-optimal score.
+struct SymInfo2 {
+    float xx = 0.0f, xy = 0.0f, yy = 0.0f;
+};
+
+// Smallest eigenvalue of a symmetric 2x2 matrix (closed form).
+inline float minEigenvalue2(const SymInfo2& m) {
+    const float tr = m.xx + m.yy;
+    const float diff = m.xx - m.yy;
+    const float disc = std::sqrt(diff * diff + 4.0f * m.xy * m.xy);
+    return 0.5f * (tr - disc);
+}
+
 } // namespace tdoa_geometric

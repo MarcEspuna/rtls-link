@@ -140,6 +140,10 @@
     #error "USE_UWB_TDOA_GEOMETRIC_MATCHER requires USE_UWB_MODE_TDOA_TAG to be defined"
 #endif
 
+#if defined(USE_UWB_TDOA_GEOMETRY_GATE) && !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "USE_UWB_TDOA_GEOMETRY_GATE requires USE_UWB_MODE_TDOA_TAG to be defined"
+#endif
+
 // =============================================================================
 // MINIMUM VIABLE CONFIGURATION
 // =============================================================================

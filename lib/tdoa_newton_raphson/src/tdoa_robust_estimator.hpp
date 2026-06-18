@@ -50,6 +50,14 @@ struct RobustEstimatorOptions {
     // when rows are redundant. Disabled by default => legacy diagonal covariance.
     bool honest_covariance = false;
     Scalar independent_noise_fraction = 0.1f;
+    // Geometry gate (ported from PR #57): reject a solve whose selected rows give
+    // weak geometry — per-axis information floor + normalized determinant ratio.
+    // DEFAULT 0 => accept everything (no-op); the integration raises these only
+    // when the gate feature/param is enabled. Alternative operator choice to the
+    // report-high-variance path: gate-out weak geometry vs report it with an
+    // honest covariance.
+    Scalar min_geometry_axis_information = 0.0f;
+    Scalar min_geometry_determinant_ratio = 0.0f;
 };
 
 struct RobustEstimatorResult {

@@ -278,6 +278,38 @@ TEST(GeometricMatcher, PrefersCandidateThatLiftsWeakAxis)
     EXPECT_GT(scoreV, scoreH);
 }
 
+// 2x2 min-eigenvalue used by the 2D matcher path.
+TEST(GeometricMatcher, MinEigenvalue2x2)
+{
+    tdoa_geometric::SymInfo2 diag;  // [[2,0],[0,3]] -> min eig 2
+    diag.xx = 2.0f; diag.xy = 0.0f; diag.yy = 3.0f;
+    EXPECT_NEAR(tdoa_geometric::minEigenvalue2(diag), 2.0f, 1e-4f);
+
+    tdoa_geometric::SymInfo2 coupled;  // [[2,1],[1,2]] -> eigs {1,3}
+    coupled.xx = 2.0f; coupled.xy = 1.0f; coupled.yy = 2.0f;
+    EXPECT_NEAR(tdoa_geometric::minEigenvalue2(coupled), 1.0f, 1e-4f);
+}
+
+// ---- Geometry gate (opt-in; default no-op) ----
+
+TEST(GeometryGate, RejectsWhenThresholdUnmeetableButAcceptsAtDefault)
+{
+    const auto anchors = wellConditionedAnchors();
+    const PosVector3D tag(1.0f, 0.5f, 1.5f);
+    const auto rows = allPairs(anchors, tag);
+
+    // Default thresholds (0) are a no-op: a well-conditioned solve is accepted.
+    RobustEstimatorOptions def = baseOptions();
+    const auto accepted = estimateRobust3D(rows.data(), rows.size(), tag, def);
+    EXPECT_TRUE(accepted.solve.valid);
+
+    // An unmeetable axis-information floor rejects even good geometry.
+    RobustEstimatorOptions strict = baseOptions();
+    strict.min_geometry_axis_information = 1.0e6f;
+    const auto rejected = estimateRobust3D(rows.data(), rows.size(), tag, strict);
+    EXPECT_FALSE(rejected.solve.valid);
+}
+
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);

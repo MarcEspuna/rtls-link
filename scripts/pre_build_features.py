@@ -193,6 +193,7 @@ def validate_features(flags, board_define=None):
         'USE_UWB_TDOA_NULLSPACE_PRIOR',
         'USE_UWB_TDOA_HONEST_COVARIANCE',
         'USE_UWB_TDOA_GEOMETRIC_MATCHER',
+        'USE_UWB_TDOA_GEOMETRY_GATE',
     ]
     for feat in tdoa_robustness_features:
         if feat in flag_set and 'USE_UWB_MODE_TDOA_TAG' not in flag_set:

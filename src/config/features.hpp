@@ -71,6 +71,7 @@
 #define USE_UWB_TDOA_NULLSPACE_PRIOR   // Change 2: anisotropic null-space prior
 #define USE_UWB_TDOA_HONEST_COVARIANCE // Change 1: correlation-aware covariance + report-not-gate
 #define USE_UWB_TDOA_GEOMETRIC_MATCHER // Change 3: E-optimal matcher policy (ESP32S3 only)
+#define USE_UWB_TDOA_GEOMETRY_GATE     // PR #57 gate: reject weak-geometry robust solves (opt-in via param)
 
 // --- Dynamic anchor position calculation (TDoA tags) ---
 // Enables automatic calculation of anchor positions from inter-anchor distances

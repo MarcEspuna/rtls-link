@@ -368,6 +368,96 @@ void maybeApplyHonestCovariance(RobustEstimatorResult& result,
     }
 }
 
+// ---- Geometry gate (ported from PR #57, opt-in) -----------------------------
+// Weighted information matrix over the selected rows, evaluated at a reference
+// position; used to reject solves whose geometry is too weak. No-op when the
+// thresholds are 0 (the default) because every component is a sum of squares.
+struct RowGeometry3D {
+    PosVector3D gradient = PosVector3D::Zero();
+    Scalar weight = 0.0f;
+    bool valid = false;
+};
+
+struct GeometryInfo3D {
+    Scalar xx = 0.0f, xy = 0.0f, xz = 0.0f, yy = 0.0f, yz = 0.0f, zz = 0.0f;
+};
+
+RowGeometry3D makeRowGeometry(const RobustTdoaRow& row,
+                              const PosVector3D& reference,
+                              Scalar weight)
+{
+    RowGeometry3D geometry;
+    geometry.weight = weight;
+    PosVector3D diff_a = reference - row.anchor_a_pos;
+    PosVector3D diff_b = reference - row.anchor_b_pos;
+    Scalar da = diff_a.norm();
+    Scalar db = diff_b.norm();
+    if (da < Scalar(1e-4)) da = Scalar(1e-4);
+    if (db < Scalar(1e-4)) db = Scalar(1e-4);
+    geometry.gradient = (diff_a / da) - (diff_b / db);
+    geometry.valid = std::isfinite(static_cast<double>(geometry.gradient(0)))
+        && std::isfinite(static_cast<double>(geometry.gradient(1)))
+        && std::isfinite(static_cast<double>(geometry.gradient(2)))
+        && weight > Scalar(0);
+    return geometry;
+}
+
+void addGeometry(GeometryInfo3D& info, const RowGeometry3D& geometry)
+{
+    if (!geometry.valid) {
+        return;
+    }
+    const Scalar w = geometry.weight;
+    const Scalar gx = geometry.gradient(0);
+    const Scalar gy = geometry.gradient(1);
+    const Scalar gz = geometry.gradient(2);
+    info.xx += w * gx * gx; info.xy += w * gx * gy; info.xz += w * gx * gz;
+    info.yy += w * gy * gy; info.yz += w * gy * gz; info.zz += w * gz * gz;
+}
+
+Scalar geometryTrace(const GeometryInfo3D& info) { return info.xx + info.yy + info.zz; }
+
+Scalar geometryDeterminant(const GeometryInfo3D& info)
+{
+    return info.xx * ((info.yy * info.zz) - (info.yz * info.yz))
+        - info.xy * ((info.xy * info.zz) - (info.yz * info.xz))
+        + info.xz * ((info.xy * info.yz) - (info.yy * info.xz));
+}
+
+Scalar geometryDeterminantRatio(const GeometryInfo3D& info)
+{
+    const Scalar trace = geometryTrace(info);
+    if (trace <= Scalar(1.0e-6f) || !std::isfinite(static_cast<double>(trace))) {
+        return Scalar(0);
+    }
+    const Scalar determinant = geometryDeterminant(info);
+    if (!std::isfinite(static_cast<double>(determinant)) || determinant <= Scalar(0)) {
+        return Scalar(0);
+    }
+    return determinant / (trace * trace * trace);
+}
+
+bool geometryAcceptable(const GeometryInfo3D& info, const RobustEstimatorOptions& options)
+{
+    return info.xx >= options.min_geometry_axis_information
+        && info.yy >= options.min_geometry_axis_information
+        && info.zz >= options.min_geometry_axis_information
+        && geometryDeterminantRatio(info) >= options.min_geometry_determinant_ratio;
+}
+
+GeometryInfo3D selectedGeometryInfo(const RobustTdoaRow* rows,
+                                    const RobustEstimatorResult& result,
+                                    const PosVector3D& reference,
+                                    const Scalar* source_weights)
+{
+    GeometryInfo3D info;
+    for (uint8_t i = 0; i < result.selected_rows; i++) {
+        const uint8_t source_index = result.selected_indices[i];
+        addGeometry(info, makeRowGeometry(rows[source_index], reference, source_weights[source_index]));
+    }
+    return info;
+}
+
 } // namespace
 
 RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
@@ -392,6 +482,13 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
     selectRows(rows, row_count, initial_position, options, result);
     if (result.selected_rows < options.min_rows
         || result.unique_anchors < options.min_unique_anchors) {
+        return result;
+    }
+    // Geometry gate (opt-in; no-op at default 0 thresholds): reject up front when
+    // the selected rows give weak geometry.
+    if (!geometryAcceptable(
+            selectedGeometryInfo(rows, result, initial_position, result.base_weights),
+            options)) {
         return result;
     }
 
@@ -465,6 +562,20 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
     if (!changed) {
         applyFinalRmseThreshold(result, options.rmse_threshold);
         maybeApplyHonestCovariance(result, rows, options);
+        return result;
+    }
+
+    // Geometry gate on the robust-weighted selection (opt-in; no-op at default 0).
+    if (!geometryAcceptable(
+            selectedGeometryInfo(rows, result, first.dataPosition, result.final_weights),
+            options)) {
+        const SolverResult thresholded_first = withFinalRmseThreshold(first, options.rmse_threshold);
+        if (thresholded_first.valid) {
+            result.solve = thresholded_first;
+            maybeApplyHonestCovariance(result, rows, options);
+        } else {
+            result.solve.valid = false;
+        }
         return result;
     }
 

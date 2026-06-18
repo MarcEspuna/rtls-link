@@ -37,6 +37,7 @@
 #include "tdoa_common.hpp"
 #include "tdoa_measurement_buffer.hpp"
 #include "tdoa_pairs.hpp"
+#include "tag/tdoa_geometric_matcher.hpp"
 
 namespace {
 
@@ -91,6 +92,10 @@ static FAST_CODE void rxTimeoutCallback(dwDevice_t *dev);
 static FAST_CODE void rxFailedCallback(dwDevice_t *dev);
 
 static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa);
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+static float scoreTdoaMatcherPair(uint8_t anchorA, uint8_t anchorB);
+static void storeMatcherReferencePosition(const tdoa_estimator::PosVector3D& position);
+#endif
 static bool anchorModelTofCallback(uint8_t fromAnchor, uint8_t toAnchor, uint16_t rawDistanceTimestampUnits, uint16_t fromAntennaDelay, uint16_t toAntennaDelay, uint16_t* outDistanceTimestampUnits);
 static void estimatorProcess();
 
@@ -356,6 +361,158 @@ static void clearRtlslinkBeaconDynamicAnchors()
 
 // Stale threshold for TDoA pair measurements (350ms — one frame at min TDMA rate).
 static constexpr uint64_t kStaleThresholdUs = 350000;
+
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+// ---- Geometric (E-optimal) matcher score callback (Change 3) -----------------
+// Architecture (from PR #57): the TDoA engine stays geometry-agnostic and calls
+// this callback to score a candidate anchor pair; the engine matcher picks the
+// highest score and falls back to YOUNGEST when no valid score exists. Scoring
+// reads anchor positions + the live window in-place under the existing
+// measurements_mtx (non-blocking try-lock), and the reference (last-fix) position
+// via relaxed atomics. Objective (mine): the MINIMUM EIGENVALUE (E-optimal) of
+// the weighted window-plus-candidate Fisher information — directly targeting the
+// worst-conditioned axis. Cold start (no reference fix yet) and lock contention
+// return a sentinel so the engine falls back to YOUNGEST (never scores at origin
+// and never silently degrades to a neutral tie).
+static std::atomic<bool> s_matcherReferenceValid{false};
+static std::atomic<int32_t> s_matcherReferenceXMm{0};
+static std::atomic<int32_t> s_matcherReferenceYMm{0};
+static std::atomic<int32_t> s_matcherReferenceZMm{0};
+
+static constexpr float kMatcherScoreSentinel = -1.0e30f;
+
+static tdoa_estimator::PosVector3D loadMatcherReferencePosition()
+{
+    tdoa_estimator::PosVector3D position;
+    position << static_cast<tdoa_estimator::Scalar>(
+                    s_matcherReferenceXMm.load(std::memory_order_relaxed)) * 0.001f,
+                static_cast<tdoa_estimator::Scalar>(
+                    s_matcherReferenceYMm.load(std::memory_order_relaxed)) * 0.001f,
+                static_cast<tdoa_estimator::Scalar>(
+                    s_matcherReferenceZMm.load(std::memory_order_relaxed)) * 0.001f;
+    return position;
+}
+
+static void storeMatcherReferencePosition(const tdoa_estimator::PosVector3D& position)
+{
+    s_matcherReferenceXMm.store(metersToMillimetersSigned(static_cast<float>(position(0))),
+                                std::memory_order_relaxed);
+    s_matcherReferenceYMm.store(metersToMillimetersSigned(static_cast<float>(position(1))),
+                                std::memory_order_relaxed);
+    s_matcherReferenceZMm.store(metersToMillimetersSigned(static_cast<float>(position(2))),
+                                std::memory_order_relaxed);
+    s_matcherReferenceValid.store(true, std::memory_order_release);
+}
+
+// Row gradient unit(p-A) - unit(p-B). Reads anchor_positions/configured_anchor_ids
+// — caller MUST hold measurements_mtx.
+static bool matcherPairGradient(uint8_t anchorA,
+                                uint8_t anchorB,
+                                const tdoa_estimator::PosVector3D& reference,
+                                tdoa_geometric::Vec3& gradient)
+{
+    if (anchorA >= kNumAnchors || anchorB >= kNumAnchors
+        || !configured_anchor_ids[anchorA] || !configured_anchor_ids[anchorB]) {
+        return false;
+    }
+    const UWBAnchorParam& a = anchor_positions[anchorA];
+    const UWBAnchorParam& b = anchor_positions[anchorB];
+    const tdoa_geometric::Vec3 p{static_cast<float>(reference(0)),
+                                 static_cast<float>(reference(1)),
+                                 static_cast<float>(reference(2))};
+    const tdoa_geometric::Vec3 pa{a.x, a.y, a.z};
+    const tdoa_geometric::Vec3 pb{b.x, b.y, b.z};
+    gradient = tdoa_geometric::rowGradient(p, pa, pb);
+    return std::isfinite(gradient.x) && std::isfinite(gradient.y) && std::isfinite(gradient.z);
+}
+
+static float matcherWindowWeight(const PairSlot& slot, uint64_t nowUs)
+{
+    constexpr float kReferenceSigmaM = 0.15f;
+    constexpr float kAgeHalfLifeUs = 60000.0f;
+    constexpr float kMinWeight = 0.05f;
+
+    const uint64_t ageUs = nowUs >= slot.timestamp_us ? nowUs - slot.timestamp_us : 0;
+    float weight = 1.0f / (1.0f + (static_cast<float>(ageUs) / kAgeHalfLifeUs));
+    if (std::isfinite(slot.sigma_m) && slot.sigma_m > kReferenceSigmaM) {
+        const float ratio = kReferenceSigmaM / slot.sigma_m;
+        weight *= ratio * ratio;
+    }
+    if (weight < kMinWeight) return kMinWeight;
+    if (weight > 1.0f) return 1.0f;
+    return weight;
+}
+
+// Accumulate w * g*g^T by scaling the gradient by sqrt(w) before the rank-1 add.
+static tdoa_geometric::Vec3 scaledGradient(const tdoa_geometric::Vec3& g, float weight)
+{
+    const float s = std::sqrt(weight > 0.0f ? weight : 0.0f);
+    return tdoa_geometric::Vec3{g.x * s, g.y * s, g.z * s};
+}
+
+static float scoreTdoaMatcherPair(uint8_t anchorA, uint8_t anchorB)
+{
+    tdoa::AnchorPair candidate;
+    bool reversed = false;
+    if (!tdoa::CanonicalizePair(anchorA, anchorB, kNumAnchors, candidate, reversed)) {
+        return kMatcherScoreSentinel;
+    }
+    (void)reversed;
+
+    // Cold start: no reference fix yet -> sentinel so the engine uses YOUNGEST.
+    if (!s_matcherReferenceValid.load(std::memory_order_acquire)) {
+        return kMatcherScoreSentinel;
+    }
+
+    const bool use2D = Front::uwbLittleFSFront.GetParams().use2DEstimator != 0;
+    const tdoa_estimator::PosVector3D reference = loadMatcherReferencePosition();
+    const uint64_t nowUs = static_cast<uint64_t>(esp_timer_get_time());
+
+    // Non-blocking: on contention, sentinel -> YOUNGEST (never silently neutral).
+    if (xSemaphoreTake(measurements_mtx, 0) != pdTRUE) {
+        return kMatcherScoreSentinel;
+    }
+
+    tdoa_geometric::SymInfo3 info3;
+    tdoa_geometric::SymInfo2 info2;
+    tdoa_geometric::Vec3 gradient;
+    for (const PairSlot& slot : pair_slots) {
+        if (!slot.fresh
+            || slot.anchor_a >= kNumAnchors
+            || slot.anchor_b >= kNumAnchors
+            || (nowUs - slot.timestamp_us) > kStaleThresholdUs
+            || (slot.anchor_a == candidate.a && slot.anchor_b == candidate.b)) {
+            continue;
+        }
+        if (!matcherPairGradient(slot.anchor_a, slot.anchor_b, reference, gradient)) {
+            continue;
+        }
+        const tdoa_geometric::Vec3 g = scaledGradient(gradient, matcherWindowWeight(slot, nowUs));
+        if (use2D) {
+            info2.xx += g.x * g.x; info2.xy += g.x * g.y; info2.yy += g.y * g.y;
+        } else {
+            info3.accumulate(g, 1.0f);
+        }
+    }
+
+    if (!matcherPairGradient(candidate.a, candidate.b, reference, gradient)) {
+        xSemaphoreGive(measurements_mtx);
+        return kMatcherScoreSentinel;
+    }
+    if (use2D) {
+        info2.xx += gradient.x * gradient.x;
+        info2.xy += gradient.x * gradient.y;
+        info2.yy += gradient.y * gradient.y;
+    } else {
+        info3.accumulate(gradient, 1.0f);
+    }
+    xSemaphoreGive(measurements_mtx);
+
+    // E-optimal: maximize the minimum eigenvalue of the information matrix.
+    return use2D ? tdoa_geometric::minEigenvalue2(info2)
+                 : tdoa_geometric::minEigenvalue(info3);
+}
+#endif  // ESP32S3_UWB_BOARD && USE_UWB_TDOA_GEOMETRIC_MATCHER
 
 // Estimator task handle for direct notification from producer.
 static TaskHandle_t s_estimator_task_handle = nullptr;
@@ -978,6 +1135,9 @@ UWBTagTDoA::UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnch
     LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
 
 #ifdef ESP32S3_UWB_BOARD
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    uwbTdoa2TagSetAnchorPairScoreCallback(scoreTdoaMatcherPair);
+#endif
     ApplyMatcherPolicy(uwbParams.tdoaMatcherPolicy);
 #endif
 
@@ -1473,7 +1633,16 @@ static tdoa_estimator::RobustEstimatorOptions makeRobustOptions(
         options.independent_noise_fraction = params.tdoaIndependentNoiseFraction;
     }
 #endif
-#if !defined(USE_UWB_TDOA_NULLSPACE_PRIOR) && !defined(USE_UWB_TDOA_HONEST_COVARIANCE)
+#ifdef USE_UWB_TDOA_GEOMETRY_GATE
+    // Opt-in geometry gate (from PR #57): reject weak-geometry robust solves.
+    // Default (disabled) leaves the options' 0 thresholds, which are a no-op.
+    if (params.tdoaGeometryGateEnable != 0) {
+        options.min_geometry_axis_information = 0.25f;
+        options.min_geometry_determinant_ratio = 3.0e-4f;
+    }
+#endif
+#if !defined(USE_UWB_TDOA_NULLSPACE_PRIOR) && !defined(USE_UWB_TDOA_HONEST_COVARIANCE) \
+    && !defined(USE_UWB_TDOA_GEOMETRY_GATE)
     (void)params;
 #endif
     return options;
@@ -1741,7 +1910,6 @@ static void estimatorProcess() {
     uint64_t snapshot_now_us = 0;
     PairSlot snapshot[kNumPairs];
     etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
-    etl::array<bool, kNumAnchors> configured_anchor_ids_snapshot = {};
 
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) == pdTRUE) {
         const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
@@ -1771,9 +1939,6 @@ static void estimatorProcess() {
         }
         if (have_enough) {
             anchor_snapshot = anchor_positions;
-            // Snapshot the configured mask under the same lock so the geometric
-            // matcher publish below never reads the shared array off-mutex.
-            configured_anchor_ids_snapshot = configured_anchor_ids;
         }
 
         xSemaphoreGive(measurements_mtx);
@@ -2114,22 +2279,12 @@ static void estimatorProcess() {
             last_position = current_estimate_3d;
 
 #if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
-            // Change 3: feed the geometric matcher the current anchor positions and
-            // the latest fix (prior). Done only after a valid fix, so before the
-            // first fix the matcher has no prior and falls back to YOUNGEST.
-            if (uwbParams.tdoaMatcherPolicy == 2) {
-                for (uint8_t id = 0; id < kNumAnchors; id++) {
-                    if (configured_anchor_ids_snapshot[id]) {
-                        uwbTdoa2TagSetAnchorPosition(id,
-                                                     anchor_snapshot[id].x,
-                                                     anchor_snapshot[id].y,
-                                                     anchor_snapshot[id].z);
-                    }
-                }
-                uwbTdoa2TagSetPriorPosition(static_cast<float>(current_estimate_3d(0)),
-                                            static_cast<float>(current_estimate_3d(1)),
-                                            static_cast<float>(current_estimate_3d(2)));
-            }
+            // Change 3: publish the latest fix as the geometric matcher's
+            // reference position and mark it valid. The matcher's score callback
+            // reads anchor positions + window in-place under the existing mutex;
+            // before the first valid fix the reference is invalid and the matcher
+            // falls back to YOUNGEST.
+            storeMatcherReferencePosition(current_estimate_3d);
 #endif
 
 #if TDOA_STATS_LOGGING == ENABLE
