@@ -133,7 +133,12 @@ public:
         PARAM_DEF(UWBParams, tdoaAnchorModelDomain),
         PARAM_DEF(UWBParams, tdoaAnchorModelHealthThresholdTicks),
         PARAM_DEF(UWBParams, tdoaAnchorModelHealthWindow),
-        PARAM_DEF(UWBParams, tdoaAnchorModelHealthQuorum)
+        PARAM_DEF(UWBParams, tdoaAnchorModelHealthQuorum),
+        PARAM_DEF(UWBParams, tdoaNullspacePriorEnable),
+        PARAM_DEF(UWBParams, tdoaNullspacePriorSigmaM),
+        PARAM_DEF(UWBParams, tdoaHonestCovarianceEnable),
+        PARAM_DEF(UWBParams, tdoaIndependentNoiseFraction),
+        PARAM_DEF(UWBParams, tdoaReportHighVariance)
     };
 };
 

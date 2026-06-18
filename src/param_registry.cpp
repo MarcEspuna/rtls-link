@@ -110,6 +110,11 @@ static constexpr RegistryEntry kEntries[] = {
     {"UWB_AMOD_HTHR", "uwb", "tdoaAnchorModelHealthThresholdTicks"},
     {"UWB_AMOD_HWIN", "uwb", "tdoaAnchorModelHealthWindow"},
     {"UWB_AMOD_HQ", "uwb", "tdoaAnchorModelHealthQuorum"},
+    {"UWB_NSP_EN", "uwb", "tdoaNullspacePriorEnable"},
+    {"UWB_NSP_SIG", "uwb", "tdoaNullspacePriorSigmaM"},
+    {"UWB_HCOV_EN", "uwb", "tdoaHonestCovarianceEnable"},
+    {"UWB_HCOV_KAP", "uwb", "tdoaIndependentNoiseFraction"},
+    {"UWB_RPT_HVAR", "uwb", "tdoaReportHighVariance"},
 };
 
 } // namespace

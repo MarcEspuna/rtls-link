@@ -125,6 +125,22 @@
 #endif
 
 // =============================================================================
+// TDOA GEOMETRY ROBUSTNESS DEPENDENCIES
+// =============================================================================
+
+#if defined(USE_UWB_TDOA_NULLSPACE_PRIOR) && !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "USE_UWB_TDOA_NULLSPACE_PRIOR requires USE_UWB_MODE_TDOA_TAG to be defined"
+#endif
+
+#if defined(USE_UWB_TDOA_HONEST_COVARIANCE) && !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "USE_UWB_TDOA_HONEST_COVARIANCE requires USE_UWB_MODE_TDOA_TAG to be defined"
+#endif
+
+#if defined(USE_UWB_TDOA_GEOMETRIC_MATCHER) && !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "USE_UWB_TDOA_GEOMETRIC_MATCHER requires USE_UWB_MODE_TDOA_TAG to be defined"
+#endif
+
+// =============================================================================
 // MINIMUM VIABLE CONFIGURATION
 // =============================================================================
 // At least one UWB mode must be enabled for the firmware to be useful

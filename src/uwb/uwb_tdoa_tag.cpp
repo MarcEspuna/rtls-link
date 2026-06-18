@@ -186,13 +186,18 @@ static uint8_t weightToQ8(tdoa_estimator::Scalar weight)
     return static_cast<uint8_t>((weight * 255.0f) + 0.5f);
 }
 
-static bool is3DCovarianceAcceptable(const tdoa_estimator::CovMatrix3D& covariance)
+static bool is3DCovarianceAcceptable(const tdoa_estimator::CovMatrix3D& covariance,
+                                     bool allowHighVariance = false)
 {
     for (uint8_t axis = 0; axis < 3; axis++) {
         const tdoa_estimator::Scalar variance = covariance(axis, axis);
         if (!std::isfinite(static_cast<double>(variance))
-            || variance < 0.0f
-            || variance > kMax3DPositionVarianceM2) {
+            || variance < 0.0f) {
+            return false;
+        }
+        // Report-not-gate (Change 1): when enabled, a high-variance-but-valid fix
+        // is reported with its honest covariance instead of being rejected.
+        if (!allowHighVariance && variance > kMax3DPositionVarianceM2) {
             return false;
         }
     }
@@ -505,6 +510,11 @@ static std::atomic<uint32_t> s_estimatorProducerDroppedTotal{0};
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
 {
 #ifdef ESP32S3_UWB_BOARD
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    if (policy == 2) {
+        return TdoaEngineMatchingAlgorithmGeometric;
+    }
+#endif
     return policy == 1
         ? TdoaEngineMatchingAlgorithmRandom
         : TdoaEngineMatchingAlgorithmYoungest;
@@ -519,6 +529,8 @@ static const char* matcherPolicyName(tdoaEngineMatchingAlgorithm_t policy)
     switch (policy) {
         case TdoaEngineMatchingAlgorithmRandom:
             return "RANDOM";
+        case TdoaEngineMatchingAlgorithmGeometric:
+            return "GEOMETRIC";
         case TdoaEngineMatchingAlgorithmYoungest:
         default:
             return "YOUNGEST";
@@ -1416,21 +1428,26 @@ void ResetStats()
 
 }
 
-static bool is3DCovarianceUsable(const tdoa_estimator::SolverResult& result)
+static bool is3DCovarianceUsable(const tdoa_estimator::SolverResult& result,
+                                 bool allowHighVariance = false)
 {
-    return result.covarianceValid && is3DCovarianceAcceptable(result.positionCovariance);
+    return result.covarianceValid
+        && is3DCovarianceAcceptable(result.positionCovariance, allowHighVariance);
 }
 
-static bool is3DResultAcceptable(const tdoa_estimator::SolverResult& result, bool requireCovariance)
+static bool is3DResultAcceptable(const tdoa_estimator::SolverResult& result,
+                                 bool requireCovariance,
+                                 bool allowHighVariance = false)
 {
     return result.valid
         && result.converged
-        && (!requireCovariance || is3DCovarianceUsable(result));
+        && (!requireCovariance || is3DCovarianceUsable(result, allowHighVariance));
 }
 
 static tdoa_estimator::RobustEstimatorOptions makeRobustOptions(
     tdoa_estimator::Scalar rmseThreshold,
-    uint8_t maxIterations)
+    uint8_t maxIterations,
+    const UWBParams& params)
 {
     tdoa_estimator::RobustEstimatorOptions options;
     options.min_rows = static_cast<uint8_t>(kRobust3DMeasurementsForSolve);
@@ -1442,6 +1459,23 @@ static tdoa_estimator::RobustEstimatorOptions makeRobustOptions(
     options.enable_pair_selection = true;
     options.enable_robust_pass = true;
     options.reference_sigma_m = 0.15f;
+#ifdef USE_UWB_TDOA_NULLSPACE_PRIOR
+    // Change 2: estimateRobust3D sets prior.position = initial_position.
+    if (params.tdoaNullspacePriorEnable != 0 && params.tdoaNullspacePriorSigmaM > 0.0f) {
+        options.nullspace_prior.enabled = true;
+        options.nullspace_prior.sigma_m = params.tdoaNullspacePriorSigmaM;
+    }
+#endif
+#ifdef USE_UWB_TDOA_HONEST_COVARIANCE
+    // Change 1: correlation-aware covariance reported to ArduPilot.
+    if (params.tdoaHonestCovarianceEnable != 0) {
+        options.honest_covariance = true;
+        options.independent_noise_fraction = params.tdoaIndependentNoiseFraction;
+    }
+#endif
+#if !defined(USE_UWB_TDOA_NULLSPACE_PRIOR) && !defined(USE_UWB_TDOA_HONEST_COVARIANCE)
+    (void)params;
+#endif
     return options;
 }
 
@@ -1833,6 +1867,11 @@ static void estimatorProcess() {
         const auto& uwbParams = Front::uwbLittleFSFront.GetParams();
         const tdoa_estimator::Scalar rmseThreshold = static_cast<tdoa_estimator::Scalar>(uwbParams.rmseThreshold);
         const bool enableCovMatrix = uwbParams.enableCovMatrix != 0;
+#ifdef USE_UWB_TDOA_HONEST_COVARIANCE
+        const bool reportHighVariance = uwbParams.tdoaReportHighVariance != 0;
+#else
+        const bool reportHighVariance = false;
+#endif
         const uint8_t estimatorDiagLevel = sanitizeEstimatorDiag(uwbParams.tdoaEstimatorDiag);
         solveStats.mode = USE_2D_ESTIMATOR ? kEstimatorMode2D : runtimeEstimatorMode;
         solveStats.diagLevel = estimatorDiagLevel;
@@ -1912,10 +1951,10 @@ static void estimatorProcess() {
                 current_estimate_3d = result.position;
                 is_valid_estimate = true;
                 solution_rmse = static_cast<float>(result.rmse);
-                if (!is3DCovarianceUsable(result)) {
+                if (!is3DCovarianceUsable(result, reportHighVariance)) {
                     solveStats.flags |= kEstimatorDiagFlagCovarianceInvalid;
                 }
-                if (enableCovMatrix && is3DCovarianceUsable(result)) {
+                if (enableCovMatrix && is3DCovarianceUsable(result, reportHighVariance)) {
                     position_covariance = pack3DCovariance(result.positionCovariance);
                 }
             };
@@ -1932,7 +1971,7 @@ static void estimatorProcess() {
             };
 
             const tdoa_estimator::RobustEstimatorOptions robustOptions =
-                makeRobustOptions(rmseThreshold, NUM_ITERATIONS_3D);
+                makeRobustOptions(rmseThreshold, NUM_ITERATIONS_3D, uwbParams);
 
             if (runtimeEstimatorMode == kEstimatorModeLegacy) {
                 const uint64_t solve_start_us = static_cast<uint64_t>(esp_timer_get_time());
@@ -1950,7 +1989,7 @@ static void estimatorProcess() {
                 if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
                 if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
 #endif
-                if (is3DResultAcceptable(result, enableCovMatrix)) {
+                if (is3DResultAcceptable(result, enableCovMatrix, reportHighVariance)) {
                     accept3DResult(result);
                 }
             } else if (runtimeEstimatorMode == kEstimatorModeCompare) {
@@ -1978,8 +2017,8 @@ static void estimatorProcess() {
                 solveStats.robustRmseMm = metersToMillimetersUnsigned(robustResult.solve.rmse);
                 copyRobustDiagnostics(solveStats, robustResult, robust_rows);
 
-                const bool legacyOk = is3DResultAcceptable(legacyResult, enableCovMatrix);
-                const bool robustOk = is3DResultAcceptable(robustResult.solve, enableCovMatrix);
+                const bool legacyOk = is3DResultAcceptable(legacyResult, enableCovMatrix, reportHighVariance);
+                const bool robustOk = is3DResultAcceptable(robustResult.solve, enableCovMatrix, reportHighVariance);
                 if (!robustOk) {
                     solveStats.flags |= kEstimatorDiagFlagRobustInvalid;
                 }
@@ -2030,7 +2069,7 @@ static void estimatorProcess() {
                 if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
                 if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
 #endif
-                if (is3DResultAcceptable(result.solve, enableCovMatrix)) {
+                if (is3DResultAcceptable(result.solve, enableCovMatrix, reportHighVariance)) {
                     accept3DResult(result.solve);
                 }
             }
@@ -2058,6 +2097,25 @@ static void estimatorProcess() {
 
             // Update the persistent state for the next iteration (Warm Start)
             last_position = current_estimate_3d;
+
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+            // Change 3: feed the geometric matcher the current anchor positions and
+            // the latest fix (prior). Done only after a valid fix, so before the
+            // first fix the matcher has no prior and falls back to YOUNGEST.
+            if (uwbParams.tdoaMatcherPolicy == 2) {
+                for (uint8_t id = 0; id < kNumAnchors; id++) {
+                    if (configured_anchor_ids[id]) {
+                        uwbTdoa2TagSetAnchorPosition(id,
+                                                     anchor_snapshot[id].x,
+                                                     anchor_snapshot[id].y,
+                                                     anchor_snapshot[id].z);
+                    }
+                }
+                uwbTdoa2TagSetPriorPosition(static_cast<float>(current_estimate_3d(0)),
+                                            static_cast<float>(current_estimate_3d(1)),
+                                            static_cast<float>(current_estimate_3d(2)));
+            }
+#endif
 
 #if TDOA_STATS_LOGGING == ENABLE
             stats_samples_sent++;

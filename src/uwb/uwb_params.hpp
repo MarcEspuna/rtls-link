@@ -152,6 +152,13 @@ struct UWBParams {
     uint16_t tdoaAnchorModelHealthWindow = 50;
     uint8_t tdoaAnchorModelHealthQuorum = 5;
 
+    // TDoA geometry robustness (appended; defaults preserve legacy behaviour)
+    uint8_t tdoaNullspacePriorEnable = 0;       // 0=off, 1=pin weak axis to previous fix (Change 2)
+    float tdoaNullspacePriorSigmaM = 0.5f;      // prior std-dev (m) along weak axes
+    uint8_t tdoaHonestCovarianceEnable = 0;     // 0=legacy diagonal, 1=correlation-aware covariance (Change 1)
+    float tdoaIndependentNoiseFraction = 0.1f;  // kappa: per-row independent-noise floor
+    uint8_t tdoaReportHighVariance = 0;         // 0=reject >ceiling fixes, 1=send with honest covariance
+
     // static constant values that will be useful for parameter reading & writing
     static constexpr uint8_t maxAnchorCount = 8;
 }ULS_PACKED;

@@ -188,6 +188,16 @@ def validate_features(flags, board_define=None):
     if has_tag_mode and not has_output:
         errors.append("Tag modes require USE_MAVLINK or USE_RTLSLINK_BEACON_BACKEND for position output")
 
+    # === TDOA GEOMETRY ROBUSTNESS DEPENDENCIES ===
+    tdoa_robustness_features = [
+        'USE_UWB_TDOA_NULLSPACE_PRIOR',
+        'USE_UWB_TDOA_HONEST_COVARIANCE',
+        'USE_UWB_TDOA_GEOMETRIC_MATCHER',
+    ]
+    for feat in tdoa_robustness_features:
+        if feat in flag_set and 'USE_UWB_MODE_TDOA_TAG' not in flag_set:
+            errors.append(f"{feat} requires USE_UWB_MODE_TDOA_TAG")
+
     # === AT LEAST ONE UWB MODE ===
     uwb_modes = [
         'USE_UWB_MODE_TDOA_ANCHOR',

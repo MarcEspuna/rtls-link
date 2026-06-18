@@ -7,6 +7,9 @@
 
 #include "tdoa_newton_raphson.hpp"
 #include "tdoa_robust_estimator.hpp"
+// Header-only, dependency-free E-optimal helper (tdoa_algorithm is lib_ignored
+// in the native env, so include it directly by path).
+#include "../../lib/tdoa_algorithm/src/tag/tdoa_geometric_matcher.hpp"
 
 namespace {
 
@@ -234,6 +237,45 @@ TEST(HonestCovariance, RedundantRowsDoNotShrinkIt)
     EXPECT_LT(legacyDup, 0.85 * legacyBase);
     // Honest covariance is stable under redundancy (within 10%).
     EXPECT_NEAR(honestDup, honestBase, 0.10 * honestBase);
+}
+
+// ---- Change 3: geometric (E-optimal) matcher helper ----
+
+TEST(GeometricMatcher, MinEigenvalueOfDiagonal)
+{
+    tdoa_geometric::SymInfo3 m;
+    m.xx = 3.0f;
+    m.yy = 1.0f;
+    m.zz = 2.0f;
+    EXPECT_NEAR(tdoa_geometric::minEigenvalue(m), 1.0f, 1e-4f);
+}
+
+TEST(GeometricMatcher, RowGradientIsUnitDifference)
+{
+    const tdoa_geometric::Vec3 p{0.0f, 0.0f, 0.0f};
+    const tdoa_geometric::Vec3 A{1.0f, 0.0f, 0.0f};
+    const tdoa_geometric::Vec3 B{0.0f, 1.0f, 0.0f};
+    // unit(p-A) = (-1,0,0), unit(p-B) = (0,-1,0), gradient = (-1, 1, 0)
+    const tdoa_geometric::Vec3 g = tdoa_geometric::rowGradient(p, A, B);
+    EXPECT_NEAR(g.x, -1.0f, 1e-4f);
+    EXPECT_NEAR(g.y, 1.0f, 1e-4f);
+    EXPECT_NEAR(g.z, 0.0f, 1e-4f);
+}
+
+// E-optimal: the candidate that informs the weak (min-eigenvalue) axis wins.
+TEST(GeometricMatcher, PrefersCandidateThatLiftsWeakAxis)
+{
+    tdoa_geometric::SymInfo3 info;        // strong in X,Y; weak in Z
+    info.xx = 5.0f;
+    info.yy = 5.0f;
+    info.zz = 0.01f;
+
+    const tdoa_geometric::Vec3 horizontal{1.0f, 0.0f, 0.0f}; // adds no Z info
+    const tdoa_geometric::Vec3 vertical{0.0f, 0.0f, 1.0f};   // lifts the weak axis
+
+    const float scoreH = tdoa_geometric::eOptimalScore(info, horizontal);
+    const float scoreV = tdoa_geometric::eOptimalScore(info, vertical);
+    EXPECT_GT(scoreV, scoreH);
 }
 
 int main(int argc, char** argv)
