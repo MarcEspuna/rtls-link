@@ -1,11 +1,20 @@
 #include "tdoa_robust_estimator.hpp"
 
+#include <Eigen/Cholesky>
+#include <Eigen/Eigenvalues>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace tdoa_estimator {
 namespace {
+
+// Floor on the estimated per-anchor ToA variance (1 cm^2), matching the solver.
+constexpr double kHonestMinVariance = 1e-4;
+// Min-eigenvalue ratio for the honest information matrix to be considered
+// observable (matches kMinGeometryEigenRatio3D in the solver).
+constexpr double kHonestMinEigenRatio = 1e-5;
 
 struct RowScore {
     uint8_t index = 0;
@@ -227,6 +236,124 @@ SolverResult withFinalRmseThreshold(SolverResult solve, Scalar rmse_threshold)
     return solve;
 }
 
+// Change 1: honest covariance over the selected rows. Each TDoA(a,b) = ToA(a) -
+// ToA(b) with per-anchor ToA distance variance ~sigma^2, so the measurement
+// covariance is Sigma = A*A^T (A = incidence matrix, +1 at anchor_a, -1 at
+// anchor_b) which is PSD; rows sharing an anchor are correlated and fully
+// redundant rows are exactly dependent. We add a per-row independent-noise floor
+// kappa/w_i on the diagonal (w_i = robust weight): this keeps Sigma positive
+// definite under redundancy and lets down-weighted outliers inflate their own
+// variance. The position covariance is the correlation-aware GLS result with a
+// data-driven scale:
+//   nu = (r^T Sigma^-1 r) / (n - 3),  Cov = nu * (J^T Sigma^-1 J)^-1.
+// Returns false (leaving the caller's covariance untouched) if the geometry is
+// unobservable or the numerics fail. Contrast with the legacy diagonal
+// covariance which assumes independent rows and is therefore over-optimistic.
+bool computeHonestCovariance3D(const RobustTdoaRow* rows,
+                               const RobustEstimatorResult& result,
+                               const PosVector3D& position,
+                               Scalar independent_noise_fraction,
+                               CovMatrix3D& outCovariance)
+{
+    const int n = static_cast<int>(result.selected_rows);
+    if (n <= 3) {
+        return false;
+    }
+    const double kappa = std::max(1e-3, static_cast<double>(independent_noise_fraction));
+    const Eigen::Vector3d p = position.cast<double>();
+
+    Eigen::MatrixXd J(n, 3);
+    Eigen::VectorXd r(n);
+    Eigen::VectorXd diag_floor(n);
+    uint8_t a_id[kMaxCapacity] = {};
+    uint8_t b_id[kMaxCapacity] = {};
+
+    for (int i = 0; i < n; ++i) {
+        const uint8_t source_index = result.selected_indices[i];
+        const RobustTdoaRow& row = rows[source_index];
+        const Eigen::Vector3d pa = row.anchor_a_pos.cast<double>();
+        const Eigen::Vector3d pb = row.anchor_b_pos.cast<double>();
+        double da = (p - pa).norm();
+        double db = (p - pb).norm();
+        if (da < 1e-4) da = 1e-4;
+        if (db < 1e-4) db = 1e-4;
+        J.row(i) = ((p - pa) / da - (p - pb) / db).transpose();
+        r(i) = (da - db) - static_cast<double>(row.tdoa);
+        a_id[i] = row.anchor_a;
+        b_id[i] = row.anchor_b;
+
+        double w = static_cast<double>(result.final_weights[source_index]);
+        if (!(w > 1e-3) || !std::isfinite(w)) {
+            w = 1e-3;
+        }
+        diag_floor(i) = kappa / w;
+    }
+
+    Eigen::MatrixXd Sigma(n, n);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            const double s = (a_id[i] == a_id[j] ? 1.0 : 0.0)
+                           - (a_id[i] == b_id[j] ? 1.0 : 0.0)
+                           - (b_id[i] == a_id[j] ? 1.0 : 0.0)
+                           + (b_id[i] == b_id[j] ? 1.0 : 0.0);
+            Sigma(i, j) = s;
+        }
+        Sigma(i, i) += diag_floor(i);
+    }
+
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(Sigma);
+    if (ldlt.info() != Eigen::Success) {
+        return false;
+    }
+    const Eigen::MatrixXd SinvJ = ldlt.solve(J);   // n x 3
+    const Eigen::VectorXd Sinvr = ldlt.solve(r);   // n
+    if (!SinvJ.allFinite() || !Sinvr.allFinite()) {
+        return false;
+    }
+
+    const CovMatrix3D M = J.transpose() * SinvJ;   // 3 x 3 information (unit sigma^2)
+    const double trace = M.trace();
+    if (!(trace > 1e-12)) {
+        return false;
+    }
+    Eigen::SelfAdjointEigenSolver<CovMatrix3D> es(M, Eigen::EigenvaluesOnly);
+    if (es.info() != Eigen::Success
+        || es.eigenvalues().minCoeff() <= kHonestMinEigenRatio * trace) {
+        return false;
+    }
+
+    const double chi = r.dot(Sinvr);
+    const double dof = std::max(1.0, static_cast<double>(n - 3));
+    const double nu = std::max(chi / dof, kHonestMinVariance);
+
+    Eigen::LDLT<CovMatrix3D> mldlt(M);
+    if (mldlt.info() != Eigen::Success) {
+        return false;
+    }
+    CovMatrix3D cov = mldlt.solve(CovMatrix3D::Identity()) * nu;
+    cov = (cov + cov.transpose()) / 2.0;
+    if (!cov.allFinite()) {
+        return false;
+    }
+    outCovariance = cov;
+    return true;
+}
+
+void maybeApplyHonestCovariance(RobustEstimatorResult& result,
+                                const RobustTdoaRow* rows,
+                                const RobustEstimatorOptions& options)
+{
+    if (!options.honest_covariance || !result.solve.valid) {
+        return;
+    }
+    CovMatrix3D cov;
+    if (computeHonestCovariance3D(rows, result, result.solve.position,
+                                  options.independent_noise_fraction, cov)) {
+        result.solve.positionCovariance = cov;
+        result.solve.covarianceValid = true;
+    }
+}
+
 } // namespace
 
 RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
@@ -259,6 +386,13 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
     DynVector weights;
     buildSolveMatrices(rows, result, L, R, doas, weights, result.base_weights);
 
+    // Change 2: the null-space prior pins the weak axis toward the previous fix,
+    // which in this codebase is `initial_position` (the warm start).
+    NullspacePrior prior = options.nullspace_prior;
+    if (prior.enabled) {
+        prior.position = initial_position;
+    }
+
     const Scalar first_pass_rmse_threshold = options.enable_robust_pass
         ? std::numeric_limits<Scalar>::max()
         : options.rmse_threshold;
@@ -266,7 +400,8 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         L, R, doas, weights, initial_position,
         options.max_iterations,
         options.convergence_threshold,
-        first_pass_rmse_threshold);
+        first_pass_rmse_threshold,
+        prior);
     result.solve = first;
 
     DynVector solve_residuals;
@@ -279,6 +414,7 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
 
     if (!options.enable_robust_pass || !first.converged) {
         applyFinalRmseThreshold(result, options.rmse_threshold);
+        maybeApplyHonestCovariance(result, rows, options);
         return result;
     }
 
@@ -309,6 +445,7 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
 
     if (!changed) {
         applyFinalRmseThreshold(result, options.rmse_threshold);
+        maybeApplyHonestCovariance(result, rows, options);
         return result;
     }
 
@@ -318,7 +455,8 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         L, R, doas, weights, first.position,
         options.max_iterations,
         options.convergence_threshold,
-        options.rmse_threshold);
+        options.rmse_threshold,
+        prior);
     if (!result.solve.valid) {
         const SolverResult thresholded_first = withFinalRmseThreshold(first, options.rmse_threshold);
         if (thresholded_first.valid) {
@@ -332,6 +470,7 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         result.residuals[source_index] = solve_residuals(i);
     }
 
+    maybeApplyHonestCovariance(result, rows, options);
     return result;
 }
 

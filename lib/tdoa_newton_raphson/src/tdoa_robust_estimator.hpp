@@ -39,6 +39,17 @@ struct RobustEstimatorOptions {
     Scalar min_weight = 0.05f;
     Scalar huber_k = 1.5f;
     Scalar min_residual_scale_m = 0.05f;
+    // Change 2: anisotropic null-space prior. When enabled the solver pins the
+    // weak axis toward the previous fix (initial_position). Disabled by default.
+    NullspacePrior nullspace_prior = {};
+    // Change 1: honest covariance. When enabled, the reported covariance models
+    // the shared-anchor correlation among TDoA rows (Sigma = C_struct + kappa*I)
+    // instead of treating rows as independent, so it is not over-optimistic.
+    // `independent_noise_fraction` (kappa) is the per-row independent-noise floor
+    // relative to the per-anchor ToA variance; it also keeps Sigma invertible
+    // when rows are redundant. Disabled by default => legacy diagonal covariance.
+    bool honest_covariance = false;
+    Scalar independent_noise_fraction = 0.1f;
 };
 
 struct RobustEstimatorResult {

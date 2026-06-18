@@ -56,6 +56,25 @@ namespace tdoa_estimator {
         uint64_t timestamp;
     };
 
+    // Anisotropic null-space prior (Change 2). After convergence the solver blends
+    // the data solution toward `position` along the *weak* eigendirections of JᵀJ
+    // via a per-axis Gaussian MAP combine. Well-observed axes are left untouched
+    // (the data precision dominates), so no latency is added to observable axes;
+    // only the near-null axis (typically Z under near-coplanar anchors) is pinned
+    // to the previous estimate instead of being driven by amplified noise.
+    //
+    // The shrink toward the prior along eigendirection v_i with eigenvalue d_i is
+    //   s_i = rho_prior / (rho_data_i + rho_prior),
+    //   rho_data_i = d_i / measurementVariance,  rho_prior = 1 / sigma_m^2.
+    // Disabled by default => exact legacy behaviour. The reported covariance is
+    // deliberately NOT updated by this blend (it stays data-only) so a downstream
+    // filter does not double-count the prior across time.
+    struct NullspacePrior {
+        bool enabled = false;
+        PosVector3D position = PosVector3D::Zero(); // previous estimate (x_prior)
+        Scalar sigma_m = Scalar(0);                 // prior std-dev (m); <=0 disables
+    };
+
     // Main Newton-Raphson function (3D). Levenberg-Marquardt damped Gauss-Newton
     // with QR-based step solve and warm-start. Defaults tuned for UWB noise (~5-10cm).
     SolverResult newtonRaphson(const PosMatrix& anchorPositionsLeft,
@@ -64,7 +83,8 @@ namespace tdoa_estimator {
                                PosVector3D initialPos,
                                int maxIterations = 5,
                                Scalar convergenceThreshold = 1e-3f,
-                               Scalar rmseThreshold = 0.8f);
+                               Scalar rmseThreshold = 0.8f,
+                               const NullspacePrior& prior = {});
 
     SolverResult newtonRaphsonWeighted(const PosMatrix& anchorPositionsLeft,
                                        const PosMatrix& anchorPositionsRight,
@@ -73,7 +93,8 @@ namespace tdoa_estimator {
                                        PosVector3D initialPos,
                                        int maxIterations = 5,
                                        Scalar convergenceThreshold = 1e-3f,
-                                       Scalar rmseThreshold = 0.8f);
+                                       Scalar rmseThreshold = 0.8f,
+                                       const NullspacePrior& prior = {});
 
     void computeResiduals3D(const PosMatrix& anchorPositionsLeft,
                             const PosMatrix& anchorPositionsRight,

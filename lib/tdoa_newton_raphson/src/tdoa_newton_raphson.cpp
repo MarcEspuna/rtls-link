@@ -380,6 +380,58 @@ namespace tdoa_estimator {
             return true;
         }
 
+        // Change 2: post-convergence anisotropic MAP blend toward a prior.
+        // Combines the data solution with `prior.position` per eigendirection of
+        // JᵀJ. Well-observed directions keep the data value; the near-null axis is
+        // pulled toward the prior. Pure no-op when disabled or sigma_m <= 0.
+        // Does NOT touch the covariance — see NullspacePrior docs.
+        PosVector3D applyNullspacePrior3D(const PosMatrix& J,
+                                          PosVector3D solved,
+                                          double measurementVariance,
+                                          const NullspacePrior& prior)
+        {
+            if (!prior.enabled || !(prior.sigma_m > Scalar(0))) {
+                return solved;
+            }
+            if (!std::isfinite(measurementVariance) || measurementVariance <= 0.0) {
+                return solved;
+            }
+
+            const int n = static_cast<int>(J.rows());
+            CovMatrix3D JtJ = CovMatrix3D::Zero();
+            for (int i = 0; i < n; ++i) {
+                double j0 = static_cast<double>(J(i, 0));
+                double j1 = static_cast<double>(J(i, 1));
+                double j2 = static_cast<double>(J(i, 2));
+                JtJ(0, 0) += j0 * j0; JtJ(0, 1) += j0 * j1; JtJ(0, 2) += j0 * j2;
+                JtJ(1, 1) += j1 * j1; JtJ(1, 2) += j1 * j2;
+                JtJ(2, 2) += j2 * j2;
+            }
+            JtJ(1, 0) = JtJ(0, 1);
+            JtJ(2, 0) = JtJ(0, 2);
+            JtJ(2, 1) = JtJ(1, 2);
+
+            Eigen::SelfAdjointEigenSolver<CovMatrix3D> es(JtJ);
+            if (es.info() != Eigen::Success) {
+                return solved;
+            }
+
+            const double rhoPrior =
+                1.0 / (static_cast<double>(prior.sigma_m) * static_cast<double>(prior.sigma_m));
+            const Eigen::Matrix<double, 3, 1> disp =
+                (solved - prior.position).cast<double>();
+            Eigen::Matrix<double, 3, 1> corrected = solved.cast<double>();
+            for (int k = 0; k < 3; ++k) {
+                const double eigen = std::max(0.0, es.eigenvalues()(k));
+                const double rhoData = eigen / measurementVariance;
+                // Shrink toward prior along this eigendirection.
+                const double shrink = rhoPrior / (rhoData + rhoPrior);
+                const Eigen::Matrix<double, 3, 1> v = es.eigenvectors().col(k);
+                corrected -= shrink * disp.dot(v) * v;
+            }
+            return corrected.cast<Scalar>();
+        }
+
     } // namespace
 
     // ----- 3D solver -----
@@ -390,7 +442,8 @@ namespace tdoa_estimator {
                                PosVector3D initialPos,
                                int maxIterations,
                                Scalar convergenceThreshold,
-                               Scalar rmseThreshold)
+                               Scalar rmseThreshold,
+                               const NullspacePrior& prior)
     {
         SolverResult result;
         result.position = initialPos;
@@ -496,6 +549,11 @@ namespace tdoa_estimator {
 
             result.covarianceValid = computePositionCovariance3D(
                 ctx.jacobian, measurementVariance, result.positionCovariance);
+
+            // Change 2: stabilize the weak axis AFTER covariance (covariance stays
+            // data-only). Uses the Jacobian at the data solution.
+            result.position = applyNullspacePrior3D(
+                ctx.jacobian, result.position, measurementVariance, prior);
         }
 
         return result;
@@ -508,7 +566,8 @@ namespace tdoa_estimator {
                                        PosVector3D initialPos,
                                        int maxIterations,
                                        Scalar convergenceThreshold,
-                                       Scalar rmseThreshold)
+                                       Scalar rmseThreshold,
+                                       const NullspacePrior& prior)
     {
         SolverResult result;
         result.position = initialPos;
@@ -606,6 +665,11 @@ namespace tdoa_estimator {
 
             result.covarianceValid = computePositionCovariance3DWeighted(
                 ctx.jacobian, weights, measurementVariance, result.positionCovariance);
+
+            // Change 2: stabilize the weak axis AFTER covariance (covariance stays
+            // data-only). Uses the Jacobian at the data solution.
+            result.position = applyNullspacePrior3D(
+                ctx.jacobian, result.position, measurementVariance, prior);
         }
 
         return result;
