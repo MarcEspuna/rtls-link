@@ -96,6 +96,7 @@ static InterAnchorDistanceCallback distance_callback = nullptr;
 static InterAnchorTofCallback tof_callback = nullptr;
 #ifdef ESP32S3_UWB_BOARD
 static tdoaEngineMatchingAlgorithm_t s_matchingAlgorithm = TdoaEngineMatchingAlgorithmYoungest;
+static tdoaEngineAnchorPairScore s_anchorPairScoreCallback = nullptr;
 #endif
 
 // Per-anchor antenna delays received from anchor packets
@@ -111,11 +112,18 @@ void uwbTdoa2TagSetTofCallback(InterAnchorTofCallback callback) {
 
 #ifdef ESP32S3_UWB_BOARD
 void uwbTdoa2TagSetMatchingAlgorithm(tdoaEngineMatchingAlgorithm_t algorithm) {
-  if (algorithm != TdoaEngineMatchingAlgorithmRandom && algorithm != TdoaEngineMatchingAlgorithmYoungest) {
+  if (algorithm != TdoaEngineMatchingAlgorithmRandom
+      && algorithm != TdoaEngineMatchingAlgorithmYoungest
+      && algorithm != TdoaEngineMatchingAlgorithmGeometric) {
     algorithm = TdoaEngineMatchingAlgorithmYoungest;
   }
   s_matchingAlgorithm = algorithm;
   tdoaEngineState.matchingAlgorithm = algorithm;
+}
+
+void uwbTdoa2TagSetAnchorPairScoreCallback(tdoaEngineAnchorPairScore callback) {
+  s_anchorPairScoreCallback = callback;
+  tdoaEngineSetAnchorPairScoreCallback(&tdoaEngineState, callback);
 }
 #endif
 
@@ -383,6 +391,9 @@ static void Initialize(dwDevice_t *dev, EstimatorCallback callback) {
                  TdoaEngineMatchingAlgorithmYoungest
 #endif
   );
+#ifdef ESP32S3_UWB_BOARD
+  tdoaEngineSetAnchorPairScoreCallback(&tdoaEngineState, s_anchorPairScoreCallback);
+#endif
 
   previousAnchor = 0;
 

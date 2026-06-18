@@ -46,6 +46,7 @@
 -D USE_UWB_MODE_TDOA_ANCHOR     ; Time Difference of Arrival anchor mode
 -D USE_UWB_MODE_TDOA_TAG        ; Time Difference of Arrival tag mode
 -D USE_UWB_ANCHOR_TELEMETRY     ; Periodic TDoA anchor stats UDP telemetry
+-D USE_UWB_TDOA_GEOMETRIC_MATCHER ; Geometry-aware TDoA tag matcher policy
 
 ; -----------------------------------------------------------------------------
 ; DYNAMIC ANCHOR POSITIONING (TDoA Tags)

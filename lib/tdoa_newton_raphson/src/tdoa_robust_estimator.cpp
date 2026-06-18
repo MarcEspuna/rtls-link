@@ -12,6 +12,22 @@ struct RowScore {
     Scalar score = 0.0f;
 };
 
+struct RowGeometry3D {
+    PosVector3D gradient = PosVector3D::Zero();
+    Scalar weight = 0.0f;
+    uint8_t anchor_mask = 0;
+    bool valid = false;
+};
+
+struct GeometryInfo3D {
+    Scalar xx = 0.0f;
+    Scalar xy = 0.0f;
+    Scalar xz = 0.0f;
+    Scalar yy = 0.0f;
+    Scalar yz = 0.0f;
+    Scalar zz = 0.0f;
+};
+
 Scalar clampScalar(Scalar value, Scalar lo, Scalar hi)
 {
     if (!std::isfinite(static_cast<double>(value))) {
@@ -47,8 +63,22 @@ Scalar sigmaWeight(Scalar sigma_m, const RobustEstimatorOptions& options)
     return ratio * ratio;
 }
 
-Scalar rowGeometryScore(const RobustTdoaRow& row, const PosVector3D& initial_position)
+uint8_t rowAnchorMask(const RobustTdoaRow& row)
 {
+    uint8_t mask = 0;
+    if (row.anchor_a < 8) mask |= static_cast<uint8_t>(1u << row.anchor_a);
+    if (row.anchor_b < 8) mask |= static_cast<uint8_t>(1u << row.anchor_b);
+    return mask;
+}
+
+RowGeometry3D makeRowGeometry(const RobustTdoaRow& row,
+                              const PosVector3D& initial_position,
+                              Scalar weight)
+{
+    RowGeometry3D geometry;
+    geometry.weight = weight;
+    geometry.anchor_mask = rowAnchorMask(row);
+
     PosVector3D diff_a = initial_position - row.anchor_a_pos;
     PosVector3D diff_b = initial_position - row.anchor_b_pos;
     Scalar da = diff_a.norm();
@@ -56,9 +86,21 @@ Scalar rowGeometryScore(const RobustTdoaRow& row, const PosVector3D& initial_pos
     if (da < Scalar(1e-4)) da = Scalar(1e-4);
     if (db < Scalar(1e-4)) db = Scalar(1e-4);
 
-    PosVector3D gradient = (diff_a / da) - (diff_b / db);
-    const Scalar information = gradient.squaredNorm();
-    const Scalar vertical = std::fabs(gradient(2));
+    geometry.gradient = (diff_a / da) - (diff_b / db);
+    geometry.valid = std::isfinite(static_cast<double>(geometry.gradient(0)))
+        && std::isfinite(static_cast<double>(geometry.gradient(1)))
+        && std::isfinite(static_cast<double>(geometry.gradient(2)))
+        && weight > Scalar(0);
+    return geometry;
+}
+
+Scalar rowGeometryScore(const RowGeometry3D& geometry)
+{
+    if (!geometry.valid) {
+        return Scalar(0);
+    }
+    const Scalar information = geometry.gradient.squaredNorm();
+    const Scalar vertical = std::fabs(geometry.gradient(2));
     return information * (Scalar(1) + Scalar(0.5) * vertical);
 }
 
@@ -69,6 +111,85 @@ Scalar baseWeightForRow(const RobustTdoaRow& row, const RobustEstimatorOptions& 
         * sigmaWeight(row.nominal_sigma_m, options)
         * health;
     return clampScalar(weight, options.min_weight, Scalar(1));
+}
+
+void addGeometry(GeometryInfo3D& info, const RowGeometry3D& geometry)
+{
+    if (!geometry.valid) {
+        return;
+    }
+    const Scalar w = geometry.weight;
+    const Scalar gx = geometry.gradient(0);
+    const Scalar gy = geometry.gradient(1);
+    const Scalar gz = geometry.gradient(2);
+    info.xx += w * gx * gx;
+    info.xy += w * gx * gy;
+    info.xz += w * gx * gz;
+    info.yy += w * gy * gy;
+    info.yz += w * gy * gz;
+    info.zz += w * gz * gz;
+}
+
+Scalar geometryTrace(const GeometryInfo3D& info)
+{
+    return info.xx + info.yy + info.zz;
+}
+
+Scalar geometryDeterminant(const GeometryInfo3D& info)
+{
+    return info.xx * ((info.yy * info.zz) - (info.yz * info.yz))
+        - info.xy * ((info.xy * info.zz) - (info.yz * info.xz))
+        + info.xz * ((info.xy * info.yz) - (info.yy * info.xz));
+}
+
+Scalar geometryDeterminantRatio(const GeometryInfo3D& info)
+{
+    const Scalar trace = geometryTrace(info);
+    if (trace <= Scalar(1.0e-6f) || !std::isfinite(static_cast<double>(trace))) {
+        return Scalar(0);
+    }
+    const Scalar determinant = geometryDeterminant(info);
+    if (!std::isfinite(static_cast<double>(determinant)) || determinant <= Scalar(0)) {
+        return Scalar(0);
+    }
+    return determinant / (trace * trace * trace);
+}
+
+Scalar geometryQualityScore(const GeometryInfo3D& info)
+{
+    const Scalar trace = geometryTrace(info);
+    if (trace <= Scalar(1.0e-6f) || !std::isfinite(static_cast<double>(trace))) {
+        return Scalar(0);
+    }
+    const Scalar axis_balance = std::min(info.xx, std::min(info.yy, info.zz)) / trace;
+    const Scalar z_share = info.zz / trace;
+    return (Scalar(16) * geometryDeterminantRatio(info))
+        + axis_balance
+        + (Scalar(0.25f) * z_share);
+}
+
+bool geometryAcceptable(const GeometryInfo3D& info,
+                        const RobustEstimatorOptions& options)
+{
+    return info.xx >= options.min_geometry_axis_information
+        && info.yy >= options.min_geometry_axis_information
+        && info.zz >= options.min_geometry_axis_information
+        && geometryDeterminantRatio(info) >= options.min_geometry_determinant_ratio;
+}
+
+GeometryInfo3D selectedGeometryInfo(const RobustTdoaRow* rows,
+                                    const RobustEstimatorResult& result,
+                                    const PosVector3D& initial_position,
+                                    const Scalar* source_weights)
+{
+    GeometryInfo3D info;
+    for (uint8_t i = 0; i < result.selected_rows; i++) {
+        const uint8_t source_index = result.selected_indices[i];
+        const RowGeometry3D geometry =
+            makeRowGeometry(rows[source_index], initial_position, source_weights[source_index]);
+        addGeometry(info, geometry);
+    }
+    return info;
 }
 
 uint8_t popcount8(uint8_t value)
@@ -120,11 +241,13 @@ void selectRows(const RobustTdoaRow* rows,
     result.input_rows = capped_count;
 
     RowScore scores[kMaxCapacity] = {};
+    RowGeometry3D geometries[kMaxCapacity] = {};
     for (uint8_t i = 0; i < capped_count; i++) {
         const Scalar weight = baseWeightForRow(rows[i], options);
         result.base_weights[i] = weight;
+        geometries[i] = makeRowGeometry(rows[i], initial_position, weight);
         scores[i].index = i;
-        scores[i].score = weight * rowGeometryScore(rows[i], initial_position);
+        scores[i].score = weight * rowGeometryScore(geometries[i]);
     }
 
     std::sort(scores, scores + capped_count, [](const RowScore& a, const RowScore& b) {
@@ -149,25 +272,48 @@ void selectRows(const RobustTdoaRow* rows,
     result.pair_selection_used = true;
 
     uint8_t anchor_mask = 0;
-    for (uint8_t s = 0; s < capped_count && result.selected_rows < max_rows; s++) {
-        const uint8_t idx = scores[s].index;
-        uint8_t row_mask = 0;
-        if (rows[idx].anchor_a < 8) row_mask |= static_cast<uint8_t>(1u << rows[idx].anchor_a);
-        if (rows[idx].anchor_b < 8) row_mask |= static_cast<uint8_t>(1u << rows[idx].anchor_b);
+    GeometryInfo3D selected_info;
+    while (result.selected_rows < max_rows) {
+        int best_index = -1;
+        Scalar best_score = -std::numeric_limits<Scalar>::infinity();
+        const uint8_t current_unique = popcount8(anchor_mask);
 
-        const bool adds_anchor = (row_mask & static_cast<uint8_t>(~anchor_mask)) != 0;
-        if (adds_anchor || result.selected_rows < options.min_rows) {
-            result.selected_indices[result.selected_rows++] = idx;
-            anchor_mask |= row_mask;
+        for (uint8_t s = 0; s < capped_count; s++) {
+            const uint8_t idx = scores[s].index;
+            if (containsIndex(result, idx) || !geometries[idx].valid) {
+                continue;
+            }
+
+            GeometryInfo3D trial_info = selected_info;
+            addGeometry(trial_info, geometries[idx]);
+
+            const uint8_t next_mask = static_cast<uint8_t>(anchor_mask | geometries[idx].anchor_mask);
+            const uint8_t next_unique = popcount8(next_mask);
+            const uint8_t added_anchors = next_unique > current_unique
+                ? static_cast<uint8_t>(next_unique - current_unique)
+                : 0;
+
+            Scalar candidate_score = geometryQualityScore(trial_info);
+            if (current_unique < options.min_unique_anchors && added_anchors > 0) {
+                candidate_score += Scalar(10) + Scalar(2) * static_cast<Scalar>(added_anchors);
+            }
+            if (result.selected_rows < options.min_rows) {
+                candidate_score += Scalar(1);
+            }
+            candidate_score += Scalar(0.001f) * scores[s].score;
+
+            if (best_index < 0 || candidate_score > best_score) {
+                best_index = idx;
+                best_score = candidate_score;
+            }
         }
-        if (popcount8(anchor_mask) >= options.min_unique_anchors
-            && result.selected_rows >= options.min_rows) {
+
+        if (best_index < 0) {
             break;
         }
-    }
-
-    for (uint8_t s = 0; s < capped_count && result.selected_rows < max_rows; s++) {
-        addSelected(result, scores[s].index);
+        addSelected(result, static_cast<uint8_t>(best_index));
+        addGeometry(selected_info, geometries[best_index]);
+        anchor_mask = static_cast<uint8_t>(anchor_mask | geometries[best_index].anchor_mask);
     }
 
     result.unique_anchors = popcount8(selectedAnchorMask(result, rows));
@@ -252,6 +398,11 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         || result.unique_anchors < options.min_unique_anchors) {
         return result;
     }
+    if (!geometryAcceptable(
+            selectedGeometryInfo(rows, result, initial_position, result.base_weights),
+            options)) {
+        return result;
+    }
 
     PosMatrix L;
     PosMatrix R;
@@ -313,6 +464,18 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
     }
 
     result.robust_pass_used = true;
+    if (!geometryAcceptable(
+            selectedGeometryInfo(rows, result, first.position, result.final_weights),
+            options)) {
+        const SolverResult thresholded_first = withFinalRmseThreshold(first, options.rmse_threshold);
+        if (thresholded_first.valid) {
+            result.solve = thresholded_first;
+        } else {
+            result.solve.valid = false;
+        }
+        return result;
+    }
+
     buildSolveMatrices(rows, result, L, R, doas, weights, result.final_weights);
     result.solve = newtonRaphsonWeighted(
         L, R, doas, weights, first.position,

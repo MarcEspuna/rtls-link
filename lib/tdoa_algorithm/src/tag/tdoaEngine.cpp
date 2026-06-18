@@ -69,10 +69,15 @@ void tdoaEngineInit(tdoaEngineState_t* engineState, const uint32_t now_ms, tdoaE
   tdoaStorageInitialize(engineState->anchorInfoArray);
   // tdoaStatsInit(&engineState->stats, now_ms);
   engineState->sendTdoaToEstimator = sendTdoaToEstimator;
+  engineState->scoreAnchorPair = 0;
   engineState->locodeckTsFreq = locodeckTsFreq;
   engineState->matchingAlgorithm = matchingAlgorithm;
 
   engineState->matching.offset = 0;
+}
+
+void tdoaEngineSetAnchorPairScoreCallback(tdoaEngineState_t* engineState, tdoaEngineAnchorPairScore scoreAnchorPair) {
+  engineState->scoreAnchorPair = scoreAnchorPair;
 }
 
 static void enqueueTDOA(const tdoaAnchorContext_t* anchorACtx, const tdoaAnchorContext_t* anchorBCtx, double distanceDiff, tdoaEngineState_t* engineState) {
@@ -231,6 +236,56 @@ static bool matchYoungestAnchor(tdoaEngineState_t* engineState, tdoaAnchorContex
     return false;
 }
 
+static bool matchGeometricAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const bool doExcludeId, const uint8_t excludedId) {
+    if (!engineState->scoreAnchorPair) {
+      return matchYoungestAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
+    }
+
+    int remoteCount = 0;
+    tdoaStorageGetRemoteSeqNrList(anchorCtx, &remoteCount, engineState->matching.seqNr, engineState->matching.id);
+
+    uint32_t now_ms = anchorCtx->currentTime_ms;
+    const uint8_t anchorId = tdoaStorageGetId(anchorCtx);
+    float bestScore = -1.0e30f;
+    uint32_t bestUpdateTime = 0;
+    int bestId = -1;
+
+    for (int index = 0; index < remoteCount; index++) {
+      const uint8_t candidateAnchorId = engineState->matching.id[index];
+      if (doExcludeId && excludedId == candidateAnchorId) {
+        continue;
+      }
+      if (!tdoaStorageGetRemoteTimeOfFlight(anchorCtx, candidateAnchorId)) {
+        continue;
+      }
+      if (!tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, candidateAnchorId, now_ms, otherAnchorCtx)) {
+        continue;
+      }
+      if (engineState->matching.seqNr[index] != tdoaStorageGetSeqNr(otherAnchorCtx)) {
+        continue;
+      }
+
+      float score = engineState->scoreAnchorPair(candidateAnchorId, anchorId);
+      if (!(score == score) || score < -1.0e20f) {
+        continue;
+      }
+      const uint32_t updateTime = tdoaStorageGetLastUpdateTime(otherAnchorCtx);
+      if (bestId < 0 || score > bestScore || (score == bestScore && updateTime > bestUpdateTime)) {
+        bestScore = score;
+        bestUpdateTime = updateTime;
+        bestId = candidateAnchorId;
+      }
+    }
+
+    if (bestId >= 0) {
+      tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, bestId, now_ms, otherAnchorCtx);
+      return true;
+    }
+
+    otherAnchorCtx->anchorInfo = 0;
+    return false;
+}
+
 static bool findSuitableAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const bool doExcludeId, const uint8_t excludedId) {
   bool result = false;
 
@@ -242,6 +297,10 @@ static bool findSuitableAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext
 
       case TdoaEngineMatchingAlgorithmYoungest:
         result = matchYoungestAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
+        break;
+
+      case TdoaEngineMatchingAlgorithmGeometric:
+        result = matchGeometricAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
         break;
 
       default:

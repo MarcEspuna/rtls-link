@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <vector>
 
 #include "tdoa_newton_raphson.hpp"
@@ -158,6 +159,85 @@ TEST(TDoARobustEstimator, PairSelectionBoundsRowsAndKeepsAnchorCoverage)
     EXPECT_LE(result.selected_rows, 10);
     EXPECT_GE(result.selected_rows, 5);
     EXPECT_GE(result.unique_anchors, 4);
+}
+
+TEST(TDoARobustEstimator, GeometrySelectionSolvesNoisyEightAnchorWindow)
+{
+    const tdoa_estimator::PosMatrix anchors = makeEightAnchorRoom();
+    tdoa_estimator::PosVector3D tag;
+    tag << 0.6f, -0.8f, 1.3f;
+
+    tdoa_estimator::PosMatrix L;
+    tdoa_estimator::PosMatrix R;
+    tdoa_estimator::DynVector tdoas;
+    std::vector<tdoa_estimator::RobustTdoaRow> rows;
+    buildAllPairMatrices(anchors, tag, L, R, tdoas, rows);
+
+    for (size_t i = 0; i < rows.size(); i++) {
+        const Scalar noise = 0.04f * std::sin(static_cast<Scalar>(i) * 1.7f);
+        rows[i].tdoa += noise;
+        rows[i].age_us = static_cast<uint32_t>((i % 5) * 12000);
+        if (rows[i].anchor_a < 4 && rows[i].anchor_b < 4) {
+            rows[i].tdoa += 0.18f;
+            rows[i].nominal_sigma_m = 0.35f;
+        }
+    }
+
+    tdoa_estimator::RobustEstimatorOptions options;
+    options.enable_pair_selection = true;
+    options.enable_robust_pass = true;
+    options.max_selected_rows = 10;
+    options.min_rows = 8;
+    options.min_unique_anchors = 6;
+    options.min_residual_scale_m = 0.04f;
+
+    const auto result = tdoa_estimator::estimateRobust3D(
+        rows.data(), rows.size(), centroid(anchors), options);
+
+    ASSERT_TRUE(result.solve.valid);
+    EXPECT_TRUE(result.pair_selection_used);
+    EXPECT_LE(result.selected_rows, 10);
+    EXPECT_GE(result.unique_anchors, 6);
+    EXPECT_LT((result.solve.position - tag).norm(), 0.35f);
+}
+
+TEST(TDoARobustEstimator, RejectsUnderconstrained3DSelectedGeometry)
+{
+    const tdoa_estimator::PosMatrix anchors = makeEightAnchorRoom();
+    tdoa_estimator::PosVector3D tag;
+    tag << 0.4f, 0.3f, 1.4f;
+
+    std::vector<tdoa_estimator::RobustTdoaRow> rows;
+    for (uint8_t a = 0; a < 4; a++) {
+        for (uint8_t b = a + 1; b < 4; b++) {
+            const Scalar da = (anchors.row(a).transpose() - tag).norm();
+            const Scalar db = (anchors.row(b).transpose() - tag).norm();
+
+            tdoa_estimator::RobustTdoaRow row;
+            row.anchor_a = a;
+            row.anchor_b = b;
+            row.anchor_a_pos = anchors.row(a).transpose();
+            row.anchor_b_pos = anchors.row(b).transpose();
+            row.tdoa = da - db;
+            row.age_us = 0;
+            row.nominal_sigma_m = 0.15f;
+            row.health = 1.0f;
+            rows.push_back(row);
+        }
+    }
+
+    tdoa_estimator::RobustEstimatorOptions options;
+    options.enable_pair_selection = true;
+    options.enable_robust_pass = true;
+    options.max_selected_rows = 6;
+    options.min_rows = 5;
+    options.min_unique_anchors = 4;
+
+    const auto result = tdoa_estimator::estimateRobust3D(
+        rows.data(), rows.size(), centroid(anchors), options);
+
+    EXPECT_FALSE(result.solve.valid);
+    EXPECT_FALSE(result.solve.converged);
 }
 
 int main(int argc, char** argv)

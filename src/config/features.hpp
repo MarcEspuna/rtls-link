@@ -70,6 +70,9 @@
 // Enables automatic calculation of anchor positions from inter-anchor distances
 // #define USE_DYNAMIC_ANCHOR_POSITIONS
 
+// --- TDoA estimator input selection ---
+#define USE_UWB_TDOA_GEOMETRIC_MATCHER
+
 // --- OTA Update Subsystem ---
 #define USE_OTA                       // Master OTA toggle
 #define USE_OTA_WEB                   // HTTP OTA upload via webserver

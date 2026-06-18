@@ -39,6 +39,8 @@ struct RobustEstimatorOptions {
     Scalar min_weight = 0.05f;
     Scalar huber_k = 1.5f;
     Scalar min_residual_scale_m = 0.05f;
+    Scalar min_geometry_axis_information = 0.25f;
+    Scalar min_geometry_determinant_ratio = 3.0e-4f;
 };
 
 struct RobustEstimatorResult {

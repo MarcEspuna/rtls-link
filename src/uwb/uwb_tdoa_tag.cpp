@@ -91,6 +91,10 @@ static FAST_CODE void rxTimeoutCallback(dwDevice_t *dev);
 static FAST_CODE void rxFailedCallback(dwDevice_t *dev);
 
 static FAST_CODE void estimatorCallback(tdoaMeasurement_t* tdoa);
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+static float scoreTdoaMatcherPair(uint8_t anchorA, uint8_t anchorB);
+static void storeMatcherReferencePosition(const tdoa_estimator::PosVector3D& position);
+#endif
 static bool anchorModelTofCallback(uint8_t fromAnchor, uint8_t toAnchor, uint16_t rawDistanceTimestampUnits, uint16_t fromAntennaDelay, uint16_t toAntennaDelay, uint16_t* outDistanceTimestampUnits);
 static void estimatorProcess();
 
@@ -128,6 +132,9 @@ static constexpr uint8_t kEstimatorDiagSummary = 1;
 static constexpr uint8_t kEstimatorDiagRows = 2;
 static constexpr uint8_t kEstimatorMaxSelectedRows = 20;
 static constexpr uint8_t kEstimatorSelectedDiagCapacity = 12;
+static constexpr uint8_t kMatcherPolicyYoungest = 0;
+static constexpr uint8_t kMatcherPolicyRandom = 1;
+static constexpr uint8_t kMatcherPolicyGeometric = 2;
 
 enum EstimatorDiagnosticFlags : uint8_t {
     kEstimatorDiagFlagAccepted = 1u << 0,
@@ -306,6 +313,198 @@ static SemaphoreHandle_t measurements_mtx = xSemaphoreCreateMutex();
 static etl::array<UWBAnchorParam, kNumAnchors> anchor_positions;
 static etl::array<bool, kNumAnchors> configured_anchor_ids = {};
 static std::atomic<bool> s_estimatorReinitRequested{false};
+// Stale threshold for TDoA pair measurements (350ms — one frame at min TDMA rate).
+static constexpr uint64_t kStaleThresholdUs = 350000;
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+static std::atomic<int32_t> s_matcherReferenceXMm{0};
+static std::atomic<int32_t> s_matcherReferenceYMm{0};
+static std::atomic<int32_t> s_matcherReferenceZMm{0};
+#endif
+
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+static tdoa_estimator::PosVector3D loadMatcherReferencePosition()
+{
+    tdoa_estimator::PosVector3D position;
+    position << static_cast<tdoa_estimator::Scalar>(
+                    s_matcherReferenceXMm.load(std::memory_order_relaxed)) * 0.001f,
+                static_cast<tdoa_estimator::Scalar>(
+                    s_matcherReferenceYMm.load(std::memory_order_relaxed)) * 0.001f,
+                static_cast<tdoa_estimator::Scalar>(
+                    s_matcherReferenceZMm.load(std::memory_order_relaxed)) * 0.001f;
+    return position;
+}
+
+static void storeMatcherReferencePosition(const tdoa_estimator::PosVector3D& position)
+{
+    s_matcherReferenceXMm.store(metersToMillimetersSigned(static_cast<float>(position(0))),
+                                std::memory_order_relaxed);
+    s_matcherReferenceYMm.store(metersToMillimetersSigned(static_cast<float>(position(1))),
+                                std::memory_order_relaxed);
+    s_matcherReferenceZMm.store(metersToMillimetersSigned(static_cast<float>(position(2))),
+                                std::memory_order_relaxed);
+}
+
+struct MatcherInfo2D {
+    float xx = 0.0f;
+    float xy = 0.0f;
+    float yy = 0.0f;
+};
+
+struct MatcherInfo3D {
+    float xx = 0.0f;
+    float xy = 0.0f;
+    float xz = 0.0f;
+    float yy = 0.0f;
+    float yz = 0.0f;
+    float zz = 0.0f;
+};
+
+static bool matcherPairGradient(uint8_t anchorA,
+                                uint8_t anchorB,
+                                const tdoa_estimator::PosVector3D& reference,
+                                float gradient[3])
+{
+    if (anchorA >= kNumAnchors || anchorB >= kNumAnchors
+        || !configured_anchor_ids[anchorA] || !configured_anchor_ids[anchorB]) {
+        return false;
+    }
+
+    const UWBAnchorParam& a = anchor_positions[anchorA];
+    const UWBAnchorParam& b = anchor_positions[anchorB];
+    const float ax = static_cast<float>(reference(0)) - a.x;
+    const float ay = static_cast<float>(reference(1)) - a.y;
+    const float az = static_cast<float>(reference(2)) - a.z;
+    const float bx = static_cast<float>(reference(0)) - b.x;
+    const float by = static_cast<float>(reference(1)) - b.y;
+    const float bz = static_cast<float>(reference(2)) - b.z;
+    float da = std::sqrt(ax * ax + ay * ay + az * az);
+    float db = std::sqrt(bx * bx + by * by + bz * bz);
+    if (da < 1.0e-4f) da = 1.0e-4f;
+    if (db < 1.0e-4f) db = 1.0e-4f;
+
+    gradient[0] = (ax / da) - (bx / db);
+    gradient[1] = (ay / da) - (by / db);
+    gradient[2] = (az / da) - (bz / db);
+    return std::isfinite(gradient[0])
+        && std::isfinite(gradient[1])
+        && std::isfinite(gradient[2]);
+}
+
+static void matcherAdd2D(MatcherInfo2D& info, const float gradient[3], float weight)
+{
+    info.xx += weight * gradient[0] * gradient[0];
+    info.xy += weight * gradient[0] * gradient[1];
+    info.yy += weight * gradient[1] * gradient[1];
+}
+
+static void matcherAdd3D(MatcherInfo3D& info, const float gradient[3], float weight)
+{
+    info.xx += weight * gradient[0] * gradient[0];
+    info.xy += weight * gradient[0] * gradient[1];
+    info.xz += weight * gradient[0] * gradient[2];
+    info.yy += weight * gradient[1] * gradient[1];
+    info.yz += weight * gradient[1] * gradient[2];
+    info.zz += weight * gradient[2] * gradient[2];
+}
+
+static float matcherWindowWeight(const PairSlot& slot, uint64_t nowUs)
+{
+    constexpr float kReferenceSigmaM = 0.15f;
+    constexpr float kAgeHalfLifeUs = 60000.0f;
+    constexpr float kMinWeight = 0.05f;
+
+    const uint64_t ageUs = nowUs >= slot.timestamp_us ? nowUs - slot.timestamp_us : 0;
+    float weight = 1.0f / (1.0f + (static_cast<float>(ageUs) / kAgeHalfLifeUs));
+    if (std::isfinite(slot.sigma_m) && slot.sigma_m > kReferenceSigmaM) {
+        const float ratio = kReferenceSigmaM / slot.sigma_m;
+        weight *= ratio * ratio;
+    }
+    if (weight < kMinWeight) return kMinWeight;
+    if (weight > 1.0f) return 1.0f;
+    return weight;
+}
+
+static float matcherQuality2D(const MatcherInfo2D& info)
+{
+    const float trace = info.xx + info.yy;
+    if (trace <= 1.0e-6f || !std::isfinite(trace)) {
+        return 0.0f;
+    }
+    const float det = (info.xx * info.yy) - (info.xy * info.xy);
+    const float detRatio = det > 0.0f ? det / (trace * trace) : 0.0f;
+    const float axisBalance = std::min(info.xx, info.yy) / trace;
+    return (4.0f * detRatio) + axisBalance;
+}
+
+static float matcherQuality3D(const MatcherInfo3D& info)
+{
+    const float trace = info.xx + info.yy + info.zz;
+    if (trace <= 1.0e-6f || !std::isfinite(trace)) {
+        return 0.0f;
+    }
+    const float det =
+        info.xx * ((info.yy * info.zz) - (info.yz * info.yz))
+        - info.xy * ((info.xy * info.zz) - (info.yz * info.xz))
+        + info.xz * ((info.xy * info.yz) - (info.yy * info.xz));
+    const float detRatio = det > 0.0f ? det / (trace * trace * trace) : 0.0f;
+    const float axisBalance = std::min(info.xx, std::min(info.yy, info.zz)) / trace;
+    const float zShare = info.zz / trace;
+    return (16.0f * detRatio) + axisBalance + (0.25f * zShare);
+}
+
+static float scoreTdoaMatcherPair(uint8_t anchorA, uint8_t anchorB)
+{
+    tdoa::AnchorPair candidate;
+    bool reversed = false;
+    if (!tdoa::CanonicalizePair(anchorA, anchorB, kNumAnchors, candidate, reversed)) {
+        return -1.0e30f;
+    }
+    (void)reversed;
+
+    const bool use2D = Front::uwbLittleFSFront.GetParams().use2DEstimator != 0;
+    const tdoa_estimator::PosVector3D reference = loadMatcherReferencePosition();
+    const uint64_t nowUs = static_cast<uint64_t>(esp_timer_get_time());
+
+    float gradient[3] = {};
+    if (xSemaphoreTake(measurements_mtx, 0) != pdTRUE) {
+        return 0.0f;
+    }
+
+    MatcherInfo2D info2D;
+    MatcherInfo3D info3D;
+    for (const PairSlot& slot : pair_slots) {
+        if (!slot.fresh
+            || slot.anchor_a >= kNumAnchors
+            || slot.anchor_b >= kNumAnchors
+            || (nowUs - slot.timestamp_us) > kStaleThresholdUs
+            || (slot.anchor_a == candidate.a && slot.anchor_b == candidate.b)) {
+            continue;
+        }
+        if (!matcherPairGradient(slot.anchor_a, slot.anchor_b, reference, gradient)) {
+            continue;
+        }
+        const float weight = matcherWindowWeight(slot, nowUs);
+        if (use2D) {
+            matcherAdd2D(info2D, gradient, weight);
+        } else {
+            matcherAdd3D(info3D, gradient, weight);
+        }
+    }
+
+    if (!matcherPairGradient(candidate.a, candidate.b, reference, gradient)) {
+        xSemaphoreGive(measurements_mtx);
+        return -1.0e30f;
+    }
+    if (use2D) {
+        matcherAdd2D(info2D, gradient, 1.0f);
+    } else {
+        matcherAdd3D(info3D, gradient, 1.0f);
+    }
+    xSemaphoreGive(measurements_mtx);
+
+    return use2D ? matcherQuality2D(info2D) : matcherQuality3D(info3D);
+}
+#endif
 
 #if defined(USE_DYNAMIC_ANCHOR_POSITIONS) && defined(USE_RTLSLINK_BEACON_BACKEND)
 static bool configureRtlslinkBeaconFromAnchorPositions()
@@ -348,9 +547,6 @@ static void clearRtlslinkBeaconDynamicAnchors()
     App::ConfigureRtlslinkBeaconAnchors(etl::span<const UWBAnchorParam>(emptyAnchors.data(), 0));
 }
 #endif
-
-// Stale threshold for TDoA pair measurements (350ms — one frame at min TDMA rate).
-static constexpr uint64_t kStaleThresholdUs = 350000;
 
 // Estimator task handle for direct notification from producer.
 static TaskHandle_t s_estimator_task_handle = nullptr;
@@ -433,6 +629,23 @@ static bool applyStaticAnchorsLocked(etl::span<const UWBAnchorParam> anchors, ui
 
     anchor_positions = next_anchor_positions;
     configured_anchor_ids = next_configured_anchor_ids;
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+    tdoa_estimator::PosVector3D centroid = tdoa_estimator::PosVector3D::Zero();
+    uint8_t centroidCount = 0;
+    for (uint8_t id = 0; id < kNumAnchors; id++) {
+        if (!configured_anchor_ids[id]) {
+            continue;
+        }
+        centroid(0) += static_cast<tdoa_estimator::Scalar>(anchor_positions[id].x);
+        centroid(1) += static_cast<tdoa_estimator::Scalar>(anchor_positions[id].y);
+        centroid(2) += static_cast<tdoa_estimator::Scalar>(anchor_positions[id].z);
+        centroidCount++;
+    }
+    if (centroidCount > 0) {
+        centroid /= static_cast<tdoa_estimator::Scalar>(centroidCount);
+        storeMatcherReferencePosition(centroid);
+    }
+#endif
     clearFreshMeasurementsLocked();
     return true;
 }
@@ -505,9 +718,15 @@ static std::atomic<uint32_t> s_estimatorProducerDroppedTotal{0};
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
 {
 #ifdef ESP32S3_UWB_BOARD
-    return policy == 1
-        ? TdoaEngineMatchingAlgorithmRandom
-        : TdoaEngineMatchingAlgorithmYoungest;
+    if (policy == kMatcherPolicyRandom) {
+        return TdoaEngineMatchingAlgorithmRandom;
+    }
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    if (policy == kMatcherPolicyGeometric) {
+        return TdoaEngineMatchingAlgorithmGeometric;
+    }
+#endif
+    return TdoaEngineMatchingAlgorithmYoungest;
 #else
     (void)policy;
     return TdoaEngineMatchingAlgorithmYoungest;
@@ -519,6 +738,8 @@ static const char* matcherPolicyName(tdoaEngineMatchingAlgorithm_t policy)
     switch (policy) {
         case TdoaEngineMatchingAlgorithmRandom:
             return "RANDOM";
+        case TdoaEngineMatchingAlgorithmGeometric:
+            return "GEOMETRIC";
         case TdoaEngineMatchingAlgorithmYoungest:
         default:
             return "YOUNGEST";
@@ -966,6 +1187,9 @@ UWBTagTDoA::UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnch
     LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
 
 #ifdef ESP32S3_UWB_BOARD
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    uwbTdoa2TagSetAnchorPairScoreCallback(scoreTdoaMatcherPair);
+#endif
     ApplyMatcherPolicy(uwbParams.tdoaMatcherPolicy);
 #endif
 
@@ -1796,6 +2020,9 @@ static void estimatorProcess() {
             if (USE_2D_ESTIMATOR) {
                 last_position(2) = ASSUMED_TAG_Z;
             }
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+            storeMatcherReferencePosition(last_position);
+#endif
             first_estimation = false;
             const char* anchor_source = "configured";
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
@@ -2058,6 +2285,9 @@ static void estimatorProcess() {
 
             // Update the persistent state for the next iteration (Warm Start)
             last_position = current_estimate_3d;
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+            storeMatcherReferencePosition(last_position);
+#endif
 
 #if TDOA_STATS_LOGGING == ENABLE
             stats_samples_sent++;
@@ -2329,6 +2559,9 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
         // CRITICAL: Lock mutex before updating shared anchor_positions
         // This prevents race conditions with estimatorProcess() which reads these values
         if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+            tdoa_estimator::PosVector3D centroid = tdoa_estimator::PosVector3D::Zero();
+#endif
             for (uint8_t i = 0; i < dynamic_anchor_count; i++) {
                 anchor_positions[i].shortAddr[0] = static_cast<char>('0' + i);
                 anchor_positions[i].shortAddr[1] = '\0';
@@ -2336,11 +2569,22 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
                 anchor_positions[i].y = newPositions[i].y;
                 anchor_positions[i].z = newPositions[i].z;
                 configured_anchor_ids[i] = true;
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+                centroid(0) += static_cast<tdoa_estimator::Scalar>(newPositions[i].x);
+                centroid(1) += static_cast<tdoa_estimator::Scalar>(newPositions[i].y);
+                centroid(2) += static_cast<tdoa_estimator::Scalar>(newPositions[i].z);
+#endif
             }
             for (uint8_t i = dynamic_anchor_count; i < kNumAnchors; i++) {
                 configured_anchor_ids[i] = false;
                 anchor_positions[i] = {};
             }
+#if defined(ESP32S3_UWB_BOARD) && defined(USE_UWB_TDOA_GEOMETRIC_MATCHER)
+            if (dynamic_anchor_count > 0) {
+                centroid /= static_cast<tdoa_estimator::Scalar>(dynamic_anchor_count);
+                storeMatcherReferencePosition(centroid);
+            }
+#endif
 
             if (!s_dynamicPositionsReadyForEstimator.load(std::memory_order_relaxed)) {
                 // Drop pre-transition measurements so the next solve uses only
