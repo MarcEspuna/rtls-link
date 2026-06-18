@@ -111,11 +111,25 @@ void uwbTdoa2TagSetTofCallback(InterAnchorTofCallback callback) {
 
 #ifdef ESP32S3_UWB_BOARD
 void uwbTdoa2TagSetMatchingAlgorithm(tdoaEngineMatchingAlgorithm_t algorithm) {
-  if (algorithm != TdoaEngineMatchingAlgorithmRandom && algorithm != TdoaEngineMatchingAlgorithmYoungest) {
+  if (algorithm != TdoaEngineMatchingAlgorithmRandom
+      && algorithm != TdoaEngineMatchingAlgorithmYoungest
+      && algorithm != TdoaEngineMatchingAlgorithmGeometric) {
     algorithm = TdoaEngineMatchingAlgorithmYoungest;
   }
   s_matchingAlgorithm = algorithm;
   tdoaEngineState.matchingAlgorithm = algorithm;
+}
+
+void uwbTdoa2TagSetAnchorPosition(uint8_t anchorId, float x, float y, float z) {
+  tdoaEngineSetAnchorPosition(&tdoaEngineState, anchorId, x, y, z);
+}
+
+void uwbTdoa2TagSetPriorPosition(float x, float y, float z) {
+  tdoaEngineSetPriorPosition(&tdoaEngineState, x, y, z);
+}
+
+void uwbTdoa2TagClearPrior() {
+  tdoaEngineClearPrior(&tdoaEngineState);
 }
 #endif
 

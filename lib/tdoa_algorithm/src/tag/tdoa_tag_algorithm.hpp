@@ -76,6 +76,12 @@ void uwbTdoa2TagSetTofCallback(InterAnchorTofCallback callback);
 // Select the TDoA engine anchor matching policy used to choose the remote
 // anchor paired with each incoming packet.
 void uwbTdoa2TagSetMatchingAlgorithm(tdoaEngineMatchingAlgorithm_t algorithm);
+
+// Geometric matcher inputs (Change 3): anchor positions and the last tag
+// position estimate (prior). Used only by the GEOMETRIC policy.
+void uwbTdoa2TagSetAnchorPosition(uint8_t anchorId, float x, float y, float z);
+void uwbTdoa2TagSetPriorPosition(float x, float y, float z);
+void uwbTdoa2TagClearPrior();
 #endif
 
 // Get the last reported antenna delay for a specific anchor (DW1000 ticks)
