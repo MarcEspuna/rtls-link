@@ -1741,6 +1741,7 @@ static void estimatorProcess() {
     uint64_t snapshot_now_us = 0;
     PairSlot snapshot[kNumPairs];
     etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
+    etl::array<bool, kNumAnchors> configured_anchor_ids_snapshot = {};
 
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) == pdTRUE) {
         const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
@@ -1770,6 +1771,9 @@ static void estimatorProcess() {
         }
         if (have_enough) {
             anchor_snapshot = anchor_positions;
+            // Snapshot the configured mask under the same lock so the geometric
+            // matcher publish below never reads the shared array off-mutex.
+            configured_anchor_ids_snapshot = configured_anchor_ids;
         }
 
         xSemaphoreGive(measurements_mtx);
@@ -2115,7 +2119,7 @@ static void estimatorProcess() {
             // first fix the matcher has no prior and falls back to YOUNGEST.
             if (uwbParams.tdoaMatcherPolicy == 2) {
                 for (uint8_t id = 0; id < kNumAnchors; id++) {
-                    if (configured_anchor_ids[id]) {
+                    if (configured_anchor_ids_snapshot[id]) {
                         uwbTdoa2TagSetAnchorPosition(id,
                                                      anchor_snapshot[id].x,
                                                      anchor_snapshot[id].y,

@@ -100,16 +100,25 @@ static inline void geoWriteEnd(tdoaEngineState_t* s) {
 }
 
 // Returns false if no stable snapshot could be taken (writer too active).
+// Payload fields are read with RELAXED atomics: the seqlock discards torn
+// snapshots, and making every shared access atomic keeps the read free of a
+// C++ data race even when the copy is rejected (no UB from racing the writer).
 static bool geoSnapshot(const tdoaEngineState_t* s, GeoSnapshot* out) {
   for (int tries = 0; tries < 8; ++tries) {
     const uint32_t s1 = s->geo.seq.load(std::memory_order_acquire);
     if (s1 & 1u) {                                     // mid-write
       continue;
     }
-    out->hasPrior = s->geo.hasPrior;
-    memcpy(out->priorPos, s->geo.priorPos, sizeof(out->priorPos));
-    memcpy(out->anchorValid, s->geo.anchorValid, sizeof(out->anchorValid));
-    memcpy(out->anchorPos, s->geo.anchorPos, sizeof(out->anchorPos));
+    out->hasPrior = __atomic_load_n(&s->geo.hasPrior, __ATOMIC_RELAXED);
+    for (int i = 0; i < 3; ++i) {
+      __atomic_load(&s->geo.priorPos[i], &out->priorPos[i], __ATOMIC_RELAXED);
+    }
+    for (int a = 0; a < TDOA_ENGINE_MAX_ANCHORS; ++a) {
+      out->anchorValid[a] = __atomic_load_n(&s->geo.anchorValid[a], __ATOMIC_RELAXED);
+      for (int j = 0; j < 3; ++j) {
+        __atomic_load(&s->geo.anchorPos[a][j], &out->anchorPos[a][j], __ATOMIC_RELAXED);
+      }
+    }
     // Re-read seq with acquire: if unchanged and even, the copy was consistent.
     if (s1 == s->geo.seq.load(std::memory_order_acquire)) {
       return true;
@@ -466,19 +475,19 @@ void tdoaEngineSetAnchorPosition(tdoaEngineState_t* engineState, uint8_t anchorI
     return;
   }
   geoWriteBegin(engineState);
-  engineState->geo.anchorPos[anchorId][0] = x;
-  engineState->geo.anchorPos[anchorId][1] = y;
-  engineState->geo.anchorPos[anchorId][2] = z;
-  engineState->geo.anchorValid[anchorId] = 1;
+  __atomic_store(&engineState->geo.anchorPos[anchorId][0], &x, __ATOMIC_RELAXED);
+  __atomic_store(&engineState->geo.anchorPos[anchorId][1], &y, __ATOMIC_RELAXED);
+  __atomic_store(&engineState->geo.anchorPos[anchorId][2], &z, __ATOMIC_RELAXED);
+  __atomic_store_n(&engineState->geo.anchorValid[anchorId], static_cast<uint8_t>(1), __ATOMIC_RELAXED);
   geoWriteEnd(engineState);
 }
 
 void tdoaEngineSetPriorPosition(tdoaEngineState_t* engineState, float x, float y, float z) {
   geoWriteBegin(engineState);
-  engineState->geo.priorPos[0] = x;
-  engineState->geo.priorPos[1] = y;
-  engineState->geo.priorPos[2] = z;
-  engineState->geo.hasPrior = 1;
+  __atomic_store(&engineState->geo.priorPos[0], &x, __ATOMIC_RELAXED);
+  __atomic_store(&engineState->geo.priorPos[1], &y, __ATOMIC_RELAXED);
+  __atomic_store(&engineState->geo.priorPos[2], &z, __ATOMIC_RELAXED);
+  __atomic_store_n(&engineState->geo.hasPrior, static_cast<uint8_t>(1), __ATOMIC_RELAXED);
   geoWriteEnd(engineState);
 }
 
@@ -488,6 +497,6 @@ void tdoaEngineClearPrior(tdoaEngineState_t* engineState) {
   // (kTdoaGeometricInfoDecay) once a new prior is set, so we do not write it
   // from this (estimator) task — that would be an unsynchronized cross-task store.
   geoWriteBegin(engineState);
-  engineState->geo.hasPrior = 0;
+  __atomic_store_n(&engineState->geo.hasPrior, static_cast<uint8_t>(0), __ATOMIC_RELAXED);
   geoWriteEnd(engineState);
 }
