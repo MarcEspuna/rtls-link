@@ -86,29 +86,32 @@ struct GeoSnapshot {
   float anchorPos[TDOA_ENGINE_MAX_ANCHORS][3];
 };
 
+// Single writer (estimator task): bracket the field stores so a concurrent
+// reader either sees the full update or retries.
 static inline void geoWriteBegin(tdoaEngineState_t* s) {
-  s->geo.seq++;                                        // -> odd: write in progress
-  std::atomic_thread_fence(std::memory_order_release);
+  const uint32_t cur = s->geo.seq.load(std::memory_order_relaxed);
+  s->geo.seq.store(cur + 1, std::memory_order_relaxed);  // -> odd: write in progress
+  std::atomic_thread_fence(std::memory_order_release);   // field stores happen-after
 }
 static inline void geoWriteEnd(tdoaEngineState_t* s) {
-  std::atomic_thread_fence(std::memory_order_release);
-  s->geo.seq++;                                        // -> even: stable
+  const uint32_t cur = s->geo.seq.load(std::memory_order_relaxed);
+  // release-store publishes the field stores to a reader's acquire-load below.
+  s->geo.seq.store(cur + 1, std::memory_order_release);  // -> even: stable
 }
 
 // Returns false if no stable snapshot could be taken (writer too active).
 static bool geoSnapshot(const tdoaEngineState_t* s, GeoSnapshot* out) {
   for (int tries = 0; tries < 8; ++tries) {
-    const uint32_t s1 = s->geo.seq;
+    const uint32_t s1 = s->geo.seq.load(std::memory_order_acquire);
     if (s1 & 1u) {                                     // mid-write
       continue;
     }
-    std::atomic_thread_fence(std::memory_order_acquire);
     out->hasPrior = s->geo.hasPrior;
     memcpy(out->priorPos, s->geo.priorPos, sizeof(out->priorPos));
     memcpy(out->anchorValid, s->geo.anchorValid, sizeof(out->anchorValid));
     memcpy(out->anchorPos, s->geo.anchorPos, sizeof(out->anchorPos));
-    std::atomic_thread_fence(std::memory_order_acquire);
-    if (s1 == s->geo.seq) {
+    // Re-read seq with acquire: if unchanged and even, the copy was consistent.
+    if (s1 == s->geo.seq.load(std::memory_order_acquire)) {
       return true;
     }
   }
@@ -124,7 +127,13 @@ void tdoaEngineInit(tdoaEngineState_t* engineState, const uint32_t now_ms, tdoaE
 
   engineState->matching.offset = 0;
 
-  memset(&engineState->geo, 0, sizeof(engineState->geo));
+  // Zero geo without memset-ing over the std::atomic `seq`.
+  engineState->geo.seq.store(0, std::memory_order_relaxed);
+  engineState->geo.hasPrior = 0;
+  memset(engineState->geo.priorPos, 0, sizeof(engineState->geo.priorPos));
+  memset(engineState->geo.anchorValid, 0, sizeof(engineState->geo.anchorValid));
+  memset(engineState->geo.anchorPos, 0, sizeof(engineState->geo.anchorPos));
+  memset(engineState->geo.info, 0, sizeof(engineState->geo.info));
 }
 
 static void enqueueTDOA(const tdoaAnchorContext_t* anchorACtx, const tdoaAnchorContext_t* anchorBCtx, double distanceDiff, tdoaEngineState_t* engineState) {

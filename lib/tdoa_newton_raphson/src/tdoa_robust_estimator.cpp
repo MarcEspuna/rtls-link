@@ -377,6 +377,7 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
 {
     RobustEstimatorResult result;
     result.solve.position = initial_position;
+    result.solve.dataPosition = initial_position;  // valid on every early return
     result.solve.valid = false;
     result.solve.converged = false;
     result.solve.iterations = 0;
@@ -418,8 +419,12 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         prior);
     result.solve = first;
 
+    // Residuals (and thus the Huber weights below) are computed at the PRE-blend
+    // data solution, so the robust weights — and the honest covariance's
+    // diag(kappa/w) that consumes them — stay data-only even when the null-space
+    // prior moved `position`.
     DynVector solve_residuals;
-    computeResiduals3D(L, R, doas, first.position, solve_residuals);
+    computeResiduals3D(L, R, doas, first.dataPosition, solve_residuals);
     for (uint8_t i = 0; i < result.selected_rows; i++) {
         const uint8_t source_index = result.selected_indices[i];
         result.residuals[source_index] = solve_residuals(i);
@@ -466,7 +471,7 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
     result.robust_pass_used = true;
     buildSolveMatrices(rows, result, L, R, doas, weights, result.final_weights);
     result.solve = newtonRaphsonWeighted(
-        L, R, doas, weights, first.position,
+        L, R, doas, weights, first.dataPosition,
         options.max_iterations,
         options.convergence_threshold,
         options.rmse_threshold,
@@ -478,7 +483,7 @@ RobustEstimatorResult estimateRobust3D(const RobustTdoaRow* rows,
         }
     }
 
-    computeResiduals3D(L, R, doas, result.solve.position, solve_residuals);
+    computeResiduals3D(L, R, doas, result.solve.dataPosition, solve_residuals);
     for (uint8_t i = 0; i < result.selected_rows; i++) {
         const uint8_t source_index = result.selected_indices[i];
         result.residuals[source_index] = solve_residuals(i);

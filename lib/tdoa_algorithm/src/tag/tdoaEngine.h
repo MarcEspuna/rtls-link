@@ -1,6 +1,8 @@
 #ifndef __TDOA_ENGINE_H__
 #define __TDOA_ENGINE_H__
 
+#include <atomic>  // seqlock sequence counter for the cross-task matcher state
+
 #include "tdoaStorage.h"
 #include "tdoaStats.h"
 
@@ -47,7 +49,9 @@ typedef struct {
     // by the (timing-sensitive) UWB ranging task. `seq` is even when stable, odd
     // mid-write; readers take a consistent snapshot with a bounded retry instead
     // of a critical section (no interrupt-disable in the ranging hot loop).
-    volatile uint32_t seq;
+    // std::atomic (not volatile) so the load/store carry the acquire/release
+    // ordering the C++ memory model requires to make the snapshot race-free.
+    std::atomic<uint32_t> seq;
     uint8_t hasPrior;                              // 1 if priorPos is valid
     float priorPos[3];
     uint8_t anchorValid[TDOA_ENGINE_MAX_ANCHORS];
