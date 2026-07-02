@@ -85,6 +85,8 @@ struct NlosEvent {
     Scalar bias_m = 0.0f;
 };
 
+enum class MatcherPolicy { YOUNGEST, RANDOM };
+
 struct Scenario {
     std::string name;
     std::array<PosVector3D, kNumAnchors> anchors;
@@ -94,6 +96,7 @@ struct Scenario {
     double unreliable_drop = 0.10;  // P(TDoA dropped upstream: clock corr unreliable)
     Scalar noise_sigma_m = 0.08f;   // per-row TDoA noise
     std::vector<NlosEvent> nlos;
+    MatcherPolicy matcher = MatcherPolicy::YOUNGEST;
     uint32_t seed = 1234;
 };
 
@@ -285,6 +288,10 @@ struct Metrics {
 struct SimResult {
     Metrics current;   // main pipeline (batch + gates + robust estimator)
     Metrics window;    // new sliding-window estimator
+    // Window-geometry diagnostics (means over all window solves)
+    double window_mean_rows = 0.0;
+    double window_mean_distinct_pairs = 0.0;   // == rows (freshest per pair)
+    double window_cross_plane_frac = 0.0;      // fraction of rows spanning planes
 };
 
 Scalar nlosBias(const Scenario& sc, uint8_t anchor, double t_s)
@@ -413,12 +420,25 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
         }
     };
 
+    size_t window_solve_count = 0;
+    size_t window_rows_sum = 0;
+    size_t window_cross_sum = 0;
+
     auto runWindowConsumer = [&](uint64_t now_us) {
         tdoa::MeasurementSlot snapshot[kNumPairs];
         const auto snap = tdoa::SnapshotWindowMeasurements(
             slots_window, configured, now_us, kStaleThresholdUs,
             win_opts.window_max_age_us, snapshot, kNumPairs);
         fresh_count_w -= std::min<size_t>(fresh_count_w, snap.consumed + snap.expired);
+
+        window_solve_count++;
+        window_rows_sum += snap.copied;
+        for (size_t i = 0; i < snap.copied; ++i) {
+            if (std::fabs(sc.anchors[snapshot[i].anchor_a](2)
+                          - sc.anchors[snapshot[i].anchor_b](2)) >= kMinPlaneSeparationM) {
+                window_cross_sum++;
+            }
+        }
 
         tdoa_estimator::RobustTdoaRow rows[kNumPairs];
         for (size_t i = 0; i < snap.copied; ++i) {
@@ -467,12 +487,31 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
 
         bool produced = false;
         if (uni(rng) >= sc.packet_loss) {
-            // Youngest other anchor heard recently (matches YOUNGEST policy).
+            // Matcher policy: which other anchor does this packet pair with?
             int best = -1;
-            for (uint8_t m = 0; m < kNumAnchors; ++m) {
-                if (m == anchor || !rx_seen[m]) continue;
-                if (rx_us - last_rx_us[m] > 50000) continue;
-                if (best < 0 || last_rx_us[m] > last_rx_us[best]) best = m;
+            if (sc.matcher == MatcherPolicy::YOUNGEST) {
+                // Most recently heard other anchor — with clean round-robin
+                // TDMA this is nearly always the previous slot's anchor, so
+                // only the 8 "ring" pairs are ever produced.
+                for (uint8_t m = 0; m < kNumAnchors; ++m) {
+                    if (m == anchor || !rx_seen[m]) continue;
+                    if (rx_us - last_rx_us[m] > 50000) continue;
+                    if (best < 0 || last_rx_us[m] > last_rx_us[best]) best = m;
+                }
+            } else {
+                // RANDOM: rotating pick among all eligible remote candidates,
+                // spreading production across all 28 pairs over time.
+                uint8_t eligible[kNumAnchors];
+                uint8_t eligible_count = 0;
+                for (uint8_t m = 0; m < kNumAnchors; ++m) {
+                    if (m == anchor || !rx_seen[m]) continue;
+                    if (rx_us - last_rx_us[m] > 50000) continue;
+                    eligible[eligible_count++] = m;
+                }
+                if (eligible_count > 0) {
+                    best = eligible[static_cast<size_t>(uni(rng) * eligible_count)
+                                    % eligible_count];
+                }
             }
             rx_seen[anchor] = true;
             last_rx_us[anchor] = rx_us;
@@ -537,6 +576,15 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
         } else if (rx_us - last_wake_w_us >= wake_timeout_w_us) {
             wakeWindow(rx_us);
         }
+    }
+
+    if (window_solve_count > 0) {
+        result.window_mean_rows =
+            static_cast<double>(window_rows_sum) / static_cast<double>(window_solve_count);
+        result.window_mean_distinct_pairs = result.window_mean_rows;
+        result.window_cross_plane_frac = window_rows_sum > 0
+            ? static_cast<double>(window_cross_sum) / static_cast<double>(window_rows_sum)
+            : 0.0;
     }
 
     if (verbose) {
@@ -930,6 +978,60 @@ TEST(TDoAWindowSim, LatencyAnalysis)
         EXPECT_LE(win_along, cur_along + 10.0) << sc.name;
         // And absolute lag must stay small relative to one solve period.
         EXPECT_LE(win_lag, 60.0) << sc.name;
+    }
+}
+
+// YOUNGEST vs RANDOM matcher policy: does YOUNGEST starve pair diversity and
+// hurt Z? (Field hypothesis from flight testing.)
+TEST(TDoAWindowSim, MatcherPolicyPairStarvation)
+{
+    struct Geometry {
+        const char* name;
+        Scalar z_low, z_high;
+    };
+    const Geometry geoms[] = {
+        {"plane-sep-2.5m", 0.3f, 2.8f},
+        {"plane-sep-1.2m", 0.3f, 1.5f},
+    };
+
+    for (const auto& g : geoms) {
+        for (const bool moving : {false, true}) {
+            double rmsZ[2] = {}, rmsXY[2] = {}, rows[2] = {}, cross[2] = {};
+            for (int p = 0; p < 2; ++p) {
+                Scenario sc;
+                sc.name = std::string(g.name) + (moving ? "/moving" : "/static");
+                sc.anchors = makeTwoPlaneAnchors(10.0f, 8.0f, g.z_low, g.z_high);
+                if (moving) {
+                    sc.trajectory = [](double t) {
+                        PosVector3D q;
+                        q << 5.0f + 2.5f * std::cos(0.7 * t),
+                             4.0f + 2.5f * std::sin(0.7 * t),
+                             1.2f + 0.4f * std::sin(0.3 * t);
+                        return q;
+                    };
+                } else {
+                    sc.trajectory = [](double) { PosVector3D q; q << 4.0f, 3.0f, 1.2f; return q; };
+                }
+                sc.matcher = p == 0 ? MatcherPolicy::YOUNGEST : MatcherPolicy::RANDOM;
+                sc.seed = 707;  // identical stream timing/noise seeds per policy pair
+                const SimResult r = runScenario(sc);
+                rmsZ[p] = Metrics::rms(r.window.errorsZ);
+                rmsXY[p] = Metrics::rms(r.window.errorsXY);
+                rows[p] = r.window_mean_rows;
+                cross[p] = r.window_cross_plane_frac;
+            }
+            std::printf("Matcher %-16s %-7s | YOUNGEST: rows=%4.1f cross=%4.1f%% rmsZ=%5.3f rmsXY=%5.3f"
+                        " | RANDOM: rows=%4.1f cross=%4.1f%% rmsZ=%5.3f rmsXY=%5.3f\n",
+                        g.name, moving ? "moving" : "static",
+                        rows[0], cross[0] * 100.0, rmsZ[0], rmsXY[0],
+                        rows[1], cross[1] * 100.0, rmsZ[1], rmsXY[1]);
+
+            // RANDOM must populate far more distinct pairs...
+            EXPECT_GE(rows[1], rows[0] * 1.5);
+            // ...and must not degrade accuracy.
+            EXPECT_LE(rmsZ[1], rmsZ[0] * 1.05 + 0.01);
+            EXPECT_LE(rmsXY[1], rmsXY[0] * 1.15 + 0.01);
+        }
     }
 }
 
