@@ -1668,6 +1668,7 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
         // TDoAs against post-reinit anchor coordinates emits transient bad
         // positions. If the mutex is contended, retry on the next wake.
         if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
+            s_estimatorWakeTimeoutMs = 2;  // retry promptly
             return;
         }
         uint32_t fresh_cleared = 0;
@@ -1684,6 +1685,7 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
         window_state = tdoa_estimator::WindowEstimatorState{};
         last_solve_us = 0;
         first_estimation = false;
+        s_estimatorWakeTimeoutMs = 1;  // resume solving on the next wake
         LOG_INFO("Sliding-window estimator (re)initialized, measurement window cleared");
         return;
     }
@@ -1702,11 +1704,11 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
         s_estimatorWakeTimeoutMs = std::max(1u, cadence_ms - elapsed_ms);
         return;
     }
-    s_estimatorWakeTimeoutMs = cadence_ms;
 
     PairSlot snapshot[kNumPairs];
     etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
+        s_estimatorWakeTimeoutMs = 2;  // retry promptly
         return;
     }
     const tdoa::WindowSnapshotResult snap = tdoa::SnapshotWindowMeasurements(
@@ -1839,6 +1841,17 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
                   accepted ? "OK" : "INVALID");
         position_last_log_time_ms = now_position_log;
     }
+
+    // Re-arm the wake timeout from the ACTUAL remaining time, measured after
+    // the solve/send work, so processing time does not stretch the cadence
+    // (arming a full cadence before the work would drift gaps to
+    // cadence + solve time during notification stalls).
+    const uint64_t end_us = static_cast<uint64_t>(esp_timer_get_time());
+    const uint64_t spent_us = end_us - last_solve_us;
+    const uint64_t cadence_us = static_cast<uint64_t>(cadence_ms) * 1000u;
+    s_estimatorWakeTimeoutMs = spent_us >= cadence_us
+        ? 1u
+        : std::max<uint32_t>(1u, static_cast<uint32_t>((cadence_us - spent_us) / 1000u));
 }
 #endif // USE_UWB_TDOA_WINDOW_ESTIMATOR
 
