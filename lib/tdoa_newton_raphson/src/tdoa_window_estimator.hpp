@@ -37,9 +37,18 @@ struct WindowEstimatorOptions {
     Scalar prior_vel_m_s = 3.0f;
     Scalar prior_sigma_max_m = 10.0f;
     // Reported covariance clamp: axes the data cannot observe saturate at this
-    // variance instead of going unbounded (or being gated away).
-    Scalar report_var_max_m2 = 25.0f;
+    // variance instead of going unbounded (or being gated away). Kept modest:
+    // ArduPilot collapses the covariance to one scalar via
+    // cbrt(varx^2+vary^2+varz^2), so a huge single-axis variance would stall
+    // fusion of ALL axes instead of de-weighting one.
+    Scalar report_var_max_m2 = 4.0f;
     Scalar report_var_min_m2 = 1e-4f;
+    // Temporal-correlation inflation of the reported covariance. Window fixes
+    // reuse measurements across ~window/cadence consecutive solves, so their
+    // errors are correlated; a downstream EKF fusing them as independent
+    // over-counts information by that factor. The caller should set this to
+    // window_max_age / solve_cadence (>= 1).
+    Scalar covariance_reuse_scale = 7.5f;
     // Velocity compensation: roll each measurement forward to solve time using
     // an EMA velocity from consecutive fixes (removes age-induced lag when the
     // tag moves). Disabled automatically while no stable velocity is available.

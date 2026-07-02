@@ -208,6 +208,9 @@ bool computeClampedCovariance(const WindowRow* rows,
     const int dof = std::max(1, n - 3);
     double variance_factor = weighted_sse / static_cast<double>(dof);
     variance_factor = std::max(variance_factor, 0.25);
+    // Inflate for temporal correlation across consecutive window solves so
+    // the covariance is honest per-stream, not just per-fix.
+    variance_factor *= std::max(1.0, static_cast<double>(options.covariance_reuse_scale));
 
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 3, 3>> es(info);
     if (es.info() != Eigen::Success) {

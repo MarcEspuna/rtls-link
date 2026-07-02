@@ -106,6 +106,11 @@ struct Scenario {
     // GEOMETRIC matcher tuning (header defaults unless overridden)
     Scalar geo_trace_blend = 0.05f;
     Scalar geo_refresh_discount = 1.6f;
+    uint64_t window_cadence_us = 20000;  // window pipeline solve/emit period
+    // Covariance output model (mirrors firmware): correlation scaling on by
+    // default; set false + var_max=25 to reproduce the pre-fix firmware.
+    bool cov_reuse_scaling = true;
+    Scalar cov_var_max = 4.0f;
     uint32_t seed = 1234;
 };
 
@@ -227,6 +232,7 @@ struct EmitRecord {
     double t_s = 0.0;
     PosVector3D est = PosVector3D::Zero();
     double sigma_reported_m = -1.0;  // sqrt(trace(cov)/3), -1 if unavailable
+    double var_reported[3] = {-1.0, -1.0, -1.0};  // covariance diagonal (m^2)
 };
 
 struct Metrics {
@@ -239,7 +245,8 @@ struct Metrics {
     double warmup_s = 2.0;
 
     void addEmit(double t_s, const PosVector3D& est, const PosVector3D& truth,
-                 double sigma_reported_m = -1.0)
+                 double sigma_reported_m = -1.0,
+                 const double* var_reported = nullptr)
     {
         emit_times_s.push_back(t_s);
         if (t_s < warmup_s) return;
@@ -247,7 +254,13 @@ struct Metrics {
         errors3d.push_back(d.norm());
         errorsXY.push_back(d.head<2>().norm());
         errorsZ.push_back(std::fabs(d(2)));
-        records.push_back(EmitRecord{t_s, est, sigma_reported_m});
+        EmitRecord rec{t_s, est, sigma_reported_m, {-1.0, -1.0, -1.0}};
+        if (var_reported != nullptr) {
+            rec.var_reported[0] = var_reported[0];
+            rec.var_reported[1] = var_reported[1];
+            rec.var_reported[2] = var_reported[2];
+        }
+        records.push_back(rec);
     }
 
     double rateHz() const
@@ -341,7 +354,12 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
     // (capped at the 50ms watchdog), as set by estimatorProcessWindow.
     tdoa_estimator::WindowEstimatorState win_state;
     tdoa_estimator::WindowEstimatorOptions win_opts = window_options;
-    constexpr uint64_t kWindowCadenceUs = 20000;
+    const uint64_t kWindowCadenceUs = sc.window_cadence_us;
+    win_opts.report_var_max_m2 = sc.cov_var_max;
+    win_opts.covariance_reuse_scale = sc.cov_reuse_scaling
+        ? std::max(1.0f, static_cast<float>(win_opts.window_max_age_us)
+                       / static_cast<float>(kWindowCadenceUs))
+        : 1.0f;
     size_t fresh_count_w = 0;
     uint64_t last_notify_w_us = 0;
     bool notify_pending_w = false;
@@ -490,7 +508,11 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
             const double sigma = res.solve.covarianceValid
                 ? std::sqrt(res.solve.positionCovariance.trace() / 3.0)
                 : -1.0;
-            result.window.addEmit(t_s, res.solve.position, sc.trajectory(t_s), sigma);
+            const double vars[3] = {res.solve.positionCovariance(0, 0),
+                                    res.solve.positionCovariance(1, 1),
+                                    res.solve.positionCovariance(2, 2)};
+            result.window.addEmit(t_s, res.solve.position, sc.trajectory(t_s), sigma,
+                                  res.solve.covarianceValid ? vars : nullptr);
 
             // Publish the matcher snapshot (same weight model as the
             // estimator: age decay / sigma^2), mirroring the firmware.
@@ -881,6 +903,132 @@ double alongTrackLagMs(const Metrics& m, const Scenario& sc)
     return count > 0 ? sum_ms / static_cast<double>(count) : -1.0;
 }
 
+// ---------------------------------------------------------------------------
+// ArduPilot-like EKF consumer
+// ---------------------------------------------------------------------------
+// Per-axis constant-velocity Kalman filter fusing the emitted fixes exactly
+// the way EKF3 fuses external-nav position: assuming INDEPENDENT measurement
+// noise. If our fixes are time-correlated, the filter over-counts information
+// and chases the correlated error - this is what the pilot feels.
+
+struct EkfAxis {
+    double p = 0, v = 0;
+    double P00 = 25, P01 = 0, P11 = 25;
+
+    void predict(double dt, double q)
+    {
+        p += v * dt;
+        const double dt2 = dt * dt, dt3 = dt2 * dt;
+        P00 += 2 * dt * P01 + dt2 * P11 + q * dt3 / 3.0;
+        P01 += dt * P11 + q * dt2 / 2.0;
+        P11 += q * dt;
+    }
+
+    // Returns normalized innovation squared (NIS) for consistency checks.
+    double update(double z, double R)
+    {
+        const double y = z - p;
+        const double S = P00 + R;
+        const double K0 = P00 / S, K1 = P01 / S;
+        p += K0 * y;
+        v += K1 * y;
+        const double P00n = (1 - K0) * P00;
+        const double P01n = (1 - K0) * P01;
+        const double P11n = P11 - K1 * P01;
+        P00 = P00n; P01 = P01n; P11 = P11n;
+        return y * y / S;
+    }
+};
+
+struct EkfStudyResult {
+    double pos3d_rms = 0, posZ_rms = 0;
+    double vel3d_rms = 0, velZ_rms = 0;
+    double nis_mean = 0;
+    double rate_hz = 0;
+};
+
+enum class EkfNoiseMode {
+    FIXED,            // ArduPilot param-style fixed noise (ignores our covariance)
+    REPORTED,         // uses our reported per-fix sigma
+    REPORTED_SCALED,  // reported sigma inflated by a correlation factor
+    ARDUPILOT,        // exact AVCopter-4.6 path: posErr = cbrt(varx^2+vary^2+varz^2),
+                      // floored at VISO_POS_M_NSE; corr_scale multiplies the
+                      // variances (models firmware-side covariance scaling) and
+                      // var_cap models the firmware's report_var_max clamp.
+};
+
+EkfStudyResult runEkfConsumer(const Metrics& m, const Scenario& sc,
+                              EkfNoiseMode mode, double fixed_sigma_m,
+                              double corr_scale, double var_cap = 25.0)
+{
+    EkfStudyResult out;
+    if (m.records.size() < 50) return out;
+
+    EkfAxis axis[3];
+    // Hover-ish process noise (accel PSD, m^2/s^3) - EKF3 external-nav scale.
+    const double q = 3.0;
+
+    double prev_t = m.records.front().t_s;
+    // Initialize at first fix.
+    for (int a = 0; a < 3; ++a) {
+        axis[a].p = m.records.front().est(a);
+    }
+
+    std::vector<double> e3d, eZ, ev3d, evZ;
+    double nis_sum = 0;
+    size_t nis_n = 0;
+
+    for (size_t i = 1; i < m.records.size(); ++i) {
+        const auto& r = m.records[i];
+        const double dt = r.t_s - prev_t;
+        if (dt <= 0 || dt > 1.0) { prev_t = r.t_s; continue; }
+        prev_t = r.t_s;
+
+        double sigma = fixed_sigma_m;
+        if (mode == EkfNoiseMode::ARDUPILOT && r.var_reported[0] > 0) {
+            double s2 = 0;
+            for (int a = 0; a < 3; ++a) {
+                const double v = std::min(r.var_reported[a] * corr_scale, var_cap);
+                s2 += v * v;
+            }
+            // GCS_Common.cpp: posErr = cbrtf(sq(cov[0])+sq(cov[6])+sq(cov[11]));
+            // AP_VisualOdom_MAV.cpp: constrained to >= VISO_POS_M_NSE.
+            sigma = std::max(std::cbrt(s2), fixed_sigma_m);
+        } else if (mode != EkfNoiseMode::FIXED && r.sigma_reported_m > 0) {
+            sigma = r.sigma_reported_m;
+            if (mode == EkfNoiseMode::REPORTED_SCALED) sigma *= corr_scale;
+        }
+        const double R = sigma * sigma;
+
+        for (int a = 0; a < 3; ++a) {
+            axis[a].predict(dt, q);
+            nis_sum += axis[a].update(r.est(a), R);
+            ++nis_n;
+        }
+
+        // Evaluate against truth (skip the filter's own settling: 3s).
+        if (r.t_s < m.warmup_s + 3.0) continue;
+        const PosVector3D truth = sc.trajectory(r.t_s);
+        const double h = 0.02;
+        const PosVector3D vtruth =
+            (sc.trajectory(r.t_s + h) - sc.trajectory(r.t_s - h)) / static_cast<Scalar>(2 * h);
+        const double ex = axis[0].p - truth(0), ey = axis[1].p - truth(1), ez = axis[2].p - truth(2);
+        const double vx = axis[0].v - vtruth(0), vy = axis[1].v - vtruth(1), vz = axis[2].v - vtruth(2);
+        e3d.push_back(std::sqrt(ex * ex + ey * ey + ez * ez));
+        eZ.push_back(std::fabs(ez));
+        ev3d.push_back(std::sqrt(vx * vx + vy * vy + vz * vz));
+        evZ.push_back(std::fabs(vz));
+    }
+
+    out.pos3d_rms = Metrics::rms(e3d);
+    out.posZ_rms = Metrics::rms(eZ);
+    out.vel3d_rms = Metrics::rms(ev3d);
+    out.velZ_rms = Metrics::rms(evZ);
+    out.nis_mean = nis_n > 0 ? nis_sum / static_cast<double>(nis_n) : 0;
+    out.rate_hz = m.rateHz();
+    return out;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1268,96 @@ TEST(TDoAWindowSim, MatcherPolicyPairStarvation)
             }
         }
     }
+}
+
+// Does ArduPilot actually benefit from 50Hz of window-correlated fixes?
+// Field hypothesis after A/B flights: the old batch pipeline (independent
+// ~30Hz fixes) flies smoother than the 50Hz sliding window, especially Z.
+// This study feeds an EKF3-style constant-velocity filter with fixes from
+// different cadence/window/noise configurations of the SAME measurement
+// stream and measures the filter's state quality (velocity error = what the
+// controller feels).
+TEST(TDoAWindowSim, EkfConsumerStudy)
+{
+    auto makeScenario = [](uint64_t cadence_us) {
+        Scenario sc;
+        sc.name = "ekf-study";
+        sc.anchors = makeTwoPlaneAnchors(10.0f, 8.0f, 0.3f, 2.8f);
+        // Circuit with altitude excursions ABOVE the upper anchor plane
+        // (z up to 3.7m vs planes at 0.3/2.8m): outside the vertical envelope
+        // the Z information genuinely collapses - this is where the reported
+        // covariance and its clamps actually matter.
+        sc.trajectory = [](double t) {
+            PosVector3D q;
+            q << 5.0f + 2.5f * std::cos(0.7 * t),
+                 4.0f + 2.5f * std::sin(0.7 * t),
+                 2.0f + 1.7f * std::sin(0.25 * t);
+            return q;
+        };
+        sc.anchor_bias_sigma_m = 0.03f;
+        sc.pair_bias_sigma_m = 0.03f;
+        // Rotating NLOS bursts, as in the field.
+        for (int i = 0; i < 9; ++i) {
+            NlosEvent ev;
+            ev.anchor = static_cast<uint8_t>(i % kNumAnchors);
+            ev.start_s = 4.0 + 6.0 * i;
+            ev.end_s = ev.start_s + 3.0;
+            ev.bias_m = 0.9f;
+            sc.nlos.push_back(ev);
+        }
+        sc.matcher = MatcherPolicy::GEOMETRIC;
+        sc.window_cadence_us = cadence_us;
+        sc.seed = 909;
+        return sc;
+    };
+
+    struct Config {
+        const char* name;
+        uint64_t cadence_us;
+        uint32_t window_age_us;
+        EkfNoiseMode mode;
+        double fixed_sigma;
+        double corr_scale;
+        bool legacy_cov;  // pre-fix firmware covariance (no scaling, cap 25)
+        bool use_batch;   // evaluate the old batch pipeline from the same run
+    };
+    const double kFixedSigma = 0.2;  // ArduPilot VISO_POS_M_NSE default
+    const Config configs[] = {
+        {"batch ~30Hz indep     R=fix ", 20000, 150000, EkfNoiseMode::FIXED, kFixedSigma, 1.0, true, true},
+        {"win 150/20ms (50Hz)   R=fix ", 20000, 150000, EkfNoiseMode::FIXED, kFixedSigma, 1.0, true, false},
+        {"win 150/40ms (25Hz)   R=fix ", 40000, 150000, EkfNoiseMode::FIXED, kFixedSigma, 1.0, true, false},
+        {"win 250/50ms (20Hz)   R=fix ", 50000, 250000, EkfNoiseMode::FIXED, kFixedSigma, 1.0, true, false},
+        {"win 150/20ms R=fix*sqrt7.5  ", 20000, 150000, EkfNoiseMode::FIXED, kFixedSigma * 2.74, 1.0, true, false},
+        // Exact AVCopter-4.6 posErr path (message covariance + VISO floor):
+        {"AP4.6 pre-fix cov (AS FLOWN)", 20000, 150000, EkfNoiseMode::ARDUPILOT, kFixedSigma, 1.0, true, false},
+        {"AP4.6 new cov (scaled,cap4) ", 20000, 150000, EkfNoiseMode::ARDUPILOT, kFixedSigma, 1.0, false, false},
+        {"AP4.6 new cov + VISO=0.55   ", 20000, 150000, EkfNoiseMode::ARDUPILOT, kFixedSigma * 2.74, 1.0, false, false},
+    };
+
+    double batch_velZ = 0, flown_velZ = 0, newcov_velZ = 0, best_velZ = 1e9;
+    for (const auto& c : configs) {
+        Scenario sc = makeScenario(c.cadence_us);
+        sc.cov_reuse_scaling = !c.legacy_cov;
+        sc.cov_var_max = c.legacy_cov ? 25.0f : 4.0f;
+        tdoa_estimator::WindowEstimatorOptions opts;
+        opts.window_max_age_us = c.window_age_us;
+        const SimResult r = runScenario(sc, false, opts);
+        const Metrics& m = c.use_batch ? r.current : r.window;
+        const EkfStudyResult e = runEkfConsumer(m, sc, c.mode, c.fixed_sigma, c.corr_scale);
+        std::printf("EKF %-28s rate=%5.1fHz | ekfPos3d=%5.3f ekfPosZ=%5.3f | "
+                    "ekfVel3d=%5.3f ekfVelZ=%5.3f | NIS=%5.2f\n",
+                    c.name, e.rate_hz, e.pos3d_rms, e.posZ_rms,
+                    e.vel3d_rms, e.velZ_rms, e.nis_mean);
+        if (c.use_batch) batch_velZ = e.velZ_rms;
+        if (std::string(c.name).find("AS FLOWN") != std::string::npos) flown_velZ = e.velZ_rms;
+        if (std::string(c.name).find("new cov (scaled") != std::string::npos) newcov_velZ = e.velZ_rms;
+        if (!c.use_batch) best_velZ = std::min(best_velZ, e.velZ_rms);
+    }
+    // The corrected covariance must improve on the as-flown configuration...
+    EXPECT_LE(newcov_velZ, flown_velZ * 1.01);
+    // ...and the study must produce a window configuration at least as good
+    // as the old batch pipeline for the EKF.
+    EXPECT_LE(best_velZ, batch_velZ * 1.05 + 0.005);
 }
 
 // Corner-of-cell / asymmetric geometry: adaptive targeting should show its

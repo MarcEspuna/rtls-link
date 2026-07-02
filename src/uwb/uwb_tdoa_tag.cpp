@@ -1894,6 +1894,11 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
     tdoa_estimator::WindowEstimatorOptions options;
     options.min_unique_anchors = kWindow3DUniqueAnchorsForSolve;
     options.window_max_age_us = window_age_ms * 1000u;
+    // Consecutive solves reuse ~window/cadence of their measurements; inflate
+    // the reported covariance accordingly so ArduPilot's EKF (which fuses
+    // fixes as independent) is not over-confident at high emit rates.
+    options.covariance_reuse_scale = std::max(
+        1.0f, static_cast<float>(window_age_ms) / static_cast<float>(cadence_ms));
 
     const uint64_t solve_start_us = static_cast<uint64_t>(esp_timer_get_time());
     const tdoa_estimator::WindowEstimatorResult result = tdoa_estimator::estimateWindow3D(
