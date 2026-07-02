@@ -24,6 +24,9 @@
 #ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
 #include "tdoa_window_estimator.hpp"
 #endif
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+#include "tdoa_matcher_score.hpp"
+#endif
 
 #include "tag/tdoa_tag_algorithm.hpp"
 
@@ -517,6 +520,11 @@ static std::atomic<uint32_t> s_estimatorProducerDroppedTotal{0};
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
 {
 #ifdef ESP32S3_UWB_BOARD
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    if (policy == 2) {
+        return TdoaEngineMatchingAlgorithmScored;
+    }
+#endif
     return policy == 1
         ? TdoaEngineMatchingAlgorithmRandom
         : TdoaEngineMatchingAlgorithmYoungest;
@@ -531,11 +539,133 @@ static const char* matcherPolicyName(tdoaEngineMatchingAlgorithm_t policy)
     switch (policy) {
         case TdoaEngineMatchingAlgorithmRandom:
             return "RANDOM";
+        case TdoaEngineMatchingAlgorithmScored:
+            return "GEOMETRIC(scored)";
         case TdoaEngineMatchingAlgorithmYoungest:
         default:
             return "YOUNGEST";
     }
 }
+
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+// Window-information matcher state. The estimator task publishes its
+// age-decayed information state after each accepted solve; the scorer runs
+// in the radio path and reads it lock-free. Double-buffered with an atomic
+// index: the writer fills the inactive slot then flips, so a reader's slot
+// stays stable for at least one full solve cadence (>=5ms) - orders of
+// magnitude longer than the microseconds the read takes.
+struct MatcherSnapshot {
+    tdoa_estimator::Scalar info[6] = {};
+    tdoa_estimator::Scalar tag_pos[3] = {};
+    tdoa_estimator::Scalar pair_weight[kNumPairs] = {};
+    float anchor_pos[kNumAnchors][3] = {};
+    bool anchor_configured[kNumAnchors] = {};
+    uint64_t solve_time_us = 0;
+};
+static MatcherSnapshot s_matcherSnapshots[2];
+static std::atomic<uint8_t> s_matcherSnapshotIndex{0};
+static constexpr uint64_t kMatcherSnapshotStaleUs = 500000;
+
+// Estimator task only (single writer).
+static void publishMatcherSnapshot(const PairSlot* rows,
+                                   size_t row_count,
+                                   const etl::array<UWBAnchorParam, kNumAnchors>& anchors,
+                                   const etl::array<bool, kNumAnchors>& configured,
+                                   const tdoa_estimator::PosVector3D& tag_position,
+                                   uint64_t now_us,
+                                   uint32_t age_half_life_us)
+{
+    const uint8_t next = static_cast<uint8_t>(1u - s_matcherSnapshotIndex.load(std::memory_order_relaxed));
+    MatcherSnapshot& snap = s_matcherSnapshots[next];
+
+    snap = MatcherSnapshot{};
+    snap.solve_time_us = now_us;
+    for (uint8_t i = 0; i < 3; ++i) {
+        snap.tag_pos[i] = tag_position(i);
+    }
+    for (uint8_t a = 0; a < kNumAnchors; ++a) {
+        snap.anchor_configured[a] = configured[a];
+        snap.anchor_pos[a][0] = anchors[a].x;
+        snap.anchor_pos[a][1] = anchors[a].y;
+        snap.anchor_pos[a][2] = anchors[a].z;
+    }
+
+    tdoa_estimator::PackedInfo3 info;
+    for (size_t i = 0; i < row_count; ++i) {
+        const PairSlot& s = rows[i];
+        if (s.anchor_a >= kNumAnchors || s.anchor_b >= kNumAnchors) {
+            continue;
+        }
+        const uint64_t age_us = now_us >= s.timestamp_us ? now_us - s.timestamp_us : 0;
+        tdoa_estimator::Scalar sigma = (std::isfinite(s.sigma_m) && s.sigma_m > 0.05f)
+            ? s.sigma_m : 0.05f;
+        const tdoa_estimator::Scalar age_weight = age_half_life_us > 0
+            ? 1.0f / (1.0f + static_cast<tdoa_estimator::Scalar>(age_us)
+                             / static_cast<tdoa_estimator::Scalar>(age_half_life_us))
+            : 1.0f;
+        const tdoa_estimator::Scalar w = age_weight / (sigma * sigma);
+
+        tdoa_estimator::PosVector3D pos_a;
+        pos_a << anchors[s.anchor_a].x, anchors[s.anchor_a].y, anchors[s.anchor_a].z;
+        tdoa_estimator::PosVector3D pos_b;
+        pos_b << anchors[s.anchor_b].x, anchors[s.anchor_b].y, anchors[s.anchor_b].z;
+        const tdoa_estimator::PosVector3D g =
+            tdoa_estimator::tdoaPairGradient(tag_position, pos_a, pos_b);
+        info.addOuter(g, w);
+
+        tdoa::AnchorPair pair;
+        bool reversed = false;
+        if (tdoa::CanonicalizePair(s.anchor_a, s.anchor_b, kNumAnchors, pair, reversed)) {
+            snap.pair_weight[tdoa::PairIndexCanonical(pair, kNumAnchors)] = w;
+        }
+    }
+    std::copy(info.m, info.m + 6, snap.info);
+
+    s_matcherSnapshotIndex.store(next, std::memory_order_release);
+}
+
+// Radio path (reader). Returns NAN when scoring is unavailable so the engine
+// falls back to RANDOM matching.
+static float geometricMatchScorer(uint8_t newAnchorId, uint8_t candidateAnchorId)
+{
+    if (newAnchorId >= kNumAnchors || candidateAnchorId >= kNumAnchors
+        || newAnchorId == candidateAnchorId) {
+        return NAN;
+    }
+
+    const MatcherSnapshot& snap =
+        s_matcherSnapshots[s_matcherSnapshotIndex.load(std::memory_order_acquire)];
+    if (snap.solve_time_us == 0) {
+        return NAN;
+    }
+    const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+    if (now_us - snap.solve_time_us > kMatcherSnapshotStaleUs) {
+        return NAN;
+    }
+    if (!snap.anchor_configured[newAnchorId] || !snap.anchor_configured[candidateAnchorId]) {
+        return NAN;
+    }
+
+    tdoa::AnchorPair pair;
+    bool reversed = false;
+    if (!tdoa::CanonicalizePair(newAnchorId, candidateAnchorId, kNumAnchors, pair, reversed)) {
+        return NAN;
+    }
+
+    tdoa_estimator::PosVector3D tag;
+    tag << snap.tag_pos[0], snap.tag_pos[1], snap.tag_pos[2];
+    tdoa_estimator::PosVector3D pos_a;
+    pos_a << snap.anchor_pos[newAnchorId][0], snap.anchor_pos[newAnchorId][1],
+             snap.anchor_pos[newAnchorId][2];
+    tdoa_estimator::PosVector3D pos_b;
+    pos_b << snap.anchor_pos[candidateAnchorId][0], snap.anchor_pos[candidateAnchorId][1],
+             snap.anchor_pos[candidateAnchorId][2];
+
+    return tdoa_estimator::matcherScorePair(
+        snap.info, tag, pos_a, pos_b,
+        snap.pair_weight[tdoa::PairIndexCanonical(pair, kNumAnchors)]);
+}
+#endif // USE_UWB_TDOA_GEOMETRIC_MATCHER
 
 static uint8_t configuredMatcherPolicy()
 {
@@ -978,6 +1108,9 @@ UWBTagTDoA::UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnch
     LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
 
 #ifdef ESP32S3_UWB_BOARD
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    uwbTdoa2TagSetMatchScorer(geometricMatchScorer);
+#endif
     ApplyMatcherPolicy(uwbParams.tdoaMatcherPolicy);
 #endif
 
@@ -1707,6 +1840,7 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
 
     PairSlot snapshot[kNumPairs];
     etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
+    etl::array<bool, kNumAnchors> configured_snapshot = {};
     if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
         s_estimatorWakeTimeoutMs = 2;  // retry promptly
         return;
@@ -1720,6 +1854,7 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
         snapshot,
         kNumPairs);
     anchor_snapshot = anchor_positions;
+    configured_snapshot = configured_anchor_ids;
     xSemaphoreGive(measurements_mtx);
 
     const uint32_t fresh_delta = snap.consumed + snap.expired;
@@ -1807,6 +1942,10 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
 #endif
 
     if (accepted) {
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+        publishMatcherSnapshot(snapshot, snap.copied, anchor_snapshot, configured_snapshot,
+                               result.solve.position, now_us, options.age_half_life_us);
+#endif
         recordEstimatorAccepted(result.solve.position(0),
                                 result.solve.position(1),
                                 result.solve.position(2),

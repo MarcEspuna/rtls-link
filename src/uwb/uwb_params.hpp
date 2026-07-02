@@ -147,7 +147,7 @@ struct UWBParams {
     uint16_t tdoaAnchorTelemetryIntervalMs = 1000; // UDP telemetry interval, clamped to 250-60000ms
     uint16_t tdoaAnchorTelemetryPort = 3335;    // UDP destination port for anchor stats telemetry
 #ifdef ESP32S3_UWB_BOARD
-    uint8_t tdoaMatcherPolicy = 0;      // 0=YOUNGEST, 1=RANDOM/rotating eligible candidate
+    uint8_t tdoaMatcherPolicy = 0;      // 0=YOUNGEST, 1=RANDOM, 2=GEOMETRIC (window-information scored; needs window estimator)
 #endif
 
     // Dynamic anchor positioning (TDoA tags)

@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include "tdoa_matcher_score.hpp"
 #include "tdoa_robust_estimator.hpp"
 #include "tdoa_window_estimator.hpp"
 #include "uwb/tdoa_measurement_buffer.hpp"
@@ -85,7 +86,7 @@ struct NlosEvent {
     Scalar bias_m = 0.0f;
 };
 
-enum class MatcherPolicy { YOUNGEST, RANDOM };
+enum class MatcherPolicy { YOUNGEST, RANDOM, GEOMETRIC };
 
 struct Scenario {
     std::string name;
@@ -94,9 +95,17 @@ struct Scenario {
     double duration_s = 60.0;
     double packet_loss = 0.10;      // P(anchor packet not received)
     double unreliable_drop = 0.10;  // P(TDoA dropped upstream: clock corr unreliable)
-    Scalar noise_sigma_m = 0.08f;   // per-row TDoA noise
+    Scalar noise_sigma_m = 0.08f;   // per-row TDoA white noise
+    // Pair-persistent errors (multipath, antenna-delay residuals): constant
+    // for the run, so re-measuring the same pair repeats the bias instead of
+    // averaging it out — this is where pair diversity actually pays.
+    Scalar anchor_bias_sigma_m = 0.0f;
+    Scalar pair_bias_sigma_m = 0.0f;
     std::vector<NlosEvent> nlos;
     MatcherPolicy matcher = MatcherPolicy::YOUNGEST;
+    // GEOMETRIC matcher tuning (header defaults unless overridden)
+    Scalar geo_trace_blend = 0.05f;
+    Scalar geo_refresh_discount = 1.6f;
     uint32_t seed = 1234;
 };
 
@@ -350,9 +359,20 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
 
     const uint64_t duration_us = static_cast<uint64_t>(sc.duration_s * 1e6);
 
+    // Pair-persistent error draws (constant for the run).
+    std::array<Scalar, kNumAnchors> anchor_bias = {};
+    std::array<Scalar, kNumPairs> pair_bias = {};
+    for (auto& b : anchor_bias) {
+        b = static_cast<Scalar>(gauss(rng)) * sc.anchor_bias_sigma_m;
+    }
+    for (auto& b : pair_bias) {
+        b = static_cast<Scalar>(gauss(rng)) * sc.pair_bias_sigma_m;
+    }
+
     auto trueDistance = [&](uint8_t anchor, double t_s) -> Scalar {
         const PosVector3D tag = sc.trajectory(t_s);
-        return (tag - sc.anchors[anchor]).norm() + nlosBias(sc, anchor, t_s);
+        return (tag - sc.anchors[anchor]).norm() + nlosBias(sc, anchor, t_s)
+            + anchor_bias[anchor];
     };
 
     auto runCurrentConsumer = [&](uint64_t now_us) {
@@ -424,6 +444,16 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
     size_t window_rows_sum = 0;
     size_t window_cross_sum = 0;
 
+    // Matcher snapshot published by the window solve — mirrors the firmware's
+    // seqlock-published state (only updated at solve time, stale -> fallback).
+    struct SimMatcherSnapshot {
+        bool valid = false;
+        uint64_t t_us = 0;
+        tdoa_estimator::Scalar info[6] = {};
+        PosVector3D tag = PosVector3D::Zero();
+        std::array<Scalar, kNumPairs> pair_weight = {};
+    } matcher_snap;
+
     auto runWindowConsumer = [&](uint64_t now_us) {
         tdoa::MeasurementSlot snapshot[kNumPairs];
         const auto snap = tdoa::SnapshotWindowMeasurements(
@@ -461,6 +491,26 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
                 ? std::sqrt(res.solve.positionCovariance.trace() / 3.0)
                 : -1.0;
             result.window.addEmit(t_s, res.solve.position, sc.trajectory(t_s), sigma);
+
+            // Publish the matcher snapshot (same weight model as the
+            // estimator: age decay / sigma^2), mirroring the firmware.
+            matcher_snap.valid = true;
+            matcher_snap.t_us = now_us;
+            matcher_snap.tag = res.solve.position;
+            matcher_snap.pair_weight.fill(0.0f);
+            tdoa_estimator::PackedInfo3 info;
+            for (size_t i = 0; i < snap.copied; ++i) {
+                const auto& s = snapshot[i];
+                const Scalar age_s_v = static_cast<Scalar>(now_us - s.timestamp_us) * 1e-6f;
+                Scalar sigma_m = s.sigma_m;
+                if (!(sigma_m > 0.05f)) sigma_m = 0.05f;
+                const Scalar w = (1.0f / (1.0f + age_s_v / 0.030f)) / (sigma_m * sigma_m);
+                const PosVector3D g = tdoa_estimator::tdoaPairGradient(
+                    res.solve.position, sc.anchors[s.anchor_a], sc.anchors[s.anchor_b]);
+                info.addOuter(g, w);
+                matcher_snap.pair_weight[pairIndex(s.anchor_a, s.anchor_b)] = w;
+            }
+            std::copy(info.m, info.m + 6, matcher_snap.info);
         }
     };
 
@@ -499,8 +549,6 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
                     if (best < 0 || last_rx_us[m] > last_rx_us[best]) best = m;
                 }
             } else {
-                // RANDOM: rotating pick among all eligible remote candidates,
-                // spreading production across all 28 pairs over time.
                 uint8_t eligible[kNumAnchors];
                 uint8_t eligible_count = 0;
                 for (uint8_t m = 0; m < kNumAnchors; ++m) {
@@ -508,7 +556,29 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
                     if (rx_us - last_rx_us[m] > 50000) continue;
                     eligible[eligible_count++] = m;
                 }
-                if (eligible_count > 0) {
+                const bool snap_usable = sc.matcher == MatcherPolicy::GEOMETRIC
+                    && matcher_snap.valid
+                    && (rx_us - matcher_snap.t_us) <= 500000;
+                if (snap_usable && eligible_count > 0) {
+                    // GEOMETRIC: E-optimal refresh gain against the published
+                    // window information (shared scorer = firmware code).
+                    Scalar best_score = -std::numeric_limits<Scalar>::max();
+                    for (uint8_t e = 0; e < eligible_count; ++e) {
+                        const uint8_t m = eligible[e];
+                        const Scalar score = tdoa_estimator::matcherScorePair(
+                            matcher_snap.info, matcher_snap.tag,
+                            sc.anchors[anchor], sc.anchors[m],
+                            matcher_snap.pair_weight[pairIndex(anchor, m)],
+                            tdoa_estimator::kMatcherFullRowWeight,
+                            sc.geo_trace_blend, sc.geo_refresh_discount);
+                        if (score > best_score) {
+                            best_score = score;
+                            best = m;
+                        }
+                    }
+                } else if (eligible_count > 0) {
+                    // RANDOM (also the GEOMETRIC cold-start/stale fallback):
+                    // rotating pick among all eligible remote candidates.
                     best = eligible[static_cast<size_t>(uni(rng) * eligible_count)
                                     % eligible_count];
                 }
@@ -530,6 +600,8 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
                     diff = -diff;
                 }
                 const uint8_t idx = pairIndex(a, b);
+                // Pair-persistent bias attaches to the canonical direction.
+                diff += pair_bias[idx];
                 for (auto* slots : {&slots_current, &slots_window}) {
                     auto& slot = (*slots)[idx];
                     const bool was_fresh = slot.fresh;
@@ -995,42 +1067,120 @@ TEST(TDoAWindowSim, MatcherPolicyPairStarvation)
     };
 
     for (const auto& g : geoms) {
-        for (const bool moving : {false, true}) {
-            double rmsZ[2] = {}, rmsXY[2] = {}, rows[2] = {}, cross[2] = {};
-            for (int p = 0; p < 2; ++p) {
-                Scenario sc;
-                sc.name = std::string(g.name) + (moving ? "/moving" : "/static");
-                sc.anchors = makeTwoPlaneAnchors(10.0f, 8.0f, g.z_low, g.z_high);
-                if (moving) {
-                    sc.trajectory = [](double t) {
-                        PosVector3D q;
-                        q << 5.0f + 2.5f * std::cos(0.7 * t),
-                             4.0f + 2.5f * std::sin(0.7 * t),
-                             1.2f + 0.4f * std::sin(0.3 * t);
-                        return q;
-                    };
-                } else {
-                    sc.trajectory = [](double) { PosVector3D q; q << 4.0f, 3.0f, 1.2f; return q; };
+        for (const bool biased : {false, true}) {
+            for (const bool moving : {false, true}) {
+                constexpr int kPolicies = 3;
+                const char* names[kPolicies] = {"YOUNGEST", "RANDOM", "GEOMETRIC"};
+                double rmsZ[kPolicies] = {}, rmsXY[kPolicies] = {},
+                       rows[kPolicies] = {}, cross[kPolicies] = {};
+                for (int p = 0; p < kPolicies; ++p) {
+                    Scenario sc;
+                    sc.name = std::string(g.name) + (moving ? "/moving" : "/static");
+                    sc.anchors = makeTwoPlaneAnchors(10.0f, 8.0f, g.z_low, g.z_high);
+                    if (moving) {
+                        sc.trajectory = [](double t) {
+                            PosVector3D q;
+                            q << 5.0f + 2.5f * std::cos(0.7 * t),
+                                 4.0f + 2.5f * std::sin(0.7 * t),
+                                 1.2f + 0.4f * std::sin(0.3 * t);
+                            return q;
+                        };
+                    } else {
+                        sc.trajectory = [](double) { PosVector3D q; q << 4.0f, 3.0f, 1.2f; return q; };
+                    }
+                    if (biased) {
+                        // Pair-persistent multipath / antenna-delay residuals.
+                        sc.anchor_bias_sigma_m = 0.03f;
+                        sc.pair_bias_sigma_m = 0.03f;
+                    }
+                    sc.matcher = static_cast<MatcherPolicy>(p);
+                    sc.seed = 707;  // identical stream/bias draws per policy
+                    const SimResult r = runScenario(sc);
+                    rmsZ[p] = Metrics::rms(r.window.errorsZ);
+                    rmsXY[p] = Metrics::rms(r.window.errorsXY);
+                    rows[p] = r.window_mean_rows;
+                    cross[p] = r.window_cross_plane_frac;
                 }
-                sc.matcher = p == 0 ? MatcherPolicy::YOUNGEST : MatcherPolicy::RANDOM;
-                sc.seed = 707;  // identical stream timing/noise seeds per policy pair
-                const SimResult r = runScenario(sc);
-                rmsZ[p] = Metrics::rms(r.window.errorsZ);
-                rmsXY[p] = Metrics::rms(r.window.errorsXY);
-                rows[p] = r.window_mean_rows;
-                cross[p] = r.window_cross_plane_frac;
-            }
-            std::printf("Matcher %-16s %-7s | YOUNGEST: rows=%4.1f cross=%4.1f%% rmsZ=%5.3f rmsXY=%5.3f"
-                        " | RANDOM: rows=%4.1f cross=%4.1f%% rmsZ=%5.3f rmsXY=%5.3f\n",
-                        g.name, moving ? "moving" : "static",
-                        rows[0], cross[0] * 100.0, rmsZ[0], rmsXY[0],
-                        rows[1], cross[1] * 100.0, rmsZ[1], rmsXY[1]);
+                std::printf("Matcher %-14s %-6s %-6s |", g.name,
+                            biased ? "biased" : "white", moving ? "moving" : "static");
+                for (int p = 0; p < kPolicies; ++p) {
+                    std::printf(" %s: rows=%4.1f cross=%4.1f%% rmsZ=%5.3f rmsXY=%5.3f |",
+                                names[p], rows[p], cross[p] * 100.0, rmsZ[p], rmsXY[p]);
+                }
+                std::printf("\n");
 
-            // RANDOM must populate far more distinct pairs...
-            EXPECT_GE(rows[1], rows[0] * 1.5);
-            // ...and must not degrade accuracy.
-            EXPECT_LE(rmsZ[1], rmsZ[0] * 1.05 + 0.01);
-            EXPECT_LE(rmsXY[1], rmsXY[0] * 1.15 + 0.01);
+                // RANDOM must populate far more distinct pairs than YOUNGEST...
+                EXPECT_GE(rows[1], rows[0] * 1.5);
+                // ...and must not degrade accuracy.
+                EXPECT_LE(rmsZ[1], rmsZ[0] * 1.05 + 0.01);
+                EXPECT_LE(rmsXY[1], rmsXY[0] * 1.15 + 0.01);
+                // GEOMETRIC must beat RANDOM on the weak axis and not lose XY.
+                EXPECT_LE(rmsZ[2], rmsZ[1] * 1.02 + 0.005);
+                EXPECT_LE(rmsXY[2], rmsXY[1] * 1.10 + 0.01);
+            }
+        }
+    }
+}
+
+// Corner-of-cell / asymmetric geometry: adaptive targeting should show its
+// largest edge here (the information matrix is anisotropic in XY too).
+TEST(TDoAWindowSim, MatcherPolicyCornerGeometry)
+{
+    constexpr int kPolicies = 3;
+    const char* names[kPolicies] = {"YOUNGEST", "RANDOM", "GEOMETRIC"};
+    double rmsZ[kPolicies] = {}, rms3d[kPolicies] = {};
+    for (int p = 0; p < kPolicies; ++p) {
+        Scenario sc;
+        sc.name = "corner";
+        sc.anchors = makeTwoPlaneAnchors(10.0f, 8.0f, 0.3f, 1.5f);
+        // Slow loiter near a corner, outside the sweet spot.
+        sc.trajectory = [](double t) {
+            PosVector3D q;
+            q << 1.2f + 0.4f * std::cos(0.4 * t),
+                 1.2f + 0.4f * std::sin(0.4 * t),
+                 1.0f;
+            return q;
+        };
+        sc.anchor_bias_sigma_m = 0.03f;
+        sc.pair_bias_sigma_m = 0.03f;
+        sc.matcher = static_cast<MatcherPolicy>(p);
+        sc.seed = 808;
+        const SimResult r = runScenario(sc);
+        rmsZ[p] = Metrics::rms(r.window.errorsZ);
+        rms3d[p] = Metrics::rms(r.window.errors3d);
+        std::printf("Corner %s: rows=%4.1f cross=%4.1f%% rms3d=%5.3f rmsZ=%5.3f rmsXY=%5.3f\n",
+                    names[p], r.window_mean_rows, r.window_cross_plane_frac * 100.0,
+                    rms3d[p], rmsZ[p], Metrics::rms(r.window.errorsXY));
+    }
+    EXPECT_LE(rms3d[2], rms3d[1] * 1.02 + 0.005);   // GEOMETRIC >= RANDOM
+    EXPECT_LE(rms3d[1], rms3d[0]);                   // RANDOM >= YOUNGEST
+}
+
+// Matcher tuning sweep — not part of the regular suite.
+TEST(TDoAWindowSim, DISABLED_MatcherTuningSweep)
+{
+    struct Cfg { Scalar blend, discount; };
+    const Cfg cfgs[] = {{0.05f, 1.0f}, {0.05f, 1.3f}, {0.05f, 1.6f},
+                        {0.15f, 1.3f}, {0.30f, 1.3f}, {0.15f, 1.6f}};
+    for (const auto& c : cfgs) {
+        std::printf("=== blend=%.2f discount=%.1f ===\n", c.blend, c.discount);
+        for (const bool biased : {false, true}) {
+            for (const Scalar z_high : {2.8f, 1.5f}) {
+                Scenario sc;
+                sc.anchors = makeTwoPlaneAnchors(10.0f, 8.0f, 0.3f, z_high);
+                sc.trajectory = [](double) { PosVector3D q; q << 4.0f, 3.0f, 1.2f; return q; };
+                if (biased) { sc.anchor_bias_sigma_m = 0.03f; sc.pair_bias_sigma_m = 0.03f; }
+                sc.matcher = MatcherPolicy::GEOMETRIC;
+                sc.geo_trace_blend = c.blend;
+                sc.geo_refresh_discount = c.discount;
+                sc.duration_s = 40.0;
+                sc.seed = 707;
+                const SimResult r = runScenario(sc);
+                std::printf("  sep=%.1f %-6s rows=%4.1f cross=%4.1f%% rmsZ=%5.3f rmsXY=%5.3f\n",
+                            z_high - 0.3f, biased ? "biased" : "white",
+                            r.window_mean_rows, r.window_cross_plane_frac * 100.0,
+                            Metrics::rms(r.window.errorsZ), Metrics::rms(r.window.errorsXY));
+            }
         }
     }
 }

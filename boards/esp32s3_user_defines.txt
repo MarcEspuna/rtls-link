@@ -55,6 +55,13 @@
 -D USE_UWB_TDOA_WINDOW_ESTIMATOR
 
 ; -----------------------------------------------------------------------------
+; GEOMETRIC (WINDOW-INFORMATION) ANCHOR MATCHER (TDoA Tags)
+; E-optimal candidate scoring; select at runtime with UWB_MATCH_POL=2
+; Requires: USE_UWB_TDOA_WINDOW_ESTIMATOR
+; -----------------------------------------------------------------------------
+-D USE_UWB_TDOA_GEOMETRIC_MATCHER
+
+; -----------------------------------------------------------------------------
 ; DYNAMIC ANCHOR POSITIONING (TDoA Tags)
 ; Calculate anchor positions from inter-anchor ToF measurements
 ; Requires: USE_UWB_MODE_TDOA_TAG

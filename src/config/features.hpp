@@ -71,6 +71,13 @@
 // UWB_EST_MODE=3. Runtime default remains the robust batch estimator.
 #define USE_UWB_TDOA_WINDOW_ESTIMATOR
 
+// --- Window-information (geometric) anchor matcher (ESP32S3 TDoA tags) ---
+// E-optimal candidate scoring against the window estimator's published
+// information state; select at runtime with UWB_MATCH_POL=2.
+#if defined(ESP32S3_UWB_BOARD)
+#define USE_UWB_TDOA_GEOMETRIC_MATCHER
+#endif
+
 // --- Dynamic anchor position calculation (TDoA tags) ---
 // Enables automatic calculation of anchor positions from inter-anchor distances
 // #define USE_DYNAMIC_ANCHOR_POSITIONS
