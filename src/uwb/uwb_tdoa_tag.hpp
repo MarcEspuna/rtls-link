@@ -65,6 +65,10 @@ public:
      * @return true if enabled
      */
     static bool IsDynamicPositioningEnabled();
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    // Diagnostic JSON: dynamic anchor calculator accumulation state
+    static String DynamicAnchorStatusJson();
+#endif
     static bool AreDynamicAnchorPositionsReady();
 
     /**

@@ -867,6 +867,10 @@ static String positionEstimatorStatsJson()
     result += static_cast<unsigned long>(stats.compareFallbackLegacy);
     result += ",\"compareRobustInvalid\":";
     result += static_cast<unsigned long>(stats.compareRobustInvalid);
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    result += ",\"dynamicAnchors\":";
+    result += UWBTagTDoA::DynamicAnchorStatusJson();
+#endif
     result += "}";
     return result;
 }
@@ -2690,6 +2694,48 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
         giveDynamicCalcMutex();
     }
     if (!calculated) {
+        // Diagnostic: while geometry is pending, periodically report which
+        // pairs are still short on samples so field bring-up is debuggable.
+        static uint32_t s_lastPendingLogMs = 0;
+        if ((now - s_lastPendingLogMs) > 10000) {
+            s_lastPendingLogMs = now;
+            char missing[64];
+            size_t mlen = 0;
+            uint8_t ready_count = 0;
+            if (takeDynamicCalcMutex(pdMS_TO_TICKS(5))) {
+                for (uint8_t a = 0; a < dynamic_anchor_count && mlen + 6 < sizeof(missing); a++) {
+                    for (uint8_t b = static_cast<uint8_t>(a + 1); b < dynamic_anchor_count; b++) {
+                        if (s_dynamicCalc.debugDistanceReady(a, b)) {
+                            ready_count++;
+                        } else if (mlen + 6 < sizeof(missing)) {
+                            mlen += snprintf(missing + mlen, sizeof(missing) - mlen,
+                                             "%u%u(%u) ", a, b,
+                                             s_dynamicCalc.debugSampleCount(a, b));
+                        }
+                    }
+                }
+                // Key geometry for layout 0 (+X=A1, +Y=A3, corner=A2):
+                const float d01 = s_dynamicCalc.debugDistance(0, 1);
+                const float d03 = s_dynamicCalc.debugDistance(0, 3);
+                const float d02 = s_dynamicCalc.debugDistance(0, 2);
+                const float v04 = s_dynamicCalc.debugDistance(0, 4);
+                const float v15 = s_dynamicCalc.debugDistance(1, 5);
+                const float v26 = s_dynamicCalc.debugDistance(2, 6);
+                const float v37 = s_dynamicCalc.debugDistance(3, 7);
+                const float u45 = s_dynamicCalc.debugDistance(4, 5);
+                const float u47 = s_dynamicCalc.debugDistance(4, 7);
+                const float u46 = s_dynamicCalc.debugDistance(4, 6);
+                giveDynamicCalcMutex();
+                LOG_INFO("Dynamic geometry pending: %u pairs ready, missing: %s",
+                         ready_count, mlen > 0 ? missing : "none");
+                LOG_INFO("  lower: dX=%.2f dY=%.2f diag=%.2f (expect diag~%.2f) | upper: dX=%.2f dY=%.2f diag=%.2f",
+                         d01, d03, d02, sqrtf(d01 * d01 + d03 * d03), u45, u47, u46);
+                LOG_INFO("  verticals: %.2f %.2f %.2f %.2f (param planeSep=%.2f, tol=%.2f)",
+                         v04, v15, v26, v37,
+                         Front::uwbLittleFSFront.GetParams().anchorPlaneSeparation,
+                         std::max(0.5f, Front::uwbLittleFSFront.GetParams().anchorPlaneSeparation * 0.35f));
+            }
+        }
         if (s_dynamicPositionsReadyForEstimator.exchange(false, std::memory_order_relaxed)) {
             if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
                 for (uint8_t i = 0; i < kNumAnchors; i++) {
@@ -2775,6 +2821,54 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
         }
     }
 }
+String UWBTagTDoA::DynamicAnchorStatusJson()
+{
+    String out = "{\"enabled\":";
+    out += UWBTagTDoA::IsDynamicPositioningEnabled() ? "true" : "false";
+    out += ",\"positionsReady\":";
+    out += s_dynamicPositionsReadyForEstimator.load(std::memory_order_relaxed)
+        ? "true" : "false";
+
+    bool can_calc = false;
+    String pairs = "[";
+    if (takeDynamicCalcMutex(pdMS_TO_TICKS(50))) {
+        can_calc = UWBTagTDoA::s_dynamicCalc.canCalculate();
+        bool first = true;
+        for (uint8_t a = 0; a < kNumAnchors; a++) {
+            for (uint8_t b = static_cast<uint8_t>(a + 1); b < kNumAnchors; b++) {
+                if (!first) pairs += ",";
+                first = false;
+                pairs += "{\"p\":\"";
+                pairs += static_cast<int>(a);
+                pairs += static_cast<int>(b);
+                pairs += "\",\"n\":";
+                pairs += static_cast<int>(UWBTagTDoA::s_dynamicCalc.debugSampleCount(a, b));
+                pairs += ",\"ok\":";
+                pairs += UWBTagTDoA::s_dynamicCalc.debugDistanceReady(a, b) ? "true" : "false";
+                pairs += ",\"d\":";
+                pairs += String(UWBTagTDoA::s_dynamicCalc.debugDistance(a, b), 2);
+                pairs += "}";
+            }
+        }
+        giveDynamicCalcMutex();
+    }
+    pairs += "]";
+
+    out += ",\"canCalculate\":";
+    out += can_calc ? "true" : "false";
+    out += ",\"pairs\":";
+    out += pairs;
+    out += "}";
+    return out;
+}
+
+namespace TDoADynamicAnchorCommands {
+String StatusJson()
+{
+    return UWBTagTDoA::DynamicAnchorStatusJson();
+}
+} // namespace TDoADynamicAnchorCommands
+
 #endif // USE_DYNAMIC_ANCHOR_POSITIONS
 
 #endif // USE_UWB_MODE_TDOA_TAG
