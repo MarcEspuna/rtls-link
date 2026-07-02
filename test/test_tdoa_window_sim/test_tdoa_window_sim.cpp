@@ -320,10 +320,18 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
     bool cur_first = true;
 
     // --- Window pipeline state ---
+    // Wake mechanics mirror the firmware task: producer notify (>=4 fresh +
+    // 5ms debounce) plus a dynamic timeout re-armed to the remaining cadence
+    // (capped at the 50ms watchdog), as set by estimatorProcessWindow.
     tdoa_estimator::WindowEstimatorState win_state;
     tdoa_estimator::WindowEstimatorOptions win_opts = window_options;
     constexpr uint64_t kWindowCadenceUs = 20000;
-    uint64_t next_window_solve_us = kWindowCadenceUs;
+    size_t fresh_count_w = 0;
+    uint64_t last_notify_w_us = 0;
+    bool notify_pending_w = false;
+    uint64_t last_wake_w_us = 0;
+    uint64_t last_solve_w_us = 0;
+    uint64_t wake_timeout_w_us = kWatchdogUs;
 
     // Youngest-anchor matching state: last reception time per anchor.
     std::array<uint64_t, kNumAnchors> last_rx_us = {};
@@ -406,23 +414,27 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
     };
 
     auto runWindowConsumer = [&](uint64_t now_us) {
+        tdoa::MeasurementSlot snapshot[kNumPairs];
+        const auto snap = tdoa::SnapshotWindowMeasurements(
+            slots_window, configured, now_us, kStaleThresholdUs,
+            win_opts.window_max_age_us, snapshot, kNumPairs);
+        fresh_count_w -= std::min<size_t>(fresh_count_w, snap.consumed + snap.expired);
+
         tdoa_estimator::RobustTdoaRow rows[kNumPairs];
-        size_t n = 0;
-        for (const auto& s : slots_window) {
-            if (s.timestamp_us == 0 || s.timestamp_us > now_us) continue;
-            const uint64_t age = now_us - s.timestamp_us;
-            if (age > win_opts.window_max_age_us) continue;
-            auto& r = rows[n++];
+        for (size_t i = 0; i < snap.copied; ++i) {
+            const auto& s = snapshot[i];
+            auto& r = rows[i];
             r.anchor_a = s.anchor_a;
             r.anchor_b = s.anchor_b;
             r.anchor_a_pos = sc.anchors[s.anchor_a];
             r.anchor_b_pos = sc.anchors[s.anchor_b];
             r.tdoa = -s.tdoa;
-            r.age_us = static_cast<uint32_t>(age);
+            r.age_us = static_cast<uint32_t>(now_us - s.timestamp_us);
             r.nominal_sigma_m = s.sigma_m;
             r.health = 1.0f;
         }
-        const auto res = tdoa_estimator::estimateWindow3D(rows, n, now_us, win_state, win_opts);
+        const auto res = tdoa_estimator::estimateWindow3D(
+            rows, snap.copied, now_us, win_state, win_opts);
         if (res.solve.valid) {
             const double t_s = static_cast<double>(now_us) * 1e-6;
             const double sigma = res.solve.covarianceValid
@@ -430,6 +442,21 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
                 : -1.0;
             result.window.addEmit(t_s, res.solve.position, sc.trajectory(t_s), sigma);
         }
+    };
+
+    // Firmware wake handler for the window pipeline: solve only when the
+    // cadence has elapsed, otherwise re-arm the timeout to the remainder.
+    auto wakeWindow = [&](uint64_t now_us) {
+        last_wake_w_us = now_us;
+        if (last_solve_w_us != 0 && (now_us - last_solve_w_us) < kWindowCadenceUs) {
+            wake_timeout_w_us = std::min<uint64_t>(
+                kWindowCadenceUs - (now_us - last_solve_w_us), kWatchdogUs);
+            if (wake_timeout_w_us < 1000) wake_timeout_w_us = 1000;
+            return;
+        }
+        wake_timeout_w_us = kWindowCadenceUs;
+        last_solve_w_us = now_us;
+        runWindowConsumer(now_us);
     };
 
     // Event loop over TDMA slots.
@@ -466,28 +493,35 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
                 const uint8_t idx = pairIndex(a, b);
                 for (auto* slots : {&slots_current, &slots_window}) {
                     auto& slot = (*slots)[idx];
+                    const bool was_fresh = slot.fresh;
                     slot.tdoa = diff;
                     slot.timestamp_us = rx_us;
                     slot.anchor_a = a;
                     slot.anchor_b = b;
                     slot.sigma_m = 0.15f;
-                    if (slots == &slots_current && !slot.fresh) {
-                        fresh_count++;
-                    }
                     slot.fresh = true;
+                    if (!was_fresh) {
+                        if (slots == &slots_current) fresh_count++;
+                        else fresh_count_w++;
+                    }
                 }
                 produced = true;
             }
         }
 
-        // Producer notify logic (current pipeline).
+        // Producer notify logic (both pipelines share the same mechanism).
         if (produced && fresh_count >= kMinFreshForNotify
             && (rx_us - last_notify_us) >= kNotifyDebounceUs) {
             last_notify_us = rx_us;
             notify_pending = true;
         }
+        if (produced && fresh_count_w >= kMinFreshForNotify
+            && (rx_us - last_notify_w_us) >= kNotifyDebounceUs) {
+            last_notify_w_us = rx_us;
+            notify_pending_w = true;
+        }
 
-        // Consumer wakes: notification or watchdog.
+        // Current-pipeline consumer wakes: notification or watchdog.
         if (notify_pending) {
             notify_pending = false;
             runCurrentConsumer(rx_us);
@@ -495,10 +529,13 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
             runCurrentConsumer(rx_us);
         }
 
-        // Window pipeline fixed cadence.
-        while (next_window_solve_us <= slot_start + kSlotUs) {
-            runWindowConsumer(next_window_solve_us);
-            next_window_solve_us += kWindowCadenceUs;
+        // Window-pipeline consumer wakes: notification or the dynamic timeout
+        // re-armed by the previous wake (mirrors the firmware task).
+        if (notify_pending_w) {
+            notify_pending_w = false;
+            wakeWindow(rx_us);
+        } else if (rx_us - last_wake_w_us >= wake_timeout_w_us) {
+            wakeWindow(rx_us);
         }
     }
 

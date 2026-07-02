@@ -714,9 +714,17 @@ void App::SendSample(float x_m, float y_m, float z_m,
   // Do not gate VISION_POSITION_ESTIMATE on inbound AP heartbeat; missed
   // heartbeat reception must not create outbound external-nav gaps.
 #ifdef USE_MAVLINK_COVARIANCE
-  // Defense in depth: also check enableCovMatrix parameter here
-  bool sendCovMatrix = positionCovariance.has_value() &&
-                       Front::uwbLittleFSFront.GetParams().enableCovMatrix != 0;
+  // Defense in depth: also check enableCovMatrix parameter here. The sliding-
+  // window estimator implies covariance output — it emits weak-geometry fixes
+  // whose only downstream protection is the honest covariance, so it must not
+  // be droppable by a stale enableCovMatrix=0.
+  const auto& covParams = Front::uwbLittleFSFront.GetParams();
+  bool covarianceEnabled = covParams.enableCovMatrix != 0;
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+  covarianceEnabled = covarianceEnabled
+      || uwbWindowEstimatorSelected(covParams.use2DEstimator, covParams.tdoaEstimatorMode);
+#endif
+  bool sendCovMatrix = positionCovariance.has_value() && covarianceEnabled;
 
   if (sendCovMatrix) {
     // Rotate covariance to match rotated position

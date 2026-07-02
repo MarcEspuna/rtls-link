@@ -8,7 +8,8 @@
 namespace tdoa {
 
 struct MeasurementSlot {
-    float tdoa = 0.0f;          // canonical: distance(a) - distance(b) with a < b
+    float tdoa = 0.0f;          // canonical: distance(b) - distance(a) with a < b
+                                // (consumers negate for the solver's d(a)-d(b) residual)
     uint64_t timestamp_us = 0;  // esp_timer_get_time() when last updated
     uint8_t anchor_a = 0;       // canonical (smaller) anchor id
     uint8_t anchor_b = 0;       // canonical (larger) anchor id

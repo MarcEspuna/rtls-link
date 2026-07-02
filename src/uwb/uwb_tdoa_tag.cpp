@@ -126,7 +126,7 @@ static constexpr uint8_t kEstimatorModeLegacy = 0;
 static constexpr uint8_t kEstimatorModeRobust = 1;
 static constexpr uint8_t kEstimatorModeCompare = 2;
 #ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
-static constexpr uint8_t kEstimatorModeWindow = 3;
+static constexpr uint8_t kEstimatorModeWindow = kTdoaEstimatorModeWindow;
 static constexpr uint8_t kWindow3DUniqueAnchorsForSolve = 4;
 #endif
 static constexpr uint8_t kEstimatorMode2D = 255;
@@ -1647,6 +1647,12 @@ static void copyRobustDiagnostics(EstimatorSolveStats& outStats,
 }
 
 #ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+// Wake timeout for the estimator task while window mode is active: set each
+// pass so the task self-wakes at the next cadence tick even when producer
+// notifications stall (e.g. heavy packet loss keeps fresh count below the
+// notify threshold while the window still holds reusable rows).
+static uint32_t s_estimatorWakeTimeoutMs = kEstimatorWatchdogMs;
+
 // Sliding-window estimator path: fixed-cadence MAP solve over every non-stale
 // pair slot. Measurements are reused across solves (no batch consumption), so
 // the output rate is decoupled from fresh-measurement accumulation, and weak
@@ -1657,10 +1663,29 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
     static uint64_t last_solve_us = 0;
 
     if (first_estimation) {
+        // Reset the estimator state AND drop retained measurements: slots can
+        // hold rows up to the stale threshold old, and solving pre-reinit
+        // TDoAs against post-reinit anchor coordinates emits transient bad
+        // positions. If the mutex is contended, retry on the next wake.
+        if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
+            return;
+        }
+        uint32_t fresh_cleared = 0;
+        for (auto& slot : pair_slots) {
+            if (slot.fresh) {
+                fresh_cleared++;
+            }
+            slot = PairSlot{};
+        }
+        xSemaphoreGive(measurements_mtx);
+        if (fresh_cleared > 0) {
+            fresh_pair_count.fetch_sub(fresh_cleared, std::memory_order_relaxed);
+        }
         window_state = tdoa_estimator::WindowEstimatorState{};
         last_solve_us = 0;
         first_estimation = false;
-        LOG_INFO("Sliding-window estimator (re)initialized");
+        LOG_INFO("Sliding-window estimator (re)initialized, measurement window cleared");
+        return;
     }
 
     const uint32_t cadence_ms = params.tdoaWindowCadenceMs == 0
@@ -1672,8 +1697,12 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
 
     const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
     if (last_solve_us != 0 && (now_us - last_solve_us) < static_cast<uint64_t>(cadence_ms) * 1000u) {
+        const uint32_t elapsed_ms =
+            static_cast<uint32_t>((now_us - last_solve_us) / 1000u);
+        s_estimatorWakeTimeoutMs = std::max(1u, cadence_ms - elapsed_ms);
         return;
     }
+    s_estimatorWakeTimeoutMs = cadence_ms;
 
     PairSlot snapshot[kNumPairs];
     etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
@@ -1751,8 +1780,11 @@ static void estimatorProcessWindow(const UWBParams& params, bool& first_estimati
     const bool insufficient = result.used_rows < options.min_rows
         || result.unique_anchors < options.min_unique_anchors;
 
+    // Window mode always emits its covariance (not gated on enableCovMatrix):
+    // weak-geometry fixes are emitted instead of gated, and the inflated
+    // covariance is the downstream EKF's only signal to de-weight them.
     std::optional<PackedPositionCovariance> position_covariance = std::nullopt;
-    if (accepted && params.enableCovMatrix != 0 && result.solve.covarianceValid) {
+    if (accepted && result.solve.covarianceValid) {
         position_covariance = pack3DCovariance(result.solve.positionCovariance);
         solveStats.flags |= kEstimatorDiagFlagCovarianceSent;
     }
@@ -1824,9 +1856,18 @@ static void estimatorProcess() {
     static constexpr int NUM_ITERATIONS_3D = 10;
 
     // Continuous task — block on notification until producer wakes us, or
-    // until the watchdog timeout elapses (so dynamic-anchor / stats
-    // bookkeeping still runs during quiet periods).
+    // until a timeout elapses (so dynamic-anchor / stats bookkeeping still
+    // runs during quiet periods). In window mode the timeout is set to the
+    // remaining time to the next cadence tick so the solve rate holds even
+    // when producer notifications stall (heavy packet loss).
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    const uint32_t wake_timeout_ms =
+        std::min<uint32_t>(s_estimatorWakeTimeoutMs, kEstimatorWatchdogMs);
+    s_estimatorWakeTimeoutMs = kEstimatorWatchdogMs;  // window branch re-arms each pass
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wake_timeout_ms));
+#else
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kEstimatorWatchdogMs));
+#endif
 
     const auto& currentParams = Front::uwbLittleFSFront.GetParams();
     const bool USE_2D_ESTIMATOR = (currentParams.use2DEstimator != 0);

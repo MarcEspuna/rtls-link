@@ -13,6 +13,18 @@ enum class UWBMode : uint8_t {
     UNKNOWN = 255
 };
 
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+// tdoaEstimatorMode value selecting the sliding-window estimator. Shared with
+// the output path: window mode implies covariance output (its safety story is
+// honest uncertainty instead of gating, so the covariance must reach the wire).
+static constexpr uint8_t kTdoaEstimatorModeWindow = 3;
+
+inline bool uwbWindowEstimatorSelected(uint8_t use2DEstimator, uint8_t tdoaEstimatorMode)
+{
+    return use2DEstimator == 0 && tdoaEstimatorMode == kTdoaEstimatorModeWindow;
+}
+#endif
+
 enum class ZCalcMode : uint8_t {
     NONE = 0,        // Use Z from UWB TDoA estimator (default)
     RANGEFINDER = 1, // Use Z from MAVLink DISTANCE_SENSOR
