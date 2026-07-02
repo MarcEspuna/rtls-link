@@ -121,10 +121,20 @@ bool parseUint8ParamValue(const void* data, uint8_t& outValue)
     return true;
 }
 
+bool isValidEstimatorModeParamValue(uint8_t mode)
+{
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    if (mode == kTdoaEstimatorModeWindow) {
+        return true;
+    }
+#endif
+    return mode <= 2;
+}
+
 bool isValidEstimatorModeValue(const void* data)
 {
     uint8_t parsed = 0;
-    return parseUint8ParamValue(data, parsed) && parsed <= 2;
+    return parseUint8ParamValue(data, parsed) && isValidEstimatorModeParamValue(parsed);
 }
 
 bool isValidEstimatorDiagValue(const void* data)
@@ -135,7 +145,7 @@ bool isValidEstimatorDiagValue(const void* data)
 
 bool hasValidEstimatorRuntimeConfig(const UWBParams& params)
 {
-    return params.tdoaEstimatorMode <= 2
+    return isValidEstimatorModeParamValue(params.tdoaEstimatorMode)
         && params.tdoaEstimatorDiag <= 2;
 }
 
