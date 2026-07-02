@@ -66,6 +66,11 @@
 #define USE_UWB_MODE_TDOA_TAG
 #define USE_UWB_ANCHOR_TELEMETRY
 
+// --- Sliding-window TDoA estimator (TDoA tags) ---
+// Fixed-cadence MAP position estimator, selected at runtime with
+// UWB_EST_MODE=3. Runtime default remains the robust batch estimator.
+#define USE_UWB_TDOA_WINDOW_ESTIMATOR
+
 // --- Dynamic anchor position calculation (TDoA tags) ---
 // Enables automatic calculation of anchor positions from inter-anchor distances
 // #define USE_DYNAMIC_ANCHOR_POSITIONS

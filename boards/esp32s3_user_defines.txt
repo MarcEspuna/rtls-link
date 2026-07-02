@@ -48,6 +48,13 @@
 -D USE_UWB_ANCHOR_TELEMETRY     ; Periodic TDoA anchor stats UDP telemetry
 
 ; -----------------------------------------------------------------------------
+; SLIDING-WINDOW TDOA ESTIMATOR (TDoA Tags)
+; Fixed-cadence MAP estimator; select at runtime with UWB_EST_MODE=3
+; Requires: USE_UWB_MODE_TDOA_TAG
+; -----------------------------------------------------------------------------
+-D USE_UWB_TDOA_WINDOW_ESTIMATOR
+
+; -----------------------------------------------------------------------------
 ; DYNAMIC ANCHOR POSITIONING (TDoA Tags)
 ; Calculate anchor positions from inter-anchor ToF measurements
 ; Requires: USE_UWB_MODE_TDOA_TAG

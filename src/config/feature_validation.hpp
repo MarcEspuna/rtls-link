@@ -109,6 +109,14 @@
 #endif
 
 // =============================================================================
+// SLIDING-WINDOW TDOA ESTIMATOR DEPENDENCIES
+// =============================================================================
+
+#if defined(USE_UWB_TDOA_WINDOW_ESTIMATOR) && !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "USE_UWB_TDOA_WINDOW_ESTIMATOR requires USE_UWB_MODE_TDOA_TAG to be defined"
+#endif
+
+// =============================================================================
 // DYNAMIC ANCHOR POSITION DEPENDENCIES
 // =============================================================================
 

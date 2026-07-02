@@ -127,4 +127,52 @@ MeasurementSnapshotResult SnapshotFreshMeasurements(
     return result;
 }
 
+struct WindowSnapshotResult {
+    size_t copied = 0;    // slots within the window, copied to out
+    uint32_t expired = 0; // fresh slots dropped (stale or unconfigured)
+    uint32_t consumed = 0; // fresh flags cleared on usable slots
+};
+
+// Sliding-window snapshot: copies every usable slot younger than
+// windowMaxAgeUs regardless of freshness (measurements are reused across
+// solves), clearing fresh flags only for producer-notify bookkeeping.
+template <size_t PairCount, size_t AnchorCount>
+WindowSnapshotResult SnapshotWindowMeasurements(
+    etl::array<MeasurementSlot, PairCount>& slots,
+    const etl::array<bool, AnchorCount>& configuredAnchors,
+    uint64_t nowUs,
+    uint64_t staleThresholdUs,
+    uint64_t windowMaxAgeUs,
+    MeasurementSlot* out,
+    size_t outCapacity)
+{
+    WindowSnapshotResult result;
+    for (auto& slot : slots) {
+        if (slot.timestamp_us == 0) {
+            continue;
+        }
+        const uint64_t age = nowUs >= slot.timestamp_us ? nowUs - slot.timestamp_us : 0;
+        const bool usable = age <= staleThresholdUs
+            && slot.anchor_a < AnchorCount
+            && slot.anchor_b < AnchorCount
+            && configuredAnchors[slot.anchor_a]
+            && configuredAnchors[slot.anchor_b];
+        if (!usable) {
+            if (slot.fresh) {
+                slot.fresh = false;
+                ++result.expired;
+            }
+            continue;
+        }
+        if (slot.fresh) {
+            slot.fresh = false;
+            ++result.consumed;
+        }
+        if (age <= windowMaxAgeUs && result.copied < outCapacity) {
+            out[result.copied++] = slot;
+        }
+    }
+    return result;
+}
+
 } // namespace tdoa

@@ -21,6 +21,9 @@
 
 #include "tdoa_newton_raphson.hpp"
 #include "tdoa_robust_estimator.hpp"
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+#include "tdoa_window_estimator.hpp"
+#endif
 
 #include "tag/tdoa_tag_algorithm.hpp"
 
@@ -122,6 +125,10 @@ static constexpr tdoa_estimator::Scalar kMax3DPositionVarianceM2 = 9.0f;
 static constexpr uint8_t kEstimatorModeLegacy = 0;
 static constexpr uint8_t kEstimatorModeRobust = 1;
 static constexpr uint8_t kEstimatorModeCompare = 2;
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+static constexpr uint8_t kEstimatorModeWindow = 3;
+static constexpr uint8_t kWindow3DUniqueAnchorsForSolve = 4;
+#endif
 static constexpr uint8_t kEstimatorMode2D = 255;
 static constexpr uint8_t kEstimatorDiagOff = 0;
 static constexpr uint8_t kEstimatorDiagSummary = 1;
@@ -142,6 +149,11 @@ enum EstimatorDiagnosticFlags : uint8_t {
 
 static uint8_t sanitizeEstimatorMode(uint8_t mode)
 {
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    if (mode == kEstimatorModeWindow) {
+        return mode;
+    }
+#endif
     return mode <= kEstimatorModeCompare ? mode : kEstimatorModeRobust;
 }
 
@@ -1326,9 +1338,15 @@ bool UWBTagTDoA::ValidateStaticAnchorsForEstimator(etl::span<const UWBAnchorPara
         LOG_ERROR("Rejected static anchor config: 2D estimator requires at least 4 anchors");
         return false;
     }
-    const uint8_t min3DAnchors = sanitizeEstimatorMode(tdoaEstimatorMode) == kEstimatorModeLegacy
+    const uint8_t sanitizedMode = sanitizeEstimatorMode(tdoaEstimatorMode);
+    uint8_t min3DAnchors = sanitizedMode == kEstimatorModeLegacy
         ? kLegacy3DUniqueAnchorsForSolve
         : kRobust3DUniqueAnchorsForSolve;
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    if (sanitizedMode == kEstimatorModeWindow) {
+        min3DAnchors = kWindow3DUniqueAnchorsForSolve;
+    }
+#endif
     if (!use2DEstimator && anchors.size() < min3DAnchors) {
         LOG_ERROR("Rejected static anchor config: 3D estimator requires at least %u anchors",
                   static_cast<unsigned int>(min3DAnchors));
@@ -1628,6 +1646,170 @@ static void copyRobustDiagnostics(EstimatorSolveStats& outStats,
     }
 }
 
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+// Sliding-window estimator path: fixed-cadence MAP solve over every non-stale
+// pair slot. Measurements are reused across solves (no batch consumption), so
+// the output rate is decoupled from fresh-measurement accumulation, and weak
+// geometry degrades the reported covariance instead of gating the fix.
+static void estimatorProcessWindow(const UWBParams& params, bool& first_estimation)
+{
+    static tdoa_estimator::WindowEstimatorState window_state;
+    static uint64_t last_solve_us = 0;
+
+    if (first_estimation) {
+        window_state = tdoa_estimator::WindowEstimatorState{};
+        last_solve_us = 0;
+        first_estimation = false;
+        LOG_INFO("Sliding-window estimator (re)initialized");
+    }
+
+    const uint32_t cadence_ms = params.tdoaWindowCadenceMs == 0
+        ? 20u
+        : std::min<uint32_t>(std::max<uint32_t>(params.tdoaWindowCadenceMs, 5u), 200u);
+    const uint32_t window_age_ms = params.tdoaWindowAgeMs == 0
+        ? 150u
+        : std::min<uint32_t>(std::max<uint32_t>(params.tdoaWindowAgeMs, 50u), 350u);
+
+    const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+    if (last_solve_us != 0 && (now_us - last_solve_us) < static_cast<uint64_t>(cadence_ms) * 1000u) {
+        return;
+    }
+
+    PairSlot snapshot[kNumPairs];
+    etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
+    if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return;
+    }
+    const tdoa::WindowSnapshotResult snap = tdoa::SnapshotWindowMeasurements(
+        pair_slots,
+        configured_anchor_ids,
+        now_us,
+        kStaleThresholdUs,
+        static_cast<uint64_t>(window_age_ms) * 1000u,
+        snapshot,
+        kNumPairs);
+    anchor_snapshot = anchor_positions;
+    xSemaphoreGive(measurements_mtx);
+
+    const uint32_t fresh_delta = snap.consumed + snap.expired;
+    if (fresh_delta > 0) {
+        fresh_pair_count.fetch_sub(fresh_delta, std::memory_order_relaxed);
+    }
+    recordStaleRemoved(snap.expired);
+#if TDOA_STATS_LOGGING == ENABLE
+    stats_stale_removed += snap.expired;
+#endif
+
+    last_solve_us = now_us;
+
+    tdoa_estimator::RobustTdoaRow rows[kNumPairs];
+    for (size_t i = 0; i < snap.copied; ++i) {
+        const PairSlot& s = snapshot[i];
+        tdoa_estimator::RobustTdoaRow& row = rows[i];
+        row.anchor_a = s.anchor_a;
+        row.anchor_b = s.anchor_b;
+        row.anchor_a_pos << static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].x),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].y),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].z);
+        row.anchor_b_pos << static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].x),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].y),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].z);
+        // Slot stores canonical tdoa = d(b) - d(a); the solver residual is
+        // d(a) - d(b) - tdoa, so flip sign (same convention as the batch path).
+        row.tdoa = -static_cast<tdoa_estimator::Scalar>(s.tdoa);
+        const uint64_t age_us = now_us >= s.timestamp_us ? now_us - s.timestamp_us : 0;
+        row.age_us = age_us > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(age_us);
+        row.nominal_sigma_m = (std::isfinite(s.sigma_m) && s.sigma_m > 0.0f)
+            ? static_cast<tdoa_estimator::Scalar>(s.sigma_m)
+            : static_cast<tdoa_estimator::Scalar>(0.15f);
+        row.health = 1.0f;
+    }
+
+    tdoa_estimator::WindowEstimatorOptions options;
+    options.min_unique_anchors = kWindow3DUniqueAnchorsForSolve;
+    options.window_max_age_us = window_age_ms * 1000u;
+
+    const uint64_t solve_start_us = static_cast<uint64_t>(esp_timer_get_time());
+    const tdoa_estimator::WindowEstimatorResult result = tdoa_estimator::estimateWindow3D(
+        rows, snap.copied, now_us, window_state, options);
+    const uint32_t solve_us = elapsedUs(solve_start_us);
+
+    EstimatorSolveStats solveStats;
+    solveStats.mode = kEstimatorModeWindow;
+    solveStats.diagLevel = sanitizeEstimatorDiag(params.tdoaEstimatorDiag);
+    solveStats.inputRows = clampToU8(snap.copied);
+    solveStats.selectedRows = result.used_rows;
+    solveStats.uniqueAnchors = result.unique_anchors;
+    solveStats.iterations = clampToU8(static_cast<size_t>(result.solve.iterations));
+    solveStats.rmseMm = metersToMillimetersUnsigned(result.solve.rmse);
+    solveStats.residualScaleMm = metersToMillimetersUnsigned(result.residual_scale_m);
+    solveStats.solveUs = solve_us;
+    solveStats.robustSolveUs = solve_us;
+
+    const bool has_nan = result.solve.position.hasNaN();
+    const bool accepted = result.solve.valid && !has_nan;
+    const bool insufficient = result.used_rows < options.min_rows
+        || result.unique_anchors < options.min_unique_anchors;
+
+    std::optional<PackedPositionCovariance> position_covariance = std::nullopt;
+    if (accepted && params.enableCovMatrix != 0 && result.solve.covarianceValid) {
+        position_covariance = pack3DCovariance(result.solve.positionCovariance);
+        solveStats.flags |= kEstimatorDiagFlagCovarianceSent;
+    }
+    if (accepted) {
+        solveStats.flags |= kEstimatorDiagFlagAccepted;
+    }
+    solveStats.xMm = metersToMillimetersSigned(static_cast<float>(result.solve.position(0)));
+    solveStats.yMm = metersToMillimetersSigned(static_cast<float>(result.solve.position(1)));
+    solveStats.zMm = metersToMillimetersSigned(static_cast<float>(result.solve.position(2)));
+    recordEstimatorSolveStats(solveStats);
+
+#if TDOA_STATS_LOGGING == ENABLE
+    stats_solve_count++;
+    stats_solve_sum_us += solve_us;
+    stats_iter_sum += static_cast<uint32_t>(result.solve.iterations);
+    if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
+    if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
+#endif
+
+    if (accepted) {
+        recordEstimatorAccepted(result.solve.position(0),
+                                result.solve.position(1),
+                                result.solve.position(2),
+                                result.solve.rmse,
+                                snap.copied);
+        App::SendSample(result.solve.position(0),
+                        result.solve.position(1),
+                        result.solve.position(2),
+                        position_covariance);
+#if TDOA_STATS_LOGGING == ENABLE
+        stats_samples_sent++;
+#endif
+    } else {
+        recordEstimatorRejected(!insufficient && !has_nan, has_nan, insufficient, snap.copied);
+#if TDOA_STATS_LOGGING == ENABLE
+        stats_samples_rejected++;
+        if (has_nan) {
+            stats_reject_nan++;
+        } else if (insufficient) {
+            stats_reject_insufficient++;
+        } else {
+            stats_reject_rmse++;
+        }
+#endif
+    }
+
+    uint64_t now_position_log = millis();
+    if (now_position_log - position_last_log_time_ms >= POSITION_LOG_INTERVAL_MS) {
+        LOG_DEBUG("Position(win): X=%.2f Y=%.2f Z=%.2f RMSE=%.3fm rows=%u [%s]",
+                  result.solve.position(0), result.solve.position(1), result.solve.position(2),
+                  result.solve.rmse, static_cast<unsigned int>(result.used_rows),
+                  accepted ? "OK" : "INVALID");
+        position_last_log_time_ms = now_position_log;
+    }
+}
+#endif // USE_UWB_TDOA_WINDOW_ESTIMATOR
+
 static void estimatorProcess() {
     static tdoa_estimator::PosMatrix anchors_left;
     static tdoa_estimator::PosMatrix anchors_right;
@@ -1690,6 +1872,13 @@ static void estimatorProcess() {
         && s_dynamicEstimatorReinitRequested.exchange(false, std::memory_order_relaxed)) {
         first_estimation = true;
         LOG_INFO("Reinitializing estimator from dynamic anchor positions");
+    }
+#endif
+
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    if (!USE_2D_ESTIMATOR && runtimeEstimatorMode == kEstimatorModeWindow) {
+        estimatorProcessWindow(currentParams, first_estimation);
+        return;
     }
 #endif
 
