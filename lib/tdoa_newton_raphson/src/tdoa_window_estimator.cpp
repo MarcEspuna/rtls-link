@@ -25,6 +25,7 @@ struct WindowRow {
     PosVector3D pos_a = PosVector3D::Zero();
     PosVector3D pos_b = PosVector3D::Zero();
     Scalar tdoa = 0.0f;          // d(a) - d(b) convention (solver residual dL - dR - tdoa)
+    Scalar age_s = 0.0f;         // measurement age at solve time
     Scalar info_weight = 0.0f;   // age-decayed 1/sigma^2 (1/m^2)
     Scalar robust_weight = 1.0f; // Huber factor, unitless
 };
@@ -266,6 +267,7 @@ WindowEstimatorResult estimateWindow3D(const RobustTdoaRow* rows,
         w.pos_a = row.anchor_a_pos;
         w.pos_b = row.anchor_b_pos;
         w.tdoa = row.tdoa;
+        w.age_s = static_cast<Scalar>(row.age_us) * Scalar(1e-6);
         Scalar sigma = row.nominal_sigma_m;
         if (!std::isfinite(static_cast<double>(sigma)) || sigma < options.sigma_floor_m) {
             sigma = options.sigma_floor_m;
@@ -313,6 +315,21 @@ WindowEstimatorResult estimateWindow3D(const RobustTdoaRow* rows,
     result.prior_sigma_m = prior_sigma;
     const PosVector3D prior_pos = state.has_prior ? state.prior_position : initial;
     const Scalar prior_info = Scalar(1) / (prior_sigma * prior_sigma);
+
+    // --- Velocity compensation ---
+    // A measurement of age `a` observed h(x(t-a)) ≈ h(x(t)) - ∇h·v·a, so roll
+    // it forward: tdoa += ∇h·v·a. Removes the lag that age-weighted reuse
+    // would otherwise introduce for a moving tag.
+    if (options.velocity_compensation && state.has_velocity) {
+        Eigen::Matrix<Scalar, 1, 3> grad;
+        for (int i = 0; i < n; ++i) {
+            if (window[i].age_s <= Scalar(0)) {
+                continue;
+            }
+            buildJacobianRow(window[i], initial, grad);
+            window[i].tdoa += grad.dot(state.velocity) * window[i].age_s;
+        }
+    }
 
     // --- MAP solve + Huber IRLS ---
     PosVector3D pos = initial;
@@ -379,6 +396,30 @@ WindowEstimatorResult estimateWindow3D(const RobustTdoaRow* rows,
     if (result.solve.valid) {
         result.solve.covarianceValid = computeClampedCovariance(
             window, n, pos, residuals, options, result.solve.positionCovariance);
+
+        // EMA velocity from consecutive fixes, clamped to a plausible speed.
+        if (state.has_prior && now_us > state.prior_time_us) {
+            const Scalar dt_s =
+                static_cast<Scalar>(now_us - state.prior_time_us) * Scalar(1e-6);
+            if (dt_s > Scalar(1e-3) && dt_s < Scalar(0.25)) {
+                PosVector3D v_new = (pos - state.prior_position) / dt_s;
+                const Scalar speed = v_new.norm();
+                if (speed > options.max_velocity_m_s) {
+                    v_new *= options.max_velocity_m_s / speed;
+                }
+                if (state.has_velocity) {
+                    state.velocity = state.velocity * (Scalar(1) - options.velocity_ema_alpha)
+                        + v_new * options.velocity_ema_alpha;
+                } else {
+                    state.velocity = v_new * options.velocity_ema_alpha;
+                }
+                state.has_velocity = true;
+            } else {
+                state.has_velocity = false;
+                state.velocity = PosVector3D::Zero();
+            }
+        }
+
         state.has_prior = true;
         state.prior_position = pos;
         state.prior_time_us = now_us;
@@ -391,6 +432,8 @@ WindowEstimatorResult estimateWindow3D(const RobustTdoaRow* rows,
             // Divergence watchdog: drop the prior so the next solve cold-starts.
             state.has_prior = false;
             state.consecutive_bad = 0;
+            state.has_velocity = false;
+            state.velocity = PosVector3D::Zero();
         }
     }
 

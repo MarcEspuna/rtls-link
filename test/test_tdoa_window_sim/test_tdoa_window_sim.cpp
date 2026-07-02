@@ -211,15 +211,23 @@ bool geometryAcceptable(const GeometryStats& st)
 // Metrics
 // ---------------------------------------------------------------------------
 
+struct EmitRecord {
+    double t_s = 0.0;
+    PosVector3D est = PosVector3D::Zero();
+    double sigma_reported_m = -1.0;  // sqrt(trace(cov)/3), -1 if unavailable
+};
+
 struct Metrics {
     std::vector<double> errors3d;
     std::vector<double> errorsXY;
     std::vector<double> errorsZ;
     std::vector<double> emit_times_s;
+    std::vector<EmitRecord> records;  // post-warmup emits with full detail
     double duration_s = 0.0;
     double warmup_s = 2.0;
 
-    void addEmit(double t_s, const PosVector3D& est, const PosVector3D& truth)
+    void addEmit(double t_s, const PosVector3D& est, const PosVector3D& truth,
+                 double sigma_reported_m = -1.0)
     {
         emit_times_s.push_back(t_s);
         if (t_s < warmup_s) return;
@@ -227,6 +235,7 @@ struct Metrics {
         errors3d.push_back(d.norm());
         errorsXY.push_back(d.head<2>().norm());
         errorsZ.push_back(std::fabs(d(2)));
+        records.push_back(EmitRecord{t_s, est, sigma_reported_m});
     }
 
     double rateHz() const
@@ -388,7 +397,10 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
             rows, snap.copied, cur_last_pos, opts);
         if (res.solve.valid && res.solve.converged && !res.solve.position.hasNaN()) {
             const double t_s = static_cast<double>(now_us) * 1e-6;
-            result.current.addEmit(t_s, res.solve.position, sc.trajectory(t_s));
+            const double sigma = res.solve.covarianceValid
+                ? std::sqrt(res.solve.positionCovariance.trace() / 3.0)
+                : -1.0;
+            result.current.addEmit(t_s, res.solve.position, sc.trajectory(t_s), sigma);
             cur_last_pos = res.solve.position;
         }
     };
@@ -413,7 +425,10 @@ SimResult runScenario(const Scenario& sc, bool verbose = false,
         const auto res = tdoa_estimator::estimateWindow3D(rows, n, now_us, win_state, win_opts);
         if (res.solve.valid) {
             const double t_s = static_cast<double>(now_us) * 1e-6;
-            result.window.addEmit(t_s, res.solve.position, sc.trajectory(t_s));
+            const double sigma = res.solve.covarianceValid
+                ? std::sqrt(res.solve.positionCovariance.trace() / 3.0)
+                : -1.0;
+            result.window.addEmit(t_s, res.solve.position, sc.trajectory(t_s), sigma);
         }
     };
 
@@ -582,6 +597,133 @@ Scenario highLoss()
     return sc;
 }
 
+Scenario nlosMoving()
+{
+    Scenario sc;
+    sc.name = "nlos-moving";
+    sc.anchors = makeTwoPlaneAnchors(10.0f, 8.0f, 0.3f, 2.8f);
+    sc.trajectory = [](double t) {
+        PosVector3D p;
+        p << 5.0f + 2.5f * std::cos(0.7 * t),
+             4.0f + 2.5f * std::sin(0.7 * t),
+             1.5f + 0.5f * std::sin(0.3 * t);
+        return p;
+    };
+    for (int i = 0; i < 9; ++i) {
+        NlosEvent ev;
+        ev.anchor = static_cast<uint8_t>(i % kNumAnchors);
+        ev.start_s = 4.0 + 6.0 * i;
+        ev.end_s = ev.start_s + 3.0;
+        ev.bias_m = 0.9f;
+        sc.nlos.push_back(ev);
+    }
+    sc.seed = 606;
+    return sc;
+}
+
+// ---------------------------------------------------------------------------
+// NLOS / latency analysis helpers
+// ---------------------------------------------------------------------------
+
+// A fix is classified in-burst if any NLOS event is active, or ended less
+// than `tail_s` earlier (contaminated measurements linger in both pipelines:
+// window age 150ms for the new one, batch span 120ms / stale 350ms for the
+// current one).
+bool inBurst(const Scenario& sc, double t_s, double tail_s = 0.35)
+{
+    for (const auto& ev : sc.nlos) {
+        if (t_s >= ev.start_s && t_s < ev.end_s + tail_s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct BurstStats {
+    double rate_hz = 0.0;
+    double rms3d = 0.0;
+    double p95 = 0.0;
+    double frac_bad = 0.0;       // fraction of emits with 3D error > threshold
+    double bad_per_s = 0.0;      // absolute bad-fix rate
+    double mean_sigma = 0.0;     // mean reported 1-sigma (m), -1 if none reported
+};
+
+BurstStats analyzeSlice(const Metrics& m, const Scenario& sc, bool want_burst,
+                        double bad_threshold_m)
+{
+    BurstStats st;
+    std::vector<double> errs;
+    size_t bad = 0;
+    double sigma_sum = 0.0;
+    size_t sigma_count = 0;
+    for (const auto& r : m.records) {
+        if (inBurst(sc, r.t_s) != want_burst) continue;
+        const double err = (r.est - sc.trajectory(r.t_s)).norm();
+        errs.push_back(err);
+        if (err > bad_threshold_m) ++bad;
+        if (r.sigma_reported_m >= 0.0) {
+            sigma_sum += r.sigma_reported_m;
+            ++sigma_count;
+        }
+    }
+
+    // Time spent in the requested slice (post-warmup).
+    double slice_s = 0.0;
+    const double dt = 0.01;
+    for (double t = m.warmup_s; t < m.duration_s; t += dt) {
+        if (inBurst(sc, t) == want_burst) slice_s += dt;
+    }
+
+    st.rate_hz = slice_s > 0 ? static_cast<double>(errs.size()) / slice_s : 0.0;
+    st.rms3d = Metrics::rms(errs);
+    st.p95 = Metrics::percentile(errs, 0.95);
+    st.frac_bad = errs.empty() ? 0.0 : static_cast<double>(bad) / static_cast<double>(errs.size());
+    st.bad_per_s = slice_s > 0 ? static_cast<double>(bad) / slice_s : 0.0;
+    st.mean_sigma = sigma_count > 0 ? sigma_sum / static_cast<double>(sigma_count) : -1.0;
+    return st;
+}
+
+// Effective estimator lag: the time shift tau minimizing RMS between the
+// emitted estimate at t and ground truth at t - tau. Positive = estimate lags.
+double estimateLagMs(const Metrics& m, const Scenario& sc)
+{
+    if (m.records.size() < 50) return -1.0;
+    double best_tau = 0.0;
+    double best_rms = std::numeric_limits<double>::max();
+    for (double tau = -0.10; tau <= 0.40; tau += 0.005) {
+        double sse = 0.0;
+        for (const auto& r : m.records) {
+            sse += (r.est - sc.trajectory(r.t_s - tau)).squaredNorm();
+        }
+        const double rms = std::sqrt(sse / static_cast<double>(m.records.size()));
+        if (rms < best_rms) {
+            best_rms = rms;
+            best_tau = tau;
+        }
+    }
+    return best_tau * 1000.0;
+}
+
+// Mean error projection onto the velocity direction. Negative = trailing the
+// true position (lag); expressed in ms of travel at the local speed.
+double alongTrackLagMs(const Metrics& m, const Scenario& sc)
+{
+    double sum_ms = 0.0;
+    size_t count = 0;
+    for (const auto& r : m.records) {
+        const double h = 0.02;
+        const PosVector3D v = (sc.trajectory(r.t_s + h) - sc.trajectory(r.t_s - h))
+            / static_cast<Scalar>(2.0 * h);
+        const double speed = v.norm();
+        if (speed < 0.2) continue;
+        const PosVector3D err = r.est - sc.trajectory(r.t_s);
+        const double along = err.dot(v) / speed;  // meters, negative = behind
+        sum_ms += -along / speed * 1000.0;        // positive = lag
+        ++count;
+    }
+    return count > 0 ? sum_ms / static_cast<double>(count) : -1.0;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -699,6 +841,59 @@ TEST(WindowEstimator, SingleOutlierRowIsDownweighted)
     const auto res = tdoa_estimator::estimateWindow3D(rows, n, 1000000, state, {});
     ASSERT_TRUE(res.solve.valid);
     EXPECT_LE((res.solve.position - truth).norm(), 0.25f);
+}
+
+TEST(TDoAWindowSim, NlosLeakageAnalysis)
+{
+    constexpr double kBadFixM = 0.5;
+    for (const auto& sc : {nlosBursts(), nlosMoving()}) {
+        const SimResult r = runScenario(sc);
+        std::printf("NLOS analysis: %s (bad fix = 3D err > %.1f m)\n", sc.name.c_str(), kBadFixM);
+        struct Row { const char* name; const Metrics* m; };
+        const Row rows[] = {{"current", &r.current}, {"window", &r.window}};
+        for (const auto& row : rows) {
+            const BurstStats burst = analyzeSlice(*row.m, sc, true, kBadFixM);
+            const BurstStats clear = analyzeSlice(*row.m, sc, false, kBadFixM);
+            std::printf("  %-8s burst: rate=%5.1fHz rms=%5.3f p95=%5.3f bad=%4.1f%% (%.2f/s) sigma=%5.3f"
+                        " | clear: rate=%5.1fHz rms=%5.3f bad=%4.1f%% sigma=%5.3f\n",
+                        row.name,
+                        burst.rate_hz, burst.rms3d, burst.p95, burst.frac_bad * 100.0,
+                        burst.bad_per_s, burst.mean_sigma,
+                        clear.rate_hz, clear.rms3d, clear.frac_bad * 100.0, clear.mean_sigma);
+        }
+
+        const BurstStats cur_burst = analyzeSlice(r.current, sc, true, kBadFixM);
+        const BurstStats win_burst = analyzeSlice(r.window, sc, true, kBadFixM);
+        const BurstStats win_clear = analyzeSlice(r.window, sc, false, kBadFixM);
+
+        // The window estimator must not let through a higher *fraction* of
+        // contaminated fixes than the current pipeline does.
+        EXPECT_LE(win_burst.frac_bad, cur_burst.frac_bad + 0.02) << sc.name;
+        // In-burst accuracy at least as good.
+        EXPECT_LE(win_burst.rms3d, cur_burst.rms3d * 1.1 + 0.02) << sc.name;
+        // Honest covariance: reported sigma must inflate during bursts so the
+        // downstream EKF can de-weight contaminated fixes.
+        EXPECT_GE(win_burst.mean_sigma, win_clear.mean_sigma * 1.5) << sc.name;
+    }
+}
+
+TEST(TDoAWindowSim, LatencyAnalysis)
+{
+    for (const auto& sc : {movingCircle(), highLoss()}) {
+        const SimResult r = runScenario(sc);
+        const double cur_lag = estimateLagMs(r.current, sc);
+        const double win_lag = estimateLagMs(r.window, sc);
+        const double cur_along = alongTrackLagMs(r.current, sc);
+        const double win_along = alongTrackLagMs(r.window, sc);
+        std::printf("Latency: %-14s current: shift-lag=%5.1fms along-track=%5.1fms | "
+                    "window: shift-lag=%5.1fms along-track=%5.1fms\n",
+                    sc.name.c_str(), cur_lag, cur_along, win_lag, win_along);
+        // The sliding window must not add lag relative to the batch pipeline.
+        EXPECT_LE(win_lag, cur_lag + 10.0) << sc.name;
+        EXPECT_LE(win_along, cur_along + 10.0) << sc.name;
+        // And absolute lag must stay small relative to one solve period.
+        EXPECT_LE(win_lag, 60.0) << sc.name;
+    }
 }
 
 // Parameter sweep for tuning — not part of the regular suite.

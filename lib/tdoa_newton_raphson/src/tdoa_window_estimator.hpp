@@ -40,6 +40,12 @@ struct WindowEstimatorOptions {
     // variance instead of going unbounded (or being gated away).
     Scalar report_var_max_m2 = 25.0f;
     Scalar report_var_min_m2 = 1e-4f;
+    // Velocity compensation: roll each measurement forward to solve time using
+    // an EMA velocity from consecutive fixes (removes age-induced lag when the
+    // tag moves). Disabled automatically while no stable velocity is available.
+    bool velocity_compensation = true;
+    Scalar max_velocity_m_s = 5.0f;
+    Scalar velocity_ema_alpha = 0.15f;
     // After this many consecutive catastrophic solves the prior is dropped and
     // the estimator cold-starts from the anchor centroid.
     uint8_t max_consecutive_bad = 10;
@@ -50,6 +56,8 @@ struct WindowEstimatorState {
     PosVector3D prior_position = PosVector3D::Zero();
     uint64_t prior_time_us = 0;
     uint8_t consecutive_bad = 0;
+    bool has_velocity = false;
+    PosVector3D velocity = PosVector3D::Zero();
 };
 
 struct WindowEstimatorResult {
