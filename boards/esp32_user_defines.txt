@@ -84,6 +84,7 @@
 -D USE_STATUS_LED_TASK          ; Status LED blink task (board-dependent)
 -D USE_RATE_STATISTICS          ; Position update rate tracking
 -D USE_RUNTIME_SUBSYSTEM_TOGGLES ; Runtime UWB/module toggles
+; -D USE_DRONE_SLEEP_MODE       ; NOT SUPPORTED: ESP32S3 drone power-disable pins only
 
 ; -----------------------------------------------------------------------------
 ; PERFORMANCE

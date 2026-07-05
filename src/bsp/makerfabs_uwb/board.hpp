@@ -33,6 +33,11 @@ namespace bsp {
             .rx_pin = 0xFFFF,
             .tx_pin = 0xFFFF,
         },
+        .power_disable_pins = {
+            .motors_ardupilot_pin = -1,
+            .elrs_rx_pin = -1,
+            .uwb_pin = -1,
+        },
         .led_pin = -1,
         .led2_pin = -1,  // LED 2 not available on this board
     };

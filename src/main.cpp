@@ -9,6 +9,10 @@
 
 #include "uwb/uwb_frontend_littlefs.hpp"
 
+#ifdef USE_DRONE_SLEEP_MODE
+#include "power/drone_sleep_controller.hpp"
+#endif
+
 #ifdef USE_WIFI
 #include "wifi/wifi_frontend_littlefs.hpp"
 #endif
@@ -96,6 +100,10 @@ void setup() {
     /**
      * Initializes the application
      */
+#ifdef USE_DRONE_SLEEP_MODE
+    DroneSleepController::Init();
+#endif
+
     app.Init();
 
     /**
@@ -144,6 +152,10 @@ void setup() {
 
 // For now the main thread will run the uwb ranging frontend.
 void loop() {
+#ifdef USE_DRONE_SLEEP_MODE
+    DroneSleepController::Update();
+#endif
+
     // ISUES: Looks like this task triggers a wdt reset if we execute it from a periodic thread.
     Front::uwbLittleFSFront.Update();
 }

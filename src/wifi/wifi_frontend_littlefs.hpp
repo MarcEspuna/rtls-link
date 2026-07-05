@@ -26,6 +26,9 @@ public:
         return m_Params;
     }
 
+    void SetLowPowerMode(bool enabled);
+    bool IsLowPowerMode() const;
+
     void StationConnectionThread();
 
 private:
@@ -50,6 +53,7 @@ private:
     bool m_pendingNetworkServicesSetup = false;
     bool m_pendingModeUpdate = false;
     WifiMode m_pendingMode = WifiMode::UNDEFINED;
+    bool m_lowPowerMode = false;
 
 public:
     static constexpr ParamDef s_ParamDefs[] = {

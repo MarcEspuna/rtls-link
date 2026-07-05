@@ -6,6 +6,8 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <cstdio>
+#include <cstring>
 
 #include <etl/delegate.h>
 #include <etl/queue.h>
@@ -25,6 +27,21 @@
 #ifdef HAS_RANGEFINDER
 #include "mavlink/rangefinder_sensor.hpp"
 #endif
+
+namespace {
+
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_HEARTBEAT)
+void copyReason(char* reason, size_t reason_len, const char* message)
+{
+  if (reason == nullptr || reason_len == 0) {
+    return;
+  }
+  std::strncpy(reason, message, reason_len - 1);
+  reason[reason_len - 1] = '\0';
+}
+#endif
+
+} // namespace
 
 #if defined(USE_MAVLINK) && defined(USE_RTLSLINK_BEACON_BACKEND)
 App::App()
@@ -63,10 +80,18 @@ void App::Init()
 
 #ifdef USE_MAVLINK
 #ifdef USE_MAVLINK_HEARTBEAT
-  local_position_sensor_.set_heartbeat_callback([this](uint8_t system_id, uint8_t component_id) {
-    (void)component_id;
+  local_position_sensor_.set_heartbeat_callback([this](uint8_t system_id,
+                                                       uint8_t component_id,
+                                                       const mavlink_heartbeat_t& heartbeat) {
+    const bool autopilotHeartbeat = heartbeat.autopilot == MAV_AUTOPILOT_ARDUPILOTMEGA
+                                 || component_id == MAV_COMP_ID_AUTOPILOT1;
+    if (!autopilotHeartbeat) {
+      return;
+    }
     last_heartbeat_received_timestamp_ms_ = millis();
     last_heartbeat_system_id_ = system_id;
+    last_heartbeat_component_id_ = component_id;
+    last_heartbeat_armed_ = (heartbeat.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0;
   });
 #endif // USE_MAVLINK_HEARTBEAT
 #endif // USE_MAVLINK
@@ -171,6 +196,7 @@ void App::Update()
 #endif
 
   if (!mavlink_output_selected) {
+    PollMavlinkInput();
     return;
   }
 
@@ -179,9 +205,6 @@ void App::Update()
   static uint32_t app_stats_unhealthy_cycles = 0;
   static uint64_t app_stats_last_log_ms = 0;
   static constexpr uint64_t APP_STATS_LOG_INTERVAL_MS = 1000;
-
-  uint8_t buffer[1024];
-  uint32_t buffer_index = 0;
 
   // ********** SENDING **********
 
@@ -318,18 +341,64 @@ void App::Update()
   }
 #endif
 
-  // For now we are only receiving heartbeat messages
-  // Read the buffer
-  while (Serial1.available() && buffer_index < sizeof(buffer)) {
-    uint8_t c = Serial1.read();
-    buffer[buffer_index++] = c;
-  }
-
-  // Process the buffer
-  local_position_sensor_.process_received_bytes(buffer, buffer_index);
+  PollMavlinkInput();
 
 #endif // USE_MAVLINK
 }
+
+#ifdef USE_MAVLINK
+void App::PollMavlinkInput()
+{
+  uint8_t buffer[1024];
+  uint32_t buffer_index = 0;
+
+  while (Serial1.available() && buffer_index < sizeof(buffer)) {
+    buffer[buffer_index++] = static_cast<uint8_t>(Serial1.read());
+  }
+
+  if (buffer_index > 0) {
+    local_position_sensor_.process_received_bytes(buffer, buffer_index);
+  }
+}
+#endif
+
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_HEARTBEAT)
+bool App::IsArdupilotHeartbeatFresh(uint32_t max_age_ms)
+{
+  if (app.last_heartbeat_received_timestamp_ms_ == 0) {
+    return false;
+  }
+  return (millis() - app.last_heartbeat_received_timestamp_ms_) <= max_age_ms;
+}
+
+bool App::IsArdupilotArmed()
+{
+  return app.last_heartbeat_armed_;
+}
+
+bool App::WaitForArdupilotDisarmed(uint32_t timeout_ms, char* reason, size_t reason_len)
+{
+  const uint32_t start_ms = millis();
+
+  do {
+    app.PollMavlinkInput();
+
+    if (IsArdupilotHeartbeatFresh(kHeartbeatRcvTimeoutMs)) {
+      if (app.last_heartbeat_armed_) {
+        copyReason(reason, reason_len, "Rejected: ArduPilot is armed");
+        return false;
+      }
+      copyReason(reason, reason_len, "ArduPilot disarmed");
+      return true;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+  } while ((millis() - start_ms) < timeout_ms);
+
+  copyReason(reason, reason_len, "Rejected: no fresh ArduPilot heartbeat");
+  return false;
+}
+#endif
 
 #if defined(USE_STATUS_LED_TASK) && defined(BOARD_HAS_LED)
 void App::StatusLedTask()

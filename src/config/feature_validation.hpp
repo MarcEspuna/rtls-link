@@ -141,6 +141,26 @@
 #endif
 
 // =============================================================================
+// DRONE SLEEP MODE DEPENDENCIES
+// =============================================================================
+
+#if defined(USE_DRONE_SLEEP_MODE) && !defined(ESP32S3_UWB_BOARD)
+    #error "USE_DRONE_SLEEP_MODE is only supported on ESP32S3_UWB_BOARD"
+#endif
+
+#if defined(USE_DRONE_SLEEP_MODE) && !defined(USE_WIFI_MAVLINK_MANAGEMENT)
+    #error "USE_DRONE_SLEEP_MODE requires USE_WIFI_MAVLINK_MANAGEMENT for discovery and wake commands"
+#endif
+
+#if defined(USE_DRONE_SLEEP_MODE) && !defined(USE_MAVLINK_HEARTBEAT)
+    #error "USE_DRONE_SLEEP_MODE requires USE_MAVLINK_HEARTBEAT for ArduPilot arm-state safety"
+#endif
+
+#if defined(USE_DRONE_SLEEP_MODE) && !defined(USE_RUNTIME_SUBSYSTEM_TOGGLES)
+    #error "USE_DRONE_SLEEP_MODE requires USE_RUNTIME_SUBSYSTEM_TOGGLES to suspend UWB before power-off"
+#endif
+
+// =============================================================================
 // MINIMUM VIABLE CONFIGURATION
 // =============================================================================
 // At least one UWB mode must be enabled for the firmware to be useful

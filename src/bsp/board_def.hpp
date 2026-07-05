@@ -26,11 +26,18 @@ namespace bsp {
         uint16_t tx_pin;
     };
 
+    struct DronePowerDisablePins {
+        int16_t motors_ardupilot_pin;
+        int16_t elrs_rx_pin;
+        int16_t uwb_pin;
+    };
+
     struct BoardConfig {
         UWBConfig uwb;
         UARTPinout mavlink_uart;
         UARTPinout uwb_data_uart;
         UARTPinout rangefinder_uart;  // UART for rangefinder MAVLink input (-1 = disabled)
+        DronePowerDisablePins power_disable_pins;
         int16_t led_pin;
         int16_t led2_pin;  // LED 2 for device identification (-1 = disabled)
     };
