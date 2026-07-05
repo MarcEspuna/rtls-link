@@ -8,7 +8,8 @@
 namespace tdoa {
 
 struct MeasurementSlot {
-    float tdoa = 0.0f;          // canonical: distance(a) - distance(b) with a < b
+    float tdoa = 0.0f;          // canonical: distance(b) - distance(a) with a < b
+                                // (consumers negate for the solver's d(a)-d(b) residual)
     uint64_t timestamp_us = 0;  // esp_timer_get_time() when last updated
     uint8_t anchor_a = 0;       // canonical (smaller) anchor id
     uint8_t anchor_b = 0;       // canonical (larger) anchor id
@@ -124,6 +125,54 @@ MeasurementSnapshotResult SnapshotFreshMeasurements(
         ++result.consumed;
     }
     result.measurementCountForStats = result.copied;
+    return result;
+}
+
+struct WindowSnapshotResult {
+    size_t copied = 0;    // slots within the window, copied to out
+    uint32_t expired = 0; // fresh slots dropped (stale or unconfigured)
+    uint32_t consumed = 0; // fresh flags cleared on usable slots
+};
+
+// Sliding-window snapshot: copies every usable slot younger than
+// windowMaxAgeUs regardless of freshness (measurements are reused across
+// solves), clearing fresh flags only for producer-notify bookkeeping.
+template <size_t PairCount, size_t AnchorCount>
+WindowSnapshotResult SnapshotWindowMeasurements(
+    etl::array<MeasurementSlot, PairCount>& slots,
+    const etl::array<bool, AnchorCount>& configuredAnchors,
+    uint64_t nowUs,
+    uint64_t staleThresholdUs,
+    uint64_t windowMaxAgeUs,
+    MeasurementSlot* out,
+    size_t outCapacity)
+{
+    WindowSnapshotResult result;
+    for (auto& slot : slots) {
+        if (slot.timestamp_us == 0) {
+            continue;
+        }
+        const uint64_t age = nowUs >= slot.timestamp_us ? nowUs - slot.timestamp_us : 0;
+        const bool usable = age <= staleThresholdUs
+            && slot.anchor_a < AnchorCount
+            && slot.anchor_b < AnchorCount
+            && configuredAnchors[slot.anchor_a]
+            && configuredAnchors[slot.anchor_b];
+        if (!usable) {
+            if (slot.fresh) {
+                slot.fresh = false;
+                ++result.expired;
+            }
+            continue;
+        }
+        if (slot.fresh) {
+            slot.fresh = false;
+            ++result.consumed;
+        }
+        if (age <= windowMaxAgeUs && result.copied < outCapacity) {
+            out[result.copied++] = slot;
+        }
+    }
     return result;
 }
 

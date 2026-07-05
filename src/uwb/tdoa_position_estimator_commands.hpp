@@ -14,4 +14,12 @@ namespace TDoAPositionEstimatorCommands {
     void ResetStats();
 }
 
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+namespace TDoADynamicAnchorCommands {
+    // Diagnostic dump of the dynamic anchor position calculator: per-pair
+    // accumulation counts / readiness / distances, and overall state.
+    String StatusJson();
+}
+#endif
+
 #endif // USE_UWB_MODE_TDOA_TAG

@@ -109,6 +109,22 @@
 #endif
 
 // =============================================================================
+// SLIDING-WINDOW TDOA ESTIMATOR DEPENDENCIES
+// =============================================================================
+
+#if defined(USE_UWB_TDOA_WINDOW_ESTIMATOR) && !defined(USE_UWB_MODE_TDOA_TAG)
+    #error "USE_UWB_TDOA_WINDOW_ESTIMATOR requires USE_UWB_MODE_TDOA_TAG to be defined"
+#endif
+
+#if defined(USE_UWB_TDOA_GEOMETRIC_MATCHER) && !defined(USE_UWB_TDOA_WINDOW_ESTIMATOR)
+    #error "USE_UWB_TDOA_GEOMETRIC_MATCHER requires USE_UWB_TDOA_WINDOW_ESTIMATOR (it scores against the window estimator's published state)"
+#endif
+
+#if defined(USE_UWB_TDOA_GEOMETRIC_MATCHER) && !defined(ESP32S3_UWB_BOARD)
+    #error "USE_UWB_TDOA_GEOMETRIC_MATCHER is only supported on ESP32S3_UWB_BOARD (matcher policy param is ESP32S3-only)"
+#endif
+
+// =============================================================================
 // DYNAMIC ANCHOR POSITION DEPENDENCIES
 // =============================================================================
 

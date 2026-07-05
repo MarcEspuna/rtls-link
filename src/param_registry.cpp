@@ -84,6 +84,10 @@ static constexpr RegistryEntry kEntries[] = {
     {"UWB_EST_2D", "uwb", "use2DEstimator"},
     {"UWB_EST_MODE", "uwb", "tdoaEstimatorMode"},
     {"UWB_EST_DIAG", "uwb", "tdoaEstimatorDiag"},
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    {"UWB_WIN_CAD", "uwb", "tdoaWindowCadenceMs"},
+    {"UWB_WIN_AGE", "uwb", "tdoaWindowAgeMs"},
+#endif
     {"UWB_CHAN", "uwb", "channel"},
     {"UWB_DW_MODE", "uwb", "dwMode"},
     {"UWB_TX_PWR", "uwb", "txPowerLevel"},

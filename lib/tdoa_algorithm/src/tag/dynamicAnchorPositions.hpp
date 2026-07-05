@@ -150,6 +150,22 @@ public:
      */
     bool canCalculateAt(uint32_t currentTime) const;
 
+    // --- Diagnostics (read-only): accumulation state per pair ---
+    uint16_t debugSampleCount(uint8_t from, uint8_t to) const {
+        if (from >= MAX_DYNAMIC_ANCHORS || to >= MAX_DYNAMIC_ANCHORS) return 0;
+        return m_accumulators[from][to].count;
+    }
+    bool debugDistanceReady(uint8_t from, uint8_t to) const {
+        if (from >= MAX_DYNAMIC_ANCHORS || to >= MAX_DYNAMIC_ANCHORS) return false;
+        return (m_validDistanceMask[from] & (1 << to)) != 0;
+    }
+    float debugDistance(uint8_t from, uint8_t to) const {
+        if (from >= MAX_DYNAMIC_ANCHORS || to >= MAX_DYNAMIC_ANCHORS) return 0.0f;
+        return debugDistanceReady(from, to)
+            ? m_averagedDistances[from][to]
+            : m_accumulators[from][to].average();
+    }
+
     /**
      * @brief Calculate anchor positions from averaged distances
      * @param positions Output array for calculated positions (NED coordinates)

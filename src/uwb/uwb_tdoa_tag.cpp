@@ -21,6 +21,12 @@
 
 #include "tdoa_newton_raphson.hpp"
 #include "tdoa_robust_estimator.hpp"
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+#include "tdoa_window_estimator.hpp"
+#endif
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+#include "tdoa_matcher_score.hpp"
+#endif
 
 #include "tag/tdoa_tag_algorithm.hpp"
 
@@ -122,6 +128,10 @@ static constexpr tdoa_estimator::Scalar kMax3DPositionVarianceM2 = 9.0f;
 static constexpr uint8_t kEstimatorModeLegacy = 0;
 static constexpr uint8_t kEstimatorModeRobust = 1;
 static constexpr uint8_t kEstimatorModeCompare = 2;
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+static constexpr uint8_t kEstimatorModeWindow = kTdoaEstimatorModeWindow;
+static constexpr uint8_t kWindow3DUniqueAnchorsForSolve = 4;
+#endif
 static constexpr uint8_t kEstimatorMode2D = 255;
 static constexpr uint8_t kEstimatorDiagOff = 0;
 static constexpr uint8_t kEstimatorDiagSummary = 1;
@@ -142,6 +152,11 @@ enum EstimatorDiagnosticFlags : uint8_t {
 
 static uint8_t sanitizeEstimatorMode(uint8_t mode)
 {
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    if (mode == kEstimatorModeWindow) {
+        return mode;
+    }
+#endif
     return mode <= kEstimatorModeCompare ? mode : kEstimatorModeRobust;
 }
 
@@ -505,6 +520,11 @@ static std::atomic<uint32_t> s_estimatorProducerDroppedTotal{0};
 static tdoaEngineMatchingAlgorithm_t matcherPolicyFromParam(uint8_t policy)
 {
 #ifdef ESP32S3_UWB_BOARD
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    if (policy == 2) {
+        return TdoaEngineMatchingAlgorithmScored;
+    }
+#endif
     return policy == 1
         ? TdoaEngineMatchingAlgorithmRandom
         : TdoaEngineMatchingAlgorithmYoungest;
@@ -519,11 +539,133 @@ static const char* matcherPolicyName(tdoaEngineMatchingAlgorithm_t policy)
     switch (policy) {
         case TdoaEngineMatchingAlgorithmRandom:
             return "RANDOM";
+        case TdoaEngineMatchingAlgorithmScored:
+            return "GEOMETRIC(scored)";
         case TdoaEngineMatchingAlgorithmYoungest:
         default:
             return "YOUNGEST";
     }
 }
+
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+// Window-information matcher state. The estimator task publishes its
+// age-decayed information state after each accepted solve; the scorer runs
+// in the radio path and reads it lock-free. Double-buffered with an atomic
+// index: the writer fills the inactive slot then flips, so a reader's slot
+// stays stable for at least one full solve cadence (>=5ms) - orders of
+// magnitude longer than the microseconds the read takes.
+struct MatcherSnapshot {
+    tdoa_estimator::Scalar info[6] = {};
+    tdoa_estimator::Scalar tag_pos[3] = {};
+    tdoa_estimator::Scalar pair_weight[kNumPairs] = {};
+    float anchor_pos[kNumAnchors][3] = {};
+    bool anchor_configured[kNumAnchors] = {};
+    uint64_t solve_time_us = 0;
+};
+static MatcherSnapshot s_matcherSnapshots[2];
+static std::atomic<uint8_t> s_matcherSnapshotIndex{0};
+static constexpr uint64_t kMatcherSnapshotStaleUs = 500000;
+
+// Estimator task only (single writer).
+static void publishMatcherSnapshot(const PairSlot* rows,
+                                   size_t row_count,
+                                   const etl::array<UWBAnchorParam, kNumAnchors>& anchors,
+                                   const etl::array<bool, kNumAnchors>& configured,
+                                   const tdoa_estimator::PosVector3D& tag_position,
+                                   uint64_t now_us,
+                                   uint32_t age_half_life_us)
+{
+    const uint8_t next = static_cast<uint8_t>(1u - s_matcherSnapshotIndex.load(std::memory_order_relaxed));
+    MatcherSnapshot& snap = s_matcherSnapshots[next];
+
+    snap = MatcherSnapshot{};
+    snap.solve_time_us = now_us;
+    for (uint8_t i = 0; i < 3; ++i) {
+        snap.tag_pos[i] = tag_position(i);
+    }
+    for (uint8_t a = 0; a < kNumAnchors; ++a) {
+        snap.anchor_configured[a] = configured[a];
+        snap.anchor_pos[a][0] = anchors[a].x;
+        snap.anchor_pos[a][1] = anchors[a].y;
+        snap.anchor_pos[a][2] = anchors[a].z;
+    }
+
+    tdoa_estimator::PackedInfo3 info;
+    for (size_t i = 0; i < row_count; ++i) {
+        const PairSlot& s = rows[i];
+        if (s.anchor_a >= kNumAnchors || s.anchor_b >= kNumAnchors) {
+            continue;
+        }
+        const uint64_t age_us = now_us >= s.timestamp_us ? now_us - s.timestamp_us : 0;
+        tdoa_estimator::Scalar sigma = (std::isfinite(s.sigma_m) && s.sigma_m > 0.05f)
+            ? s.sigma_m : 0.05f;
+        const tdoa_estimator::Scalar age_weight = age_half_life_us > 0
+            ? 1.0f / (1.0f + static_cast<tdoa_estimator::Scalar>(age_us)
+                             / static_cast<tdoa_estimator::Scalar>(age_half_life_us))
+            : 1.0f;
+        const tdoa_estimator::Scalar w = age_weight / (sigma * sigma);
+
+        tdoa_estimator::PosVector3D pos_a;
+        pos_a << anchors[s.anchor_a].x, anchors[s.anchor_a].y, anchors[s.anchor_a].z;
+        tdoa_estimator::PosVector3D pos_b;
+        pos_b << anchors[s.anchor_b].x, anchors[s.anchor_b].y, anchors[s.anchor_b].z;
+        const tdoa_estimator::PosVector3D g =
+            tdoa_estimator::tdoaPairGradient(tag_position, pos_a, pos_b);
+        info.addOuter(g, w);
+
+        tdoa::AnchorPair pair;
+        bool reversed = false;
+        if (tdoa::CanonicalizePair(s.anchor_a, s.anchor_b, kNumAnchors, pair, reversed)) {
+            snap.pair_weight[tdoa::PairIndexCanonical(pair, kNumAnchors)] = w;
+        }
+    }
+    std::copy(info.m, info.m + 6, snap.info);
+
+    s_matcherSnapshotIndex.store(next, std::memory_order_release);
+}
+
+// Radio path (reader). Returns NAN when scoring is unavailable so the engine
+// falls back to RANDOM matching.
+static float geometricMatchScorer(uint8_t newAnchorId, uint8_t candidateAnchorId)
+{
+    if (newAnchorId >= kNumAnchors || candidateAnchorId >= kNumAnchors
+        || newAnchorId == candidateAnchorId) {
+        return NAN;
+    }
+
+    const MatcherSnapshot& snap =
+        s_matcherSnapshots[s_matcherSnapshotIndex.load(std::memory_order_acquire)];
+    if (snap.solve_time_us == 0) {
+        return NAN;
+    }
+    const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+    if (now_us - snap.solve_time_us > kMatcherSnapshotStaleUs) {
+        return NAN;
+    }
+    if (!snap.anchor_configured[newAnchorId] || !snap.anchor_configured[candidateAnchorId]) {
+        return NAN;
+    }
+
+    tdoa::AnchorPair pair;
+    bool reversed = false;
+    if (!tdoa::CanonicalizePair(newAnchorId, candidateAnchorId, kNumAnchors, pair, reversed)) {
+        return NAN;
+    }
+
+    tdoa_estimator::PosVector3D tag;
+    tag << snap.tag_pos[0], snap.tag_pos[1], snap.tag_pos[2];
+    tdoa_estimator::PosVector3D pos_a;
+    pos_a << snap.anchor_pos[newAnchorId][0], snap.anchor_pos[newAnchorId][1],
+             snap.anchor_pos[newAnchorId][2];
+    tdoa_estimator::PosVector3D pos_b;
+    pos_b << snap.anchor_pos[candidateAnchorId][0], snap.anchor_pos[candidateAnchorId][1],
+             snap.anchor_pos[candidateAnchorId][2];
+
+    return tdoa_estimator::matcherScorePair(
+        snap.info, tag, pos_a, pos_b,
+        snap.pair_weight[tdoa::PairIndexCanonical(pair, kNumAnchors)]);
+}
+#endif // USE_UWB_TDOA_GEOMETRIC_MATCHER
 
 static uint8_t configuredMatcherPolicy()
 {
@@ -725,6 +867,10 @@ static String positionEstimatorStatsJson()
     result += static_cast<unsigned long>(stats.compareFallbackLegacy);
     result += ",\"compareRobustInvalid\":";
     result += static_cast<unsigned long>(stats.compareRobustInvalid);
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    result += ",\"dynamicAnchors\":";
+    result += UWBTagTDoA::DynamicAnchorStatusJson();
+#endif
     result += "}";
     return result;
 }
@@ -966,6 +1112,9 @@ UWBTagTDoA::UWBTagTDoA(const bsp::UWBConfig& uwb_config, etl::span<const UWBAnch
     LOG_INFO("Initialized TDoA Tag: 0x%08X", dev_id);
 
 #ifdef ESP32S3_UWB_BOARD
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+    uwbTdoa2TagSetMatchScorer(geometricMatchScorer);
+#endif
     ApplyMatcherPolicy(uwbParams.tdoaMatcherPolicy);
 #endif
 
@@ -1326,9 +1475,15 @@ bool UWBTagTDoA::ValidateStaticAnchorsForEstimator(etl::span<const UWBAnchorPara
         LOG_ERROR("Rejected static anchor config: 2D estimator requires at least 4 anchors");
         return false;
     }
-    const uint8_t min3DAnchors = sanitizeEstimatorMode(tdoaEstimatorMode) == kEstimatorModeLegacy
+    const uint8_t sanitizedMode = sanitizeEstimatorMode(tdoaEstimatorMode);
+    uint8_t min3DAnchors = sanitizedMode == kEstimatorModeLegacy
         ? kLegacy3DUniqueAnchorsForSolve
         : kRobust3DUniqueAnchorsForSolve;
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    if (sanitizedMode == kEstimatorModeWindow) {
+        min3DAnchors = kWindow3DUniqueAnchorsForSolve;
+    }
+#endif
     if (!use2DEstimator && anchors.size() < min3DAnchors) {
         LOG_ERROR("Rejected static anchor config: 3D estimator requires at least %u anchors",
                   static_cast<unsigned int>(min3DAnchors));
@@ -1628,6 +1783,226 @@ static void copyRobustDiagnostics(EstimatorSolveStats& outStats,
     }
 }
 
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+// Wake timeout for the estimator task while window mode is active: set each
+// pass so the task self-wakes at the next cadence tick even when producer
+// notifications stall (e.g. heavy packet loss keeps fresh count below the
+// notify threshold while the window still holds reusable rows).
+static uint32_t s_estimatorWakeTimeoutMs = kEstimatorWatchdogMs;
+
+// Sliding-window estimator path: fixed-cadence MAP solve over every non-stale
+// pair slot. Measurements are reused across solves (no batch consumption), so
+// the output rate is decoupled from fresh-measurement accumulation, and weak
+// geometry degrades the reported covariance instead of gating the fix.
+static void estimatorProcessWindow(const UWBParams& params, bool& first_estimation)
+{
+    static tdoa_estimator::WindowEstimatorState window_state;
+    static uint64_t last_solve_us = 0;
+
+    if (first_estimation) {
+        // Reset the estimator state AND drop retained measurements: slots can
+        // hold rows up to the stale threshold old, and solving pre-reinit
+        // TDoAs against post-reinit anchor coordinates emits transient bad
+        // positions. If the mutex is contended, retry on the next wake.
+        if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
+            s_estimatorWakeTimeoutMs = 2;  // retry promptly
+            return;
+        }
+        uint32_t fresh_cleared = 0;
+        for (auto& slot : pair_slots) {
+            if (slot.fresh) {
+                fresh_cleared++;
+            }
+            slot = PairSlot{};
+        }
+        xSemaphoreGive(measurements_mtx);
+        if (fresh_cleared > 0) {
+            fresh_pair_count.fetch_sub(fresh_cleared, std::memory_order_relaxed);
+        }
+        window_state = tdoa_estimator::WindowEstimatorState{};
+        last_solve_us = 0;
+        first_estimation = false;
+        s_estimatorWakeTimeoutMs = 1;  // resume solving on the next wake
+        LOG_INFO("Sliding-window estimator (re)initialized, measurement window cleared");
+        return;
+    }
+
+    const uint32_t cadence_ms = params.tdoaWindowCadenceMs == 0
+        ? 20u
+        : std::min<uint32_t>(std::max<uint32_t>(params.tdoaWindowCadenceMs, 5u), 200u);
+    const uint32_t window_age_ms = params.tdoaWindowAgeMs == 0
+        ? 150u
+        : std::min<uint32_t>(std::max<uint32_t>(params.tdoaWindowAgeMs, 50u), 350u);
+
+    const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+    if (last_solve_us != 0 && (now_us - last_solve_us) < static_cast<uint64_t>(cadence_ms) * 1000u) {
+        const uint32_t elapsed_ms =
+            static_cast<uint32_t>((now_us - last_solve_us) / 1000u);
+        s_estimatorWakeTimeoutMs = std::max(1u, cadence_ms - elapsed_ms);
+        return;
+    }
+
+    PairSlot snapshot[kNumPairs];
+    etl::array<UWBAnchorParam, kNumAnchors> anchor_snapshot = {};
+    etl::array<bool, kNumAnchors> configured_snapshot = {};
+    if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
+        s_estimatorWakeTimeoutMs = 2;  // retry promptly
+        return;
+    }
+    const tdoa::WindowSnapshotResult snap = tdoa::SnapshotWindowMeasurements(
+        pair_slots,
+        configured_anchor_ids,
+        now_us,
+        kStaleThresholdUs,
+        static_cast<uint64_t>(window_age_ms) * 1000u,
+        snapshot,
+        kNumPairs);
+    anchor_snapshot = anchor_positions;
+    configured_snapshot = configured_anchor_ids;
+    xSemaphoreGive(measurements_mtx);
+
+    const uint32_t fresh_delta = snap.consumed + snap.expired;
+    if (fresh_delta > 0) {
+        fresh_pair_count.fetch_sub(fresh_delta, std::memory_order_relaxed);
+    }
+    recordStaleRemoved(snap.expired);
+#if TDOA_STATS_LOGGING == ENABLE
+    stats_stale_removed += snap.expired;
+#endif
+
+    last_solve_us = now_us;
+
+    tdoa_estimator::RobustTdoaRow rows[kNumPairs];
+    for (size_t i = 0; i < snap.copied; ++i) {
+        const PairSlot& s = snapshot[i];
+        tdoa_estimator::RobustTdoaRow& row = rows[i];
+        row.anchor_a = s.anchor_a;
+        row.anchor_b = s.anchor_b;
+        row.anchor_a_pos << static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].x),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].y),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_a].z);
+        row.anchor_b_pos << static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].x),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].y),
+                            static_cast<tdoa_estimator::Scalar>(anchor_snapshot[s.anchor_b].z);
+        // Slot stores canonical tdoa = d(b) - d(a); the solver residual is
+        // d(a) - d(b) - tdoa, so flip sign (same convention as the batch path).
+        row.tdoa = -static_cast<tdoa_estimator::Scalar>(s.tdoa);
+        const uint64_t age_us = now_us >= s.timestamp_us ? now_us - s.timestamp_us : 0;
+        row.age_us = age_us > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(age_us);
+        row.nominal_sigma_m = (std::isfinite(s.sigma_m) && s.sigma_m > 0.0f)
+            ? static_cast<tdoa_estimator::Scalar>(s.sigma_m)
+            : static_cast<tdoa_estimator::Scalar>(0.15f);
+        row.health = 1.0f;
+    }
+
+    tdoa_estimator::WindowEstimatorOptions options;
+    options.min_unique_anchors = kWindow3DUniqueAnchorsForSolve;
+    options.window_max_age_us = window_age_ms * 1000u;
+    // Consecutive solves reuse ~window/cadence of their measurements; inflate
+    // the reported covariance accordingly so ArduPilot's EKF (which fuses
+    // fixes as independent) is not over-confident at high emit rates.
+    options.covariance_reuse_scale = std::max(
+        1.0f, static_cast<float>(window_age_ms) / static_cast<float>(cadence_ms));
+
+    const uint64_t solve_start_us = static_cast<uint64_t>(esp_timer_get_time());
+    const tdoa_estimator::WindowEstimatorResult result = tdoa_estimator::estimateWindow3D(
+        rows, snap.copied, now_us, window_state, options);
+    const uint32_t solve_us = elapsedUs(solve_start_us);
+
+    EstimatorSolveStats solveStats;
+    solveStats.mode = kEstimatorModeWindow;
+    solveStats.diagLevel = sanitizeEstimatorDiag(params.tdoaEstimatorDiag);
+    solveStats.inputRows = clampToU8(snap.copied);
+    solveStats.selectedRows = result.used_rows;
+    solveStats.uniqueAnchors = result.unique_anchors;
+    solveStats.iterations = clampToU8(static_cast<size_t>(result.solve.iterations));
+    solveStats.rmseMm = metersToMillimetersUnsigned(result.solve.rmse);
+    solveStats.residualScaleMm = metersToMillimetersUnsigned(result.residual_scale_m);
+    solveStats.solveUs = solve_us;
+    solveStats.robustSolveUs = solve_us;
+
+    const bool has_nan = result.solve.position.hasNaN();
+    const bool accepted = result.solve.valid && !has_nan;
+    const bool insufficient = result.used_rows < options.min_rows
+        || result.unique_anchors < options.min_unique_anchors;
+
+    // Window mode always emits its covariance (not gated on enableCovMatrix):
+    // weak-geometry fixes are emitted instead of gated, and the inflated
+    // covariance is the downstream EKF's only signal to de-weight them.
+    std::optional<PackedPositionCovariance> position_covariance = std::nullopt;
+    if (accepted && result.solve.covarianceValid) {
+        position_covariance = pack3DCovariance(result.solve.positionCovariance);
+        solveStats.flags |= kEstimatorDiagFlagCovarianceSent;
+    }
+    if (accepted) {
+        solveStats.flags |= kEstimatorDiagFlagAccepted;
+    }
+    solveStats.xMm = metersToMillimetersSigned(static_cast<float>(result.solve.position(0)));
+    solveStats.yMm = metersToMillimetersSigned(static_cast<float>(result.solve.position(1)));
+    solveStats.zMm = metersToMillimetersSigned(static_cast<float>(result.solve.position(2)));
+    recordEstimatorSolveStats(solveStats);
+
+#if TDOA_STATS_LOGGING == ENABLE
+    stats_solve_count++;
+    stats_solve_sum_us += solve_us;
+    stats_iter_sum += static_cast<uint32_t>(result.solve.iterations);
+    if (solve_us < stats_solve_min_us) stats_solve_min_us = solve_us;
+    if (solve_us > stats_solve_max_us) stats_solve_max_us = solve_us;
+#endif
+
+    if (accepted) {
+#ifdef USE_UWB_TDOA_GEOMETRIC_MATCHER
+        publishMatcherSnapshot(snapshot, snap.copied, anchor_snapshot, configured_snapshot,
+                               result.solve.position, now_us, options.age_half_life_us);
+#endif
+        recordEstimatorAccepted(result.solve.position(0),
+                                result.solve.position(1),
+                                result.solve.position(2),
+                                result.solve.rmse,
+                                snap.copied);
+        App::SendSample(result.solve.position(0),
+                        result.solve.position(1),
+                        result.solve.position(2),
+                        position_covariance);
+#if TDOA_STATS_LOGGING == ENABLE
+        stats_samples_sent++;
+#endif
+    } else {
+        recordEstimatorRejected(!insufficient && !has_nan, has_nan, insufficient, snap.copied);
+#if TDOA_STATS_LOGGING == ENABLE
+        stats_samples_rejected++;
+        if (has_nan) {
+            stats_reject_nan++;
+        } else if (insufficient) {
+            stats_reject_insufficient++;
+        } else {
+            stats_reject_rmse++;
+        }
+#endif
+    }
+
+    uint64_t now_position_log = millis();
+    if (now_position_log - position_last_log_time_ms >= POSITION_LOG_INTERVAL_MS) {
+        LOG_DEBUG("Position(win): X=%.2f Y=%.2f Z=%.2f RMSE=%.3fm rows=%u [%s]",
+                  result.solve.position(0), result.solve.position(1), result.solve.position(2),
+                  result.solve.rmse, static_cast<unsigned int>(result.used_rows),
+                  accepted ? "OK" : "INVALID");
+        position_last_log_time_ms = now_position_log;
+    }
+
+    // Re-arm the wake timeout from the ACTUAL remaining time, measured after
+    // the solve/send work, so processing time does not stretch the cadence
+    // (arming a full cadence before the work would drift gaps to
+    // cadence + solve time during notification stalls).
+    const uint64_t end_us = static_cast<uint64_t>(esp_timer_get_time());
+    const uint64_t spent_us = end_us - last_solve_us;
+    const uint64_t cadence_us = static_cast<uint64_t>(cadence_ms) * 1000u;
+    s_estimatorWakeTimeoutMs = spent_us >= cadence_us
+        ? 1u
+        : std::max<uint32_t>(1u, static_cast<uint32_t>((cadence_us - spent_us) / 1000u));
+}
+#endif // USE_UWB_TDOA_WINDOW_ESTIMATOR
+
 static void estimatorProcess() {
     static tdoa_estimator::PosMatrix anchors_left;
     static tdoa_estimator::PosMatrix anchors_right;
@@ -1642,9 +2017,18 @@ static void estimatorProcess() {
     static constexpr int NUM_ITERATIONS_3D = 10;
 
     // Continuous task — block on notification until producer wakes us, or
-    // until the watchdog timeout elapses (so dynamic-anchor / stats
-    // bookkeeping still runs during quiet periods).
+    // until a timeout elapses (so dynamic-anchor / stats bookkeeping still
+    // runs during quiet periods). In window mode the timeout is set to the
+    // remaining time to the next cadence tick so the solve rate holds even
+    // when producer notifications stall (heavy packet loss).
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    const uint32_t wake_timeout_ms =
+        std::min<uint32_t>(s_estimatorWakeTimeoutMs, kEstimatorWatchdogMs);
+    s_estimatorWakeTimeoutMs = kEstimatorWatchdogMs;  // window branch re-arms each pass
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wake_timeout_ms));
+#else
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kEstimatorWatchdogMs));
+#endif
 
     const auto& currentParams = Front::uwbLittleFSFront.GetParams();
     const bool USE_2D_ESTIMATOR = (currentParams.use2DEstimator != 0);
@@ -1690,6 +2074,13 @@ static void estimatorProcess() {
         && s_dynamicEstimatorReinitRequested.exchange(false, std::memory_order_relaxed)) {
         first_estimation = true;
         LOG_INFO("Reinitializing estimator from dynamic anchor positions");
+    }
+#endif
+
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    if (!USE_2D_ESTIMATOR && runtimeEstimatorMode == kEstimatorModeWindow) {
+        estimatorProcessWindow(currentParams, first_estimation);
+        return;
     }
 #endif
 
@@ -2303,6 +2694,48 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
         giveDynamicCalcMutex();
     }
     if (!calculated) {
+        // Diagnostic: while geometry is pending, periodically report which
+        // pairs are still short on samples so field bring-up is debuggable.
+        static uint32_t s_lastPendingLogMs = 0;
+        if ((now - s_lastPendingLogMs) > 10000) {
+            s_lastPendingLogMs = now;
+            char missing[64];
+            size_t mlen = 0;
+            uint8_t ready_count = 0;
+            if (takeDynamicCalcMutex(pdMS_TO_TICKS(5))) {
+                for (uint8_t a = 0; a < dynamic_anchor_count && mlen + 6 < sizeof(missing); a++) {
+                    for (uint8_t b = static_cast<uint8_t>(a + 1); b < dynamic_anchor_count; b++) {
+                        if (s_dynamicCalc.debugDistanceReady(a, b)) {
+                            ready_count++;
+                        } else if (mlen + 6 < sizeof(missing)) {
+                            mlen += snprintf(missing + mlen, sizeof(missing) - mlen,
+                                             "%u%u(%u) ", a, b,
+                                             s_dynamicCalc.debugSampleCount(a, b));
+                        }
+                    }
+                }
+                // Key geometry for layout 0 (+X=A1, +Y=A3, corner=A2):
+                const float d01 = s_dynamicCalc.debugDistance(0, 1);
+                const float d03 = s_dynamicCalc.debugDistance(0, 3);
+                const float d02 = s_dynamicCalc.debugDistance(0, 2);
+                const float v04 = s_dynamicCalc.debugDistance(0, 4);
+                const float v15 = s_dynamicCalc.debugDistance(1, 5);
+                const float v26 = s_dynamicCalc.debugDistance(2, 6);
+                const float v37 = s_dynamicCalc.debugDistance(3, 7);
+                const float u45 = s_dynamicCalc.debugDistance(4, 5);
+                const float u47 = s_dynamicCalc.debugDistance(4, 7);
+                const float u46 = s_dynamicCalc.debugDistance(4, 6);
+                giveDynamicCalcMutex();
+                LOG_INFO("Dynamic geometry pending: %u pairs ready, missing: %s",
+                         ready_count, mlen > 0 ? missing : "none");
+                LOG_INFO("  lower: dX=%.2f dY=%.2f diag=%.2f (expect diag~%.2f) | upper: dX=%.2f dY=%.2f diag=%.2f",
+                         d01, d03, d02, sqrtf(d01 * d01 + d03 * d03), u45, u47, u46);
+                LOG_INFO("  verticals: %.2f %.2f %.2f %.2f (param planeSep=%.2f, tol=%.2f)",
+                         v04, v15, v26, v37,
+                         Front::uwbLittleFSFront.GetParams().anchorPlaneSeparation,
+                         std::max(0.5f, Front::uwbLittleFSFront.GetParams().anchorPlaneSeparation * 0.35f));
+            }
+        }
         if (s_dynamicPositionsReadyForEstimator.exchange(false, std::memory_order_relaxed)) {
             if (xSemaphoreTake(measurements_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
                 for (uint8_t i = 0; i < kNumAnchors; i++) {
@@ -2388,6 +2821,54 @@ void UWBTagTDoA::maybeUpdateDynamicPositions() {
         }
     }
 }
+String UWBTagTDoA::DynamicAnchorStatusJson()
+{
+    String out = "{\"enabled\":";
+    out += UWBTagTDoA::IsDynamicPositioningEnabled() ? "true" : "false";
+    out += ",\"positionsReady\":";
+    out += s_dynamicPositionsReadyForEstimator.load(std::memory_order_relaxed)
+        ? "true" : "false";
+
+    bool can_calc = false;
+    String pairs = "[";
+    if (takeDynamicCalcMutex(pdMS_TO_TICKS(50))) {
+        can_calc = UWBTagTDoA::s_dynamicCalc.canCalculate();
+        bool first = true;
+        for (uint8_t a = 0; a < kNumAnchors; a++) {
+            for (uint8_t b = static_cast<uint8_t>(a + 1); b < kNumAnchors; b++) {
+                if (!first) pairs += ",";
+                first = false;
+                pairs += "{\"p\":\"";
+                pairs += static_cast<int>(a);
+                pairs += static_cast<int>(b);
+                pairs += "\",\"n\":";
+                pairs += static_cast<int>(UWBTagTDoA::s_dynamicCalc.debugSampleCount(a, b));
+                pairs += ",\"ok\":";
+                pairs += UWBTagTDoA::s_dynamicCalc.debugDistanceReady(a, b) ? "true" : "false";
+                pairs += ",\"d\":";
+                pairs += String(UWBTagTDoA::s_dynamicCalc.debugDistance(a, b), 2);
+                pairs += "}";
+            }
+        }
+        giveDynamicCalcMutex();
+    }
+    pairs += "]";
+
+    out += ",\"canCalculate\":";
+    out += can_calc ? "true" : "false";
+    out += ",\"pairs\":";
+    out += pairs;
+    out += "}";
+    return out;
+}
+
+namespace TDoADynamicAnchorCommands {
+String StatusJson()
+{
+    return UWBTagTDoA::DynamicAnchorStatusJson();
+}
+} // namespace TDoADynamicAnchorCommands
+
 #endif // USE_DYNAMIC_ANCHOR_POSITIONS
 
 #endif // USE_UWB_MODE_TDOA_TAG

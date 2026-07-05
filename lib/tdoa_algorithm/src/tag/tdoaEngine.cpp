@@ -60,6 +60,8 @@ static uint64_t getTdoaSolvedTimestampUs()
 #endif
 }
 
+#include <math.h>
+
 #include "tdoaEngine.h"
 #include "tdoaStats.h"
 #include "clockCorrectionEngine.h"
@@ -71,8 +73,13 @@ void tdoaEngineInit(tdoaEngineState_t* engineState, const uint32_t now_ms, tdoaE
   engineState->sendTdoaToEstimator = sendTdoaToEstimator;
   engineState->locodeckTsFreq = locodeckTsFreq;
   engineState->matchingAlgorithm = matchingAlgorithm;
+  engineState->matchScorer = 0;
 
   engineState->matching.offset = 0;
+}
+
+void tdoaEngineSetMatchScorer(tdoaEngineState_t* engineState, tdoaEngineMatchScorer scorer) {
+  engineState->matchScorer = scorer;
 }
 
 static void enqueueTDOA(const tdoaAnchorContext_t* anchorACtx, const tdoaAnchorContext_t* anchorBCtx, double distanceDiff, tdoaEngineState_t* engineState) {
@@ -231,6 +238,48 @@ static bool matchYoungestAnchor(tdoaEngineState_t* engineState, tdoaAnchorContex
     return false;
 }
 
+// Scored matching: ask the application scorer to rate every eligible
+// candidate and pick the best. Falls back to random matching when no
+// candidate can be scored (no scorer registered, cold start, stale state).
+static bool matchScoredAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const bool doExcludeId, const uint8_t excludedId) {
+    if (engineState->matchScorer == 0) {
+      return matchRandomAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
+    }
+
+    int remoteCount = 0;
+    tdoaStorageGetRemoteSeqNrList(anchorCtx, &remoteCount, engineState->matching.seqNr, engineState->matching.id);
+
+    const uint8_t newAnchorId = tdoaStorageGetId(anchorCtx);
+    uint32_t now_ms = anchorCtx->currentTime_ms;
+    float bestScore = 0.0f;
+    int bestId = -1;
+
+    for (int index = 0; index < remoteCount; index++) {
+      const uint8_t candidateAnchorId = engineState->matching.id[index];
+      if (!doExcludeId || (excludedId != candidateAnchorId)) {
+        if (tdoaStorageGetRemoteTimeOfFlight(anchorCtx, candidateAnchorId)) {
+          if (tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, candidateAnchorId, now_ms, otherAnchorCtx)) {
+            if (engineState->matching.seqNr[index] == tdoaStorageGetSeqNr(otherAnchorCtx)) {
+              const float score = engineState->matchScorer(newAnchorId, candidateAnchorId);
+              if (!isnan(score) && (bestId < 0 || score > bestScore)) {
+                bestScore = score;
+                bestId = candidateAnchorId;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (bestId >= 0) {
+      tdoaStorageGetCreateAnchorCtx(engineState->anchorInfoArray, bestId, now_ms, otherAnchorCtx);
+      return true;
+    }
+
+    // Nothing scoreable - degrade gracefully to random matching.
+    return matchRandomAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
+}
+
 static bool findSuitableAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext_t* otherAnchorCtx, const tdoaAnchorContext_t* anchorCtx, const bool doExcludeId, const uint8_t excludedId) {
   bool result = false;
 
@@ -242,6 +291,10 @@ static bool findSuitableAnchor(tdoaEngineState_t* engineState, tdoaAnchorContext
 
       case TdoaEngineMatchingAlgorithmYoungest:
         result = matchYoungestAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
+        break;
+
+      case TdoaEngineMatchingAlgorithmScored:
+        result = matchScoredAnchor(engineState, otherAnchorCtx, anchorCtx, doExcludeId, excludedId);
         break;
 
       default:

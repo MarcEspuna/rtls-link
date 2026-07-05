@@ -108,6 +108,10 @@ public:
         PARAM_DEF(UWBParams, use2DEstimator),
         PARAM_DEF(UWBParams, tdoaEstimatorMode),
         PARAM_DEF(UWBParams, tdoaEstimatorDiag),
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+        PARAM_DEF(UWBParams, tdoaWindowCadenceMs),
+        PARAM_DEF(UWBParams, tdoaWindowAgeMs),
+#endif
         PARAM_DEF(UWBParams, channel),
         PARAM_DEF(UWBParams, dwMode),
         PARAM_DEF(UWBParams, txPowerLevel),

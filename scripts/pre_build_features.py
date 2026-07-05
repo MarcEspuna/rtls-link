@@ -164,6 +164,14 @@ def validate_features(flags, board_define=None):
     if 'USE_RTLSLINK_BEACON_BACKEND' in flag_set and 'USE_UWB_MODE_TDOA_TAG' not in flag_set:
         errors.append("USE_RTLSLINK_BEACON_BACKEND requires USE_UWB_MODE_TDOA_TAG")
 
+    # === SLIDING-WINDOW TDOA ESTIMATOR DEPENDENCIES ===
+    if 'USE_UWB_TDOA_WINDOW_ESTIMATOR' in flag_set and 'USE_UWB_MODE_TDOA_TAG' not in flag_set:
+        errors.append("USE_UWB_TDOA_WINDOW_ESTIMATOR requires USE_UWB_MODE_TDOA_TAG")
+
+    # === GEOMETRIC MATCHER DEPENDENCIES ===
+    if 'USE_UWB_TDOA_GEOMETRIC_MATCHER' in flag_set and 'USE_UWB_TDOA_WINDOW_ESTIMATOR' not in flag_set:
+        errors.append("USE_UWB_TDOA_GEOMETRIC_MATCHER requires USE_UWB_TDOA_WINDOW_ESTIMATOR")
+
     # === CONSOLE DEPENDENCIES ===
     console_features = [
         'USE_CONSOLE_PARAM_RW',

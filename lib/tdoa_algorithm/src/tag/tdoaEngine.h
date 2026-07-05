@@ -16,7 +16,14 @@ typedef enum {
   TdoaEngineMatchingAlgorithmNone = 0,
   TdoaEngineMatchingAlgorithmRandom,
   TdoaEngineMatchingAlgorithmYoungest,
+  TdoaEngineMatchingAlgorithmScored,
 } tdoaEngineMatchingAlgorithm_t;
+
+// Application-provided candidate scorer for the Scored matching algorithm.
+// Returns a score for pairing the just-received anchor with the candidate
+// (higher is better). Return NAN when scoring is unavailable (cold start,
+// stale state) - the engine then falls back to random matching.
+typedef float (*tdoaEngineMatchScorer)(uint8_t newAnchorId, uint8_t candidateAnchorId);
 
 typedef struct {
   // State
@@ -27,6 +34,7 @@ typedef struct {
   tdoaEngineSendTdoaToEstimator sendTdoaToEstimator;
   double locodeckTsFreq;
   tdoaEngineMatchingAlgorithm_t matchingAlgorithm;
+  tdoaEngineMatchScorer matchScorer;
 
   // Matching algorithm data
   struct {
@@ -37,6 +45,7 @@ typedef struct {
 } tdoaEngineState_t;
 
 void tdoaEngineInit(tdoaEngineState_t* state, const uint32_t now_ms, tdoaEngineSendTdoaToEstimator sendTdoaToEstimator, const double locodeckTsFreq, const tdoaEngineMatchingAlgorithm_t matchingAlgorithm);
+void tdoaEngineSetMatchScorer(tdoaEngineState_t* state, tdoaEngineMatchScorer scorer);
 // 
 void tdoaEngineGetAnchorCtxForPacketProcessing(tdoaEngineState_t* engineState, const uint8_t anchorId, const uint32_t currentTime_ms, tdoaAnchorContext_t* anchorCtx);
 void tdoaEngineProcessPacket(tdoaEngineState_t* engineState, tdoaAnchorContext_t* anchorCtx, const int64_t txAn_in_cl_An, const int64_t rxAn_by_T_in_cl_T);

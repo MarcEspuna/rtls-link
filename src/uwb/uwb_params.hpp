@@ -13,6 +13,18 @@ enum class UWBMode : uint8_t {
     UNKNOWN = 255
 };
 
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+// tdoaEstimatorMode value selecting the sliding-window estimator. Shared with
+// the output path: window mode implies covariance output (its safety story is
+// honest uncertainty instead of gating, so the covariance must reach the wire).
+static constexpr uint8_t kTdoaEstimatorModeWindow = 3;
+
+inline bool uwbWindowEstimatorSelected(uint8_t use2DEstimator, uint8_t tdoaEstimatorMode)
+{
+    return use2DEstimator == 0 && tdoaEstimatorMode == kTdoaEstimatorModeWindow;
+}
+#endif
+
 enum class ZCalcMode : uint8_t {
     NONE = 0,        // Use Z from UWB TDoA estimator (default)
     RANGEFINDER = 1, // Use Z from MAVLink DISTANCE_SENSOR
@@ -115,8 +127,12 @@ struct UWBParams {
     uint8_t enableCovMatrix = 0;    // 0=disabled, 1=enabled (send covariance to ArduPilot)
     float rmseThreshold = 0.8f;     // RMSE threshold for position validity (meters)
     uint8_t use2DEstimator = 1;     // 0=3D Newton-Raphson, 1=2D (XY-only with fixed Z, default)
-    uint8_t tdoaEstimatorMode = 1;  // 0=legacy 3D, 1=robust 3D (default), 2=compare/debug
+    uint8_t tdoaEstimatorMode = 1;  // 0=legacy 3D, 1=robust 3D (default), 2=compare/debug, 3=sliding-window MAP
     uint8_t tdoaEstimatorDiag = 0;  // 0=off, 1=summary, 2=include selected-row diagnostics
+#ifdef USE_UWB_TDOA_WINDOW_ESTIMATOR
+    uint16_t tdoaWindowCadenceMs = 20;  // Sliding-window solve/emit period, clamped 5-200ms
+    uint16_t tdoaWindowAgeMs = 150;     // Max measurement age used by the sliding window, clamped 50-350ms
+#endif
     // UWB Radio settings (TDoA mode only)
     uint8_t channel = 2;            // UWB channel (1-7), default 2
     uint8_t dwMode = 0;             // DW1000 mode index (0=SHORTDATA_FAST_ACCURACY, see getModeByIndex)
@@ -131,7 +147,7 @@ struct UWBParams {
     uint16_t tdoaAnchorTelemetryIntervalMs = 1000; // UDP telemetry interval, clamped to 250-60000ms
     uint16_t tdoaAnchorTelemetryPort = 3335;    // UDP destination port for anchor stats telemetry
 #ifdef ESP32S3_UWB_BOARD
-    uint8_t tdoaMatcherPolicy = 0;      // 0=YOUNGEST, 1=RANDOM/rotating eligible candidate
+    uint8_t tdoaMatcherPolicy = 0;      // 0=YOUNGEST, 1=RANDOM, 2=GEOMETRIC (window-information scored; needs window estimator)
 #endif
 
     // Dynamic anchor positioning (TDoA tags)

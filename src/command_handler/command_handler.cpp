@@ -239,6 +239,9 @@ static void tdoaAnchorModelStatusCallback(cmd* c);
 static void tdoaAnchorModelExportCallback(cmd* c);
 static void tdoaEstimatorStatusCallback(cmd* c);
 static void tdoaEstimatorStatsResetCallback(cmd* c);
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+static void tdoaDynamicStatusCallback(cmd* c);
+#endif
 #endif
 
 #ifdef USE_CONSOLE_CONFIG_MGMT
@@ -415,6 +418,9 @@ void CommandHandler::Init()
     simpleCLI.addCommand("tdoa-anchor-model-export", tdoaAnchorModelExportCallback);
     simpleCLI.addCommand("tdoa-estimator-status", tdoaEstimatorStatusCallback);
     simpleCLI.addCommand("tdoa-estimator-stats-reset", tdoaEstimatorStatsResetCallback);
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+    simpleCLI.addCommand("tdoa-dynamic-status", tdoaDynamicStatusCallback);
+#endif
 #endif
 
 #ifdef USE_CONSOLE_CONFIG_MGMT
@@ -1050,6 +1056,18 @@ static void tdoaEstimatorStatusCallback(cmd* c)
     }
     commandResult = TDoAPositionEstimatorCommands::StatusJson();
 }
+
+#ifdef USE_DYNAMIC_ANCHOR_POSITIONS
+static void tdoaDynamicStatusCallback(cmd* c)
+{
+    (void)c;
+    if (!IsTagTdoaMode()) {
+        commandResult = "{\"success\":false,\"error\":\"Not in TAG_TDOA mode\"}";
+        return;
+    }
+    commandResult = TDoADynamicAnchorCommands::StatusJson();
+}
+#endif
 
 static void tdoaEstimatorStatsResetCallback(cmd* c)
 {
