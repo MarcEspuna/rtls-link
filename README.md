@@ -51,7 +51,7 @@ The CI automatically runs on:
 
 ## Deployment Defaults
 
-Fresh devices load `data/params.txt` from the LittleFS image. The checked-in baseline configures an eight-anchor dynamic 3D tag using layout 1, 3.9 m plane separation, 40° rotation, the Montcada origin, and GCS IP `192.168.0.100`.
+Fresh devices load `data/params.txt` from the LittleFS image. The checked-in baseline configures an eight-anchor dynamic 3D tag using the sliding-window estimator and geometric matcher, layout 1, 3.9 m plane separation, 40° rotation, the Montcada origin, and GCS IP `192.168.0.100`.
 
 Set per-device values such as `uwb.devShortAddr` and `uwb.mavlinkTargetSystemId` before provisioning multiple units; the checked-in values are only single-device defaults.
 

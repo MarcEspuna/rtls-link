@@ -50,6 +50,10 @@ uwb.originAlt: 72.139999
 uwb.mavlinkTargetSystemId: 2
 uwb.rotationDegrees: 40.000000
 uwb.use2DEstimator: 0
+uwb.tdoaEstimatorMode: 3
+uwb.tdoaWindowCadenceMs: 20
+uwb.tdoaWindowAgeMs: 150
+uwb.tdoaMatcherPolicy: 2
 uwb.dynamicAnchorPosEnabled: 1
 uwb.anchorLayout: 1
 uwb.anchorHeight: 0.000000
