@@ -51,9 +51,11 @@ The CI automatically runs on:
 
 ## Deployment Defaults
 
-Fresh devices load `data/params.txt` from the LittleFS image. The checked-in baseline configures an eight-anchor dynamic 3D tag using the sliding-window estimator and geometric matcher, layout 1, 3.9 m plane separation, 40° rotation, the Montcada origin, and GCS IP `192.168.0.100`.
+The LittleFS image built from `data/params.txt` provides the factory deployment configuration. The checked-in baseline configures an eight-anchor dynamic 3D tag using the sliding-window estimator and geometric matcher, layout 1, the measured 7.769 m by 7.489 m static fallback geometry, 3.9 m NED plane separation, MAVLink position output, 40° rotation, the Montcada origin, and GCS IP `192.168.0.100`.
 
 Set per-device values such as `uwb.devShortAddr` and `uwb.mavlinkTargetSystemId` before provisioning multiple units; the checked-in values are only single-device defaults.
+
+Flash the LittleFS image when provisioning these defaults. Firmware-only OTA updates write the application partition and preserve the device's existing `/params.txt`; they do not apply or migrate this file. Update already-provisioned devices through the parameter interface so their identities and site-specific settings are retained.
 
 ## Anchor Antenna-Delay Calibration (TDoA)
 
