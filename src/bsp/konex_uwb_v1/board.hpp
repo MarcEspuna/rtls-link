@@ -35,10 +35,14 @@ namespace bsp {
             .rx_pin = 44,
             .tx_pin = 43,
         },
+        .power_disable_pins = {
+            .motors_ardupilot_pin = 6,
+            .elrs_rx_pin = 7,
+            .uwb_pin = 37,
+        },
         .led_pin = 36,
         .led2_pin = 35,  // LED 2 for device identification
     };
 
 } // namespace bsp
-
 

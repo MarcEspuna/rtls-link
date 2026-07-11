@@ -25,7 +25,8 @@ LocalPositionSensor::LocalPositionSensor(ISerialComm& comm_interface, uint8_t sy
 {}
 
 // Add method to set heartbeat callback
-void LocalPositionSensor::set_heartbeat_callback(std::function<void(uint8_t, uint8_t)> callback) {
+void LocalPositionSensor::set_heartbeat_callback(
+    std::function<void(uint8_t, uint8_t, const mavlink_heartbeat_t&)> callback) {
     heartbeat_callback_ = callback;
 }
 
@@ -163,11 +164,10 @@ bool LocalPositionSensor::send_set_gps_global_origin(
 
 void LocalPositionSensor::process_received_bytes(const uint8_t* buffer, size_t length) {
     mavlink_message_t msg;
-    mavlink_status_t status;
 
     for (size_t i = 0; i < length; ++i) {
         // Try to parse the byte
-        if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status)) {
+        if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &rx_status_)) {
             // Packet successfully received and parsed: msg contains the message
             // printf("Received MAVLink message with ID: %d from SysID: %d CompID: %d\n", 
             //        msg.msgid, msg.sysid, msg.compid);
@@ -187,7 +187,7 @@ void LocalPositionSensor::process_received_bytes(const uint8_t* buffer, size_t l
                     
                     // Instead of using dynamic_cast, use the callback if set
                     if (heartbeat_callback_) {
-                        heartbeat_callback_(msg.sysid, msg.compid);
+                        heartbeat_callback_(msg.sysid, msg.compid, heartbeat);
                     }
                     break;
                 }
@@ -217,4 +217,4 @@ void LocalPositionSensor::set_component_id(uint8_t component_id) {
 
 uint8_t LocalPositionSensor::get_component_id() const {
     return component_id_;
-} 
+}

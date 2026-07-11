@@ -90,6 +90,7 @@
 -D USE_STATUS_LED_TASK          ; Status LED blink task (board-dependent)
 -D USE_RATE_STATISTICS          ; Position update rate tracking
 -D USE_RUNTIME_SUBSYSTEM_TOGGLES ; Runtime UWB/module toggles
+-D USE_DRONE_SLEEP_MODE        ; Active-high IO6/IO7/IO37 power-disable sleep mode
 
 ; -----------------------------------------------------------------------------
 ; PERFORMANCE

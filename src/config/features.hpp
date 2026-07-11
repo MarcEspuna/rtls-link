@@ -91,6 +91,7 @@
 #define USE_RATE_STATISTICS
 #define USE_FAST_CODE                 // IRAM placement for hot-path functions
 #define USE_RUNTIME_SUBSYSTEM_TOGGLES // Runtime UWB on/off and service-level toggles
+// #define USE_DRONE_SLEEP_MODE        // ESP32S3 drone power-disable sleep mode
 
 // --- Logging Subsystem ---
 #define USE_LOGGING

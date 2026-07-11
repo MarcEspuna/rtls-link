@@ -226,7 +226,7 @@ void WifiLittleFSFrontend::SetupNetworkServices() {
 
     ClearBackendsUnlocked();
 
-    if (m_Params.enableWebServer) {
+    if (!m_lowPowerMode && m_Params.enableWebServer) {
 #ifdef USE_OTA_WEB
         LOG_INFO("HTTP OTA server enabled");
         WifiOtaServer* otaServer = new WifiOtaServer(80);
@@ -246,7 +246,7 @@ void WifiLittleFSFrontend::SetupNetworkServices() {
     LOG_WARN("MAVLink management requested but USE_WIFI_MAVLINK_MANAGEMENT not compiled");
 #endif
 
-    if (m_Params.enableUartBridge) {
+    if (!m_lowPowerMode && m_Params.enableUartBridge) {
 #ifdef USE_WIFI_UART_BRIDGE
         LOG_INFO("UART bridge setup on port %d", m_Params.udpPort);
         IPAddress ip;
@@ -324,8 +324,8 @@ void WifiLittleFSFrontend::ApplyLoggingSettings() {
     rtls::log::Logger::init();
 
     // Apply serial and UDP enabled settings
-    rtls::log::Logger::setSerialEnabled(m_Params.logSerialEnabled != 0);
-    rtls::log::Logger::setUdpEnabled(m_Params.logUdpEnabled != 0);
+    rtls::log::Logger::setSerialEnabled(!m_lowPowerMode && m_Params.logSerialEnabled != 0);
+    rtls::log::Logger::setUdpEnabled(!m_lowPowerMode && m_Params.logUdpEnabled != 0);
 
     // Set UDP target IP (use GCS IP) and port for log streaming
     if (m_Params.gcsIp[0] != '\0') {
@@ -360,6 +360,20 @@ void WifiLittleFSFrontend::RequestNetworkServicesSetup() {
     }
 
     SetupNetworkServices();
+}
+
+void WifiLittleFSFrontend::SetLowPowerMode(bool enabled) {
+    if (m_lowPowerMode == enabled) {
+        return;
+    }
+
+    m_lowPowerMode = enabled;
+    ApplyLoggingSettings();
+    RequestNetworkServicesSetup();
+}
+
+bool WifiLittleFSFrontend::IsLowPowerMode() const {
+    return m_lowPowerMode;
 }
 
 ErrorParam WifiLittleFSFrontend::SetParam(const char* name, const void* data, uint32_t len) {

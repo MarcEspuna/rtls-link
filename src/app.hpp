@@ -75,6 +75,12 @@ public:
 #endif
     static App& GetInstance();
 
+#if defined(USE_MAVLINK) && defined(USE_MAVLINK_HEARTBEAT)
+    static bool WaitForArdupilotDisarmed(uint32_t timeout_ms, char* reason, size_t reason_len);
+    static bool IsArdupilotHeartbeatFresh(uint32_t max_age_ms);
+    static bool IsArdupilotArmed();
+#endif
+
     // Helper function to correct for yaw orientation
     static Vector3f correct_for_orient_yaw(float x, float y, float z);
 
@@ -106,10 +112,13 @@ private:
 #ifdef USE_MAVLINK
     UartComm uart_comm_;
     LocalPositionSensor local_position_sensor_;
+    void PollMavlinkInput();
 #ifdef USE_MAVLINK_HEARTBEAT
     uint64_t last_heartbeat_timestamp_ms_ = 0;
     uint64_t last_heartbeat_received_timestamp_ms_ = 0;
     uint8_t last_heartbeat_system_id_ = 0;
+    uint8_t last_heartbeat_component_id_ = 0;
+    bool last_heartbeat_armed_ = false;
 #endif // USE_MAVLINK_HEARTBEAT
 #ifdef USE_MAVLINK_ORIGIN
     bool is_origin_position_sent_ = false;

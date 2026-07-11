@@ -108,7 +108,7 @@ public:
      * @brief Set a callback function to be called when a heartbeat is received
      * @param callback Function that takes system ID and component ID
      */
-    void set_heartbeat_callback(std::function<void(uint8_t, uint8_t)> callback);
+    void set_heartbeat_callback(std::function<void(uint8_t, uint8_t, const mavlink_heartbeat_t&)> callback);
 
     // --- Configuration ---
     void set_system_id(uint8_t system_id);
@@ -120,7 +120,8 @@ private:
     ISerialComm& comm_interface_;
     uint8_t system_id_;
     uint8_t component_id_;
-    std::function<void(uint8_t, uint8_t)> heartbeat_callback_;
+    std::function<void(uint8_t, uint8_t, const mavlink_heartbeat_t&)> heartbeat_callback_;
+    mavlink_status_t rx_status_{};
     mutable std::mutex tx_mutex_;  // Protects send_message() for thread safety
 
     // Internal helper to pack and send a message (thread-safe)
@@ -134,4 +135,4 @@ private:
     uint8_t mavlink_system_status_ = MAV_STATE_ACTIVE; // System is active
 };
 
-#endif // LOCAL_POSITION_SENSOR_HPP 
+#endif // LOCAL_POSITION_SENSOR_HPP

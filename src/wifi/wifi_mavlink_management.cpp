@@ -13,11 +13,30 @@
 #include "logging/logging.hpp"
 #include "param_registry.hpp"
 #include "protocol/rtls_binary_protocol.hpp"
+#ifdef USE_DRONE_SLEEP_MODE
+#include "power/drone_sleep_controller.hpp"
+#endif
 #if defined(USE_UWB_ANCHOR_TELEMETRY) && defined(USE_UWB_MODE_TDOA_ANCHOR)
 #include "protocol/tdoa_anchor_stats_frame.hpp"
 #endif
 #include "uwb/uwb_frontend_littlefs.hpp"
 #include "version.hpp"
+
+#ifndef RTLS_COMMAND_SLEEP
+#define RTLS_COMMAND_SLEEP 23
+#endif
+
+#ifndef RTLS_COMMAND_WAKE
+#define RTLS_COMMAND_WAKE 24
+#endif
+
+#ifndef RTLS_RESULT_DENIED
+#define RTLS_RESULT_DENIED 6
+#endif
+
+#ifndef RTLS_DEVICE_STATUS_FLAG_SLEEPING
+#define RTLS_DEVICE_STATUS_FLAG_SLEEPING 512
+#endif
 
 namespace {
 
@@ -94,6 +113,8 @@ const char* commandToString(uint16_t command, const char* name)
         case RTLS_COMMAND_TDOA_ANCHOR_MODEL_EXPORT: return "tdoa-anchor-model-export";
         case RTLS_COMMAND_TDOA_ESTIMATOR_STATS_RESET: return "tdoa-estimator-stats-reset";
         case RTLS_COMMAND_TDOA_ESTIMATOR_STATUS: return "tdoa-estimator-status";
+        case RTLS_COMMAND_SLEEP: return "sleep";
+        case RTLS_COMMAND_WAKE: return "wake";
         default:
             break;
     }
@@ -298,6 +319,20 @@ void WifiMavlinkManagement::HandleRtlsCommand(const mavlink_message_t& message)
         return;
     }
 
+#ifdef USE_DRONE_SLEEP_MODE
+    if (command.command == RTLS_COMMAND_SLEEP || command.command == RTLS_COMMAND_WAKE) {
+        char response[96] = {};
+        const bool accepted = command.command == RTLS_COMMAND_SLEEP
+            ? DroneSleepController::EnterSleep(response, sizeof(response))
+            : DroneSleepController::Wake(response, sizeof(response));
+        const uint8_t result = accepted
+            ? RTLS_RESULT_ACCEPTED
+            : (strncmp(response, "Rejected:", 9) == 0 ? RTLS_RESULT_DENIED : RTLS_RESULT_FAILED);
+        SendTextResponse(command.request_id, command.command, result, response);
+        return;
+    }
+#endif
+
     const char* commandString = commandToString(command.command, name);
     if (commandString == nullptr) {
         SendTextResponse(command.request_id, command.command, RTLS_RESULT_UNSUPPORTED, "Unsupported command");
@@ -433,6 +468,9 @@ void WifiMavlinkManagement::SendDeviceStatus()
     if (m_WifiParams.logUdpEnabled) flags |= RTLS_DEVICE_STATUS_FLAG_LOG_UDP_ENABLED;
 #ifdef USE_DYNAMIC_ANCHOR_POSITIONS
     if (telemetry.dynamic_anchors_enabled) flags |= RTLS_DEVICE_STATUS_FLAG_DYNAMIC_ANCHORS_ENABLED;
+#endif
+#ifdef USE_DRONE_SLEEP_MODE
+    if (DroneSleepController::IsSleeping()) flags |= RTLS_DEVICE_STATUS_FLAG_SLEEPING;
 #endif
 
     const bool isAP = (WiFi.getMode() == WIFI_AP);
